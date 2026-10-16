@@ -23,18 +23,20 @@ class GeminiClient(apiKey: String, model: String) {
             val b64 = encode(bitmap)
             // Free-tier models are often overloaded (503) or out of quota (429), and quota is
             // per model, so retry briefly and then fall back to the next model.
-            var last: HttpResult? = null
+            // Report the first real error (normally the user's own model), not whatever the last
+            // fallback said; a fallback model that doesn't exist (404) is never the story.
+            var first: Pair<String, HttpResult>? = null
             for (m in (listOf(model) + FALLBACK_MODELS).distinct()) {
                 for (attempt in 0 until 2) {
                     val res = ask(m, b64)
-                    // Keep the most telling error: a missing fallback model (404) shouldn't hide a 503.
-                    if (res.code != 404 || last == null) last = res
                     if (res.code in 200..299) return handle(res)
-                    if (res.code !in RETRYABLE || isKeyOrRegionError(res)) return handle(res)
+                    if (first == null || first.second.code == 404) first = m to res
+                    if (res.code !in RETRYABLE || isKeyOrRegionError(res)) return "$m: ${handle(res)}"
                     if (res.code == 503 || res.code == 500) Thread.sleep(600) else break
                 }
             }
-            handle(last!!)
+            val (m, res) = first!!
+            "$m: ${handle(res)}"
         } catch (e: IOException) {
             "لا يوجد اتصال"
         } catch (e: Exception) {
@@ -81,10 +83,9 @@ class GeminiClient(apiKey: String, model: String) {
 
     private fun ask(m: String, b64: String): HttpResult {
         var res = post(m, buildBody(b64, true))
-        if (res.code == 400 &&
-            (res.body.contains("thinking", ignoreCase = true) ||
-                res.body.contains("budget", ignoreCase = true))
-        ) {
+        // Turning thinking off makes answers much faster, but not every model accepts the option,
+        // and some reject it with only a generic "invalid argument", so retry any 400 without it.
+        if (res.code == 400 && !isKeyOrRegionError(res)) {
             res = post(m, buildBody(b64, false))
         }
         return res
@@ -160,8 +161,7 @@ class GeminiClient(apiKey: String, model: String) {
         private val FALLBACK_MODELS = listOf(
             "gemini-2.5-flash",
             "gemini-flash-lite-latest",
-            "gemini-2.5-flash-lite",
-            "gemini-2.0-flash"
+            "gemini-2.5-flash-lite"
         )
         // 400 included: a request one model rejects (e.g. an unsupported option) may work on another.
         private val RETRYABLE = setOf(400, 404, 429, 500, 503, 504)
