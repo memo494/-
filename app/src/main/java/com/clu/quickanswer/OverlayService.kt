@@ -79,7 +79,7 @@ class OverlayService : Service() {
     @Volatile private var busy = false
     private var lastSentSig: IntArray? = null
     private var prevTickSig: IntArray? = null
-    private var client: GeminiClient? = null
+    private var client: Answerer? = null
     // The virtual display only emits frames when the screen changes, so keep the last one.
     private var lastFrame: Bitmap? = null
 
@@ -104,7 +104,8 @@ class OverlayService : Service() {
         startAsForeground()
 
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        client = GeminiClient(Prefs.apiKey(this), Prefs.model(this))
+        client = if (Prefs.provider(this) == "claude") ClaudeClient(Prefs.claudeKey(this), Prefs.claudeModel(this))
+        else GeminiClient(Prefs.apiKey(this), Prefs.model(this))
 
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val proj = try {

@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.Button
 import android.widget.EditText
+import android.widget.RadioGroup
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -22,6 +23,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var apiKeyInput: EditText
     private lateinit var modelInput: EditText
     private lateinit var overlayButton: Button
+    private lateinit var providerGroup: RadioGroup
+    private lateinit var claudeKeyInput: EditText
+    private lateinit var claudeModelInput: EditText
 
     private val projectionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -49,8 +53,23 @@ class MainActivity : AppCompatActivity() {
         modelInput = findViewById(R.id.modelInput)
         overlayButton = findViewById(R.id.overlayButton)
 
+        providerGroup = findViewById(R.id.providerGroup)
+        claudeKeyInput = findViewById(R.id.claudeKeyInput)
+        claudeModelInput = findViewById(R.id.claudeModelInput)
+
         apiKeyInput.setText(Prefs.apiKey(this))
         modelInput.setText(Prefs.model(this))
+        claudeKeyInput.setText(Prefs.claudeKey(this))
+        claudeModelInput.setText(Prefs.claudeModel(this))
+        providerGroup.check(
+            if (Prefs.provider(this) == "claude") R.id.providerClaude else R.id.providerGemini
+        )
+        findViewById<Button>(R.id.opusButton).setOnClickListener {
+            claudeModelInput.setText("claude-opus-5-5")
+        }
+        findViewById<Button>(R.id.haikuButton).setOnClickListener {
+            claudeModelInput.setText("claude-haiku-5-5")
+        }
 
         overlayButton.setOnClickListener {
             if (!Settings.canDrawOverlays(this)) {
@@ -89,6 +108,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveSettings() {
         Prefs.save(this, apiKeyInput.text.toString(), modelInput.text.toString())
+        Prefs.saveClaude(
+            this,
+            if (providerGroup.checkedRadioButtonId == R.id.providerClaude) "claude" else "gemini",
+            claudeKeyInput.text.toString(),
+            claudeModelInput.text.toString()
+        )
     }
 
     private fun updateOverlayButton() {
@@ -103,7 +128,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun onStartClicked() {
         saveSettings()
-        if (Prefs.apiKey(this).isBlank()) {
+        if (Prefs.provider(this) == "claude") {
+            if (Prefs.claudeKey(this).isBlank()) {
+                Toast.makeText(this, "أدخل مفتاح Claude أولاً", Toast.LENGTH_SHORT).show()
+                return
+            }
+        } else if (Prefs.apiKey(this).isBlank()) {
             Toast.makeText(this, "أدخل مفتاح API أولاً", Toast.LENGTH_SHORT).show()
             return
         }

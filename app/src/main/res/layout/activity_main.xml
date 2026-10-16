@@ -19,6 +19,97 @@
             android:textSize="28sp"
             android:textStyle="bold" />
 
+        <RadioGroup
+            android:id="@+id/providerGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical">
+
+            <RadioButton
+                android:id="@+id/providerGemini"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Gemini (مجاني)" />
+
+            <RadioButton
+                android:id="@+id/providerClaude"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Claude (مدفوع، أدق)" />
+        </RadioGroup>
+
+        <LinearLayout
+            android:id="@+id/claudeSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="مفتاح Claude API"
+                android:textAlignment="viewStart" />
+
+            <EditText
+                android:id="@+id/claudeKeyInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="الصق المفتاح هنا"
+                android:importantForAutofill="no"
+                android:inputType="textPassword"
+                android:layoutDirection="ltr"
+                android:textDirection="ltr"
+                android:textAlignment="viewStart" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="من console.anthropic.com — يحتاج رصيد"
+                android:textAlignment="viewStart"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="نموذج Claude"
+                android:textAlignment="viewStart" />
+
+            <EditText
+                android:id="@+id/claudeModelInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="claude-opus-5-5"
+                android:importantForAutofill="no"
+                android:inputType="text"
+                android:layoutDirection="ltr"
+                android:textAlignment="viewStart" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/opusButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Opus 5.5 (الأدق)"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/haikuButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Haiku 5.5 (الأسرع والأرخص)"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
