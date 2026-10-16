@@ -27,17 +27,31 @@ class GeminiClient(apiKey: String, model: String) {
             if (isMostlyDark(bitmap)) return BLACK_SCREEN
             val b64 = encode(cropToContent(bitmap))
             // Free-tier models are often overloaded (503) or out of quota (429), and quota is
-            // per model, so move straight on to the next model rather than waiting.
-            // Report the first real error (normally the user's own model), not whatever the last
-            // fallback said; a fallback model that doesn't exist (404) is never the story.
-            var first: Pair<String, HttpResult>? = null
-            for (m in (listOf(model) + FALLBACK_MODELS).distinct()) {
-                val res = ask(m, b64)
-                if (res.code in 200..299) return handle(res)
-                if (first == null || first.second.code == 404) first = m to res
-                if (res.code !in RETRYABLE || isKeyOrRegionError(res)) return "$m: ${handle(res)}"
+            // per model. Ask a few models at once and take whichever answers first; only if
+            // they all fail, try the rest.
+            val models = (listOf(model) + FALLBACK_MODELS).distinct()
+            val errors = mutableListOf<Pair<String, HttpResult>>()
+            for (group in listOf(models.take(RACE_SIZE), models.drop(RACE_SIZE))) {
+                if (group.isEmpty()) continue
+                val done = java.util.concurrent.ExecutorCompletionService<Pair<String, HttpResult>>(POOL)
+                group.forEach { m -> done.submit { m to ask(m, b64) } }
+                repeat(group.size) {
+                    val (m, res) = try {
+                        done.take().get()
+                    } catch (e: java.util.concurrent.ExecutionException) {
+                        throw e.cause ?: e
+                    }
+                    if (res.code in 200..299) {
+                        val text = handle(res)
+                        if (text != EMPTY) return text
+                    }
+                    errors += m to res
+                    if (isKeyOrRegionError(res)) return "$m: ${handle(res)}"
+                }
             }
-            val (m, res) = first!!
+            // Report the most telling error: the user's own model first, never a missing model (404).
+            val (m, res) = errors.sortedBy { (em, er) -> (if (er.code == 404) 2 else 0) + (if (em == model) 0 else 1) }
+                .first()
             "$m: ${handle(res)}"
         } catch (e: IOException) {
             "لا يوجد اتصال"
@@ -214,16 +228,19 @@ class GeminiClient(apiKey: String, model: String) {
 
     companion object {
         // Tried in order after the user's model. 404 (model not available) also moves on.
+        // The first two join the user's model in the first race (fast and accurate in testing).
         private val FALLBACK_MODELS = listOf(
+            "gemini-flash-lite-latest",
+            "gemini-3.5-flash-lite",
             "gemini-3.5-flash",
             "gemini-3.8-flash",
             "gemini-flash-latest",
-            "gemini-3.5-flash-lite",
-            "gemini-flash-lite-latest",
             "gemini-3.1-flash-lite"
         )
-        // 400 included: a request one model rejects (e.g. an unsupported option) may work on another.
-        private val RETRYABLE = setOf(400, 404, 429, 500, 503, 504)
+        private const val RACE_SIZE = 3
+        private val POOL = java.util.concurrent.Executors.newCachedThreadPool { r ->
+            Thread(r, "gemini").apply { isDaemon = true }
+        }
 
         private const val EMPTY = "لم يتم الحصول على إجابة"
         private const val BLACK_SCREEN =

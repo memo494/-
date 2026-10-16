@@ -155,6 +155,35 @@ class OverlayService : Service() {
         }
     }
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        resizeCapture()
+    }
+
+    /**
+     * The virtual display keeps the size it was created with, so after rotating to landscape the
+     * screen would be squeezed into a portrait frame. Match it to the current orientation.
+     */
+    private fun resizeCapture() {
+        val vd = virtualDisplay ?: return
+        val dm = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        wm.defaultDisplay.getRealMetrics(dm)
+        if (dm.widthPixels == screenW && dm.heightPixels == screenH) return
+        screenW = dm.widthPixels
+        screenH = dm.heightPixels
+        density = dm.densityDpi
+        val old = imageReader
+        val reader = ImageReader.newInstance(screenW, screenH, PixelFormat.RGBA_8888, 2)
+        imageReader = reader
+        vd.resize(screenW, screenH, density)
+        vd.surface = reader.surface
+        old?.close()
+        lastFrame?.recycle()
+        lastFrame = null
+        panel?.maxWidth = (screenW * 0.8f).toInt()
+    }
+
     private fun setupCapture(proj: MediaProjection) {
         val dm = DisplayMetrics()
         @Suppress("DEPRECATION")
