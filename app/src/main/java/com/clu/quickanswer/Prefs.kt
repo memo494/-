@@ -5,7 +5,7 @@ import android.content.Context
 object Prefs {
     private const val NAME = "clu_prefs"
     const val DEFAULT_MODEL = "gemini-3.5-flash"
-    const val DEFAULT_CLAUDE_MODEL = "claude-opus-5-5"
+    const val DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5"
 
     private fun sp(c: Context) = c.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 

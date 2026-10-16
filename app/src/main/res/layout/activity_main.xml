@@ -81,7 +81,7 @@
                 android:id="@+id/claudeModelInput"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:hint="claude-opus-5-5"
+                android:hint="claude-haiku-5-5"
                 android:importantForAutofill="no"
                 android:inputType="text"
                 android:layoutDirection="ltr"
