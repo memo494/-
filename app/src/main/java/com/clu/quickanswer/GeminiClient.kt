@@ -9,7 +9,11 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-class GeminiClient(private val apiKey: String, private val model: String) {
+class GeminiClient(apiKey: String, model: String) {
+
+    // Pasted keys often carry stray spaces or a newline, which Google rejects with a 400.
+    private val apiKey = apiKey.trim()
+    private val model = model.trim().removePrefix("models/").ifEmpty { "gemini-flash-latest" }
 
     private class HttpResult(val code: Int, val body: String)
 
@@ -26,7 +30,7 @@ class GeminiClient(private val apiKey: String, private val model: String) {
                     // Keep the most telling error: a missing fallback model (404) shouldn't hide a 503.
                     if (res.code != 404 || last == null) last = res
                     if (res.code in 200..299) return handle(res)
-                    if (res.code !in RETRYABLE) return handle(res)
+                    if (res.code !in RETRYABLE || isKeyOrRegionError(res)) return handle(res)
                     if (res.code == 503 || res.code == 500) Thread.sleep(600) else break
                 }
             }
@@ -77,7 +81,10 @@ class GeminiClient(private val apiKey: String, private val model: String) {
 
     private fun ask(m: String, b64: String): HttpResult {
         var res = post(m, buildBody(b64, true))
-        if (res.code == 400 && res.body.contains("thinking", ignoreCase = true)) {
+        if (res.code == 400 &&
+            (res.body.contains("thinking", ignoreCase = true) ||
+                res.body.contains("budget", ignoreCase = true))
+        ) {
             res = post(m, buildBody(b64, false))
         }
         return res
@@ -103,14 +110,26 @@ class GeminiClient(private val apiKey: String, private val model: String) {
         }
     }
 
+    private fun errorMessage(res: HttpResult): String = try {
+        JSONObject(res.body).optJSONObject("error")?.optString("message") ?: ""
+    } catch (e: Exception) {
+        ""
+    }
+
+    /** Errors no other model can fix, so falling back would only waste time. */
+    private fun isKeyOrRegionError(res: HttpResult): Boolean {
+        if (res.code == 403) return true
+        val msg = errorMessage(res)
+        return res.code == 400 &&
+            (msg.contains("API key", ignoreCase = true) || msg.contains("location", ignoreCase = true))
+    }
+
     private fun handle(res: HttpResult): String {
         if (res.code !in 200..299) {
-            val msg = try {
-                JSONObject(res.body).optJSONObject("error")?.optString("message") ?: ""
-            } catch (e: Exception) {
-                ""
-            }
+            val msg = errorMessage(res)
             return when {
+                msg.contains("location is not supported", ignoreCase = true) ->
+                    "Gemini غير متاح في منطقتك، جرّب تشغيل VPN"
                 res.code == 429 -> "تم تجاوز الحد المجاني، انتظر قليلاً"
                 res.code == 503 || res.code == 500 || res.code == 504 ->
                     "خوادم Gemini مشغولة الآن، جرّب بعد قليل"
@@ -118,6 +137,8 @@ class GeminiClient(private val apiKey: String, private val model: String) {
                     (msg.contains("API key", ignoreCase = true) ||
                         msg.contains("permission", ignoreCase = true) ||
                         res.code == 403) -> "مفتاح API غير صالح"
+                // Show Google's own reason so unexpected errors can be diagnosed.
+                msg.isNotEmpty() -> "خطأ ${res.code}: ${msg.take(160)}"
                 else -> "خطأ: ${res.code}"
             }
         }
@@ -142,7 +163,8 @@ class GeminiClient(private val apiKey: String, private val model: String) {
             "gemini-2.5-flash-lite",
             "gemini-2.0-flash"
         )
-        private val RETRYABLE = setOf(404, 429, 500, 503, 504)
+        // 400 included: a request one model rejects (e.g. an unsupported option) may work on another.
+        private val RETRYABLE = setOf(400, 404, 429, 500, 503, 504)
 
         private const val EMPTY = "لم يتم الحصول على إجابة"
 
