@@ -17,10 +17,15 @@ class GeminiClient(apiKey: String, model: String) {
 
     private class HttpResult(val code: Int, val body: String)
 
+    /** The image last sent to Gemini (after cropping/scaling), so the user can check it. */
+    @Volatile var lastSent: Bitmap? = null
+        private set
+
     /** Returns the short answer, or a short Arabic error message. Never throws. */
     fun answer(bitmap: Bitmap): String {
         return try {
-            val b64 = encode(bitmap)
+            if (isMostlyDark(bitmap)) return BLACK_SCREEN
+            val b64 = encode(cropToContent(bitmap))
             // Free-tier models are often overloaded (503) or out of quota (429), and quota is
             // per model, so move straight on to the next model rather than waiting.
             // Report the first real error (normally the user's own model), not whatever the last
@@ -41,8 +46,55 @@ class GeminiClient(apiKey: String, model: String) {
         }
     }
 
+    /** Rows/columns sampled from a small copy; "dark" = luminance below 40. */
+    private fun darkMap(src: Bitmap): Triple<Int, Int, BooleanArray> {
+        val w = 120
+        val h = maxOf(1, src.height * w / src.width)
+        val small = Bitmap.createScaledBitmap(src, w, h, true)
+        val px = IntArray(w * h)
+        small.getPixels(px, 0, w, 0, 0, w, h)
+        if (small !== src) small.recycle()
+        val lit = BooleanArray(px.size) {
+            val c = px[it]
+            ((c shr 16 and 0xFF) * 299 + (c shr 8 and 0xFF) * 587 + (c and 0xFF) * 114) / 1000 > 40
+        }
+        return Triple(w, h, lit)
+    }
+
+    // A capture limited to one app (Android 14+), or a protected app, comes back black.
+    private fun isMostlyDark(src: Bitmap): Boolean {
+        val (_, _, lit) = darkMap(src)
+        return lit.count { it } < lit.size / 50
+    }
+
+    /**
+     * Games and videos often sit letterboxed in a black screen; sending the whole screen wastes
+     * resolution on the bars, so keep only the tallest band of mostly-lit rows when there is one.
+     */
+    private fun cropToContent(src: Bitmap): Bitmap {
+        val (w, h, lit) = darkMap(src)
+        var bestStart = 0
+        var bestEnd = 0
+        var start = -1
+        for (y in 0..h) {
+            val content = y < h && (0 until w).count { lit[y * w + it] } > w / 2
+            if (content && start < 0) start = y
+            if (!content && start >= 0) {
+                if (y - start > bestEnd - bestStart) { bestStart = start; bestEnd = y }
+                start = -1
+            }
+        }
+        val band = bestEnd - bestStart
+        if (band < h / 5 || band > h * 9 / 10) return src
+        val scale = src.height.toFloat() / h
+        val margin = src.height / 50
+        val top = maxOf(0, (bestStart * scale).toInt() - margin)
+        val bottom = minOf(src.height, (bestEnd * scale).toInt() + margin)
+        return Bitmap.createBitmap(src, 0, top, src.width, bottom - top)
+    }
+
     private fun encode(src: Bitmap): String {
-        val maxSide = 1024
+        val maxSide = 1600
         val longest = maxOf(src.width, src.height)
         val bmp = if (longest > maxSide) {
             val s = maxSide.toFloat() / longest
@@ -54,8 +106,9 @@ class GeminiClient(apiKey: String, model: String) {
             )
         } else src
         val out = ByteArrayOutputStream()
-        bmp.compress(Bitmap.CompressFormat.JPEG, 80, out)
-        if (bmp !== src) bmp.recycle()
+        bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        // The caller recycles the original capture, so never keep a reference to it.
+        lastSent = if (bmp === src) bmp.copy(Bitmap.Config.ARGB_8888, false) else bmp
         return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
@@ -173,6 +226,8 @@ class GeminiClient(apiKey: String, model: String) {
         private val RETRYABLE = setOf(400, 404, 429, 500, 503, 504)
 
         private const val EMPTY = "لم يتم الحصول على إجابة"
+        private const val BLACK_SCREEN =
+            "الصورة سوداء: أوقف التطبيق وشغّله، واختر \"الشاشة بالكامل\" وليس تطبيقًا واحدًا"
 
         private const val PROMPT =
             "You see a phone screenshot. Read the question(s) on it, including any images, " +

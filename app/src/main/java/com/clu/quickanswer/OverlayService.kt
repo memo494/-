@@ -283,7 +283,10 @@ class OverlayService : Service() {
                 setColor(Color.parseColor("#CC111111"))
             }
             setOnClickListener { hidePanel() }
+            // Long-press shows exactly what was sent to Gemini, to check what it saw.
+            setOnLongClickListener { showSentImage(); true }
         }.also { panel = it }
+        p.setCompoundDrawables(null, null, null, null)
         p.text = text
         val existing = panelParams
         if (existing != null && p.isAttachedToWindow) {
@@ -306,6 +309,19 @@ class OverlayService : Service() {
         }
         panelParams = params
         wm.addView(p, params)
+    }
+
+    private fun showSentImage() {
+        val p = panel ?: return
+        val bmp = client?.lastSent ?: return
+        var w = (screenW * 0.75f).toInt()
+        var h = w * bmp.height / bmp.width
+        val maxH = (screenH * 0.5f).toInt()
+        if (h > maxH) { w = w * maxH / h; h = maxH }
+        val d = android.graphics.drawable.BitmapDrawable(resources, bmp).apply { setBounds(0, 0, w, h) }
+        p.setCompoundDrawables(null, d, null, null)
+        p.text = "الصورة المرسلة"
+        panelParams?.let { try { wm.updateViewLayout(p, it) } catch (_: Exception) {} }
     }
 
     private fun hidePanel() {
