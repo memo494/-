@@ -33,6 +33,8 @@
             android:hint="الصق المفتاح هنا"
             android:importantForAutofill="no"
             android:inputType="textPassword"
+            android:layoutDirection="ltr"
+            android:textDirection="ltr"
             android:textAlignment="viewStart" />
 
         <TextView

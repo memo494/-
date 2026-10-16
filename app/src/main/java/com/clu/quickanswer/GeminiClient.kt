@@ -12,8 +12,8 @@ import java.net.URL
 class GeminiClient(apiKey: String, model: String) {
 
     // Pasted keys often carry stray spaces or a newline, which Google rejects with a 400.
-    private val apiKey = apiKey.trim()
-    private val model = model.trim().removePrefix("models/").ifEmpty { "gemini-flash-latest" }
+    private val apiKey = Prefs.cleanKey(apiKey)
+    private val model = Prefs.cleanModel(model).ifEmpty { Prefs.DEFAULT_MODEL }
 
     private class HttpResult(val code: Int, val body: String)
 
@@ -40,7 +40,7 @@ class GeminiClient(apiKey: String, model: String) {
         } catch (e: IOException) {
             "لا يوجد اتصال"
         } catch (e: Exception) {
-            "خطأ: ${e.javaClass.simpleName}"
+            "خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim()
         }
     }
 
