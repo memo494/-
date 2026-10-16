@@ -28,24 +28,55 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
             // Free-tier models are often overloaded (503) or out of quota (429), and quota is
             // per model. Ask a few models at once and take whichever answers first; only if
             // they all fail, try the rest.
-            val models = (listOf(model) + FALLBACK_MODELS).distinct()
+            // The user's model goes first, alone, so a healthy call costs exactly one request
+            // (free-tier quota is counted per request). Fallbacks start only if it fails fast or
+            // is still silent after PRIMARY_WAIT_MS.
+            val done = java.util.concurrent.ExecutorCompletionService<Pair<String, HttpResult>>(POOL)
+            val fallbacks = FALLBACK_MODELS.filter { it != model }.toMutableList()
+            var outstanding = 0
+            var launched = false
+            fun launch(n: Int) {
+                repeat(n) {
+                    if (fallbacks.isEmpty()) return
+                    val m = fallbacks.removeAt(0)
+                    done.submit { m to ask(m, b64) }
+                    outstanding++
+                }
+            }
+            done.submit { model to ask(model, b64) }
+            outstanding++
             val errors = mutableListOf<Pair<String, HttpResult>>()
-            for (group in listOf(models.take(RACE_SIZE), models.drop(RACE_SIZE))) {
-                if (group.isEmpty()) continue
-                val done = java.util.concurrent.ExecutorCompletionService<Pair<String, HttpResult>>(POOL)
-                group.forEach { m -> done.submit { m to ask(m, b64) } }
-                repeat(group.size) {
-                    val (m, res) = try {
-                        done.take().get()
-                    } catch (e: java.util.concurrent.ExecutionException) {
-                        throw e.cause ?: e
-                    }
-                    if (res.code in 200..299) {
-                        val text = handle(res)
-                        if (text != EMPTY) return text
-                    }
-                    errors += m to res
-                    if (isKeyOrRegionError(res)) return "$m: ${handle(res)}"
+            while (true) {
+                if (outstanding == 0) {
+                    if (fallbacks.isEmpty()) break
+                    launch(RACE_SIZE)
+                    continue
+                }
+                val future = if (!launched) {
+                    done.poll(PRIMARY_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        ?: run {
+                            launched = true
+                            launch(RACE_SIZE - 1)
+                            null
+                        }
+                } else {
+                    done.take()
+                } ?: continue
+                outstanding--
+                val (m, res) = try {
+                    future.get()
+                } catch (e: java.util.concurrent.ExecutionException) {
+                    throw e.cause ?: e
+                }
+                if (res.code in 200..299) {
+                    val text = handle(res)
+                    if (text != EMPTY) return text
+                }
+                errors += m to res
+                if (isKeyOrRegionError(res)) return "$m: ${handle(res)}"
+                if (!launched) {
+                    launched = true
+                    launch(RACE_SIZE - 1)
                 }
             }
             // Report the most telling error: the user's own model first, never a missing model (404).
@@ -171,6 +202,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
             "gemini-3.1-flash-lite"
         )
         private const val RACE_SIZE = 3
+        private const val PRIMARY_WAIT_MS = 3500L
         private val POOL = java.util.concurrent.Executors.newCachedThreadPool { r ->
             Thread(r, "gemini").apply { isDaemon = true }
         }
