@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -16,7 +19,19 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Build debug APK
         run: ./gradlew assembleDebug
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk Clu.apk
       - uses: actions/upload-artifact@v4
         with:
           name: Clu-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: Clu.apk
+      # Publishes a release so the APK has a stable direct link:
+      # https://github.com/<owner>/<repo>/releases/latest/download/Clu.apk
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Clu ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: Clu.apk
