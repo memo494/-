@@ -17,11 +17,20 @@ class GeminiClient(private val apiKey: String, private val model: String) {
     fun answer(bitmap: Bitmap): String {
         return try {
             val b64 = encode(bitmap)
-            var res = post(buildBody(b64, true))
-            if (res.code == 400 && res.body.contains("thinking", ignoreCase = true)) {
-                res = post(buildBody(b64, false))
+            // Free-tier models are often overloaded (503) or out of quota (429), and quota is
+            // per model, so retry briefly and then fall back to the next model.
+            var last: HttpResult? = null
+            for (m in (listOf(model) + FALLBACK_MODELS).distinct()) {
+                for (attempt in 0 until 2) {
+                    val res = ask(m, b64)
+                    // Keep the most telling error: a missing fallback model (404) shouldn't hide a 503.
+                    if (res.code != 404 || last == null) last = res
+                    if (res.code in 200..299) return handle(res)
+                    if (res.code !in RETRYABLE) return handle(res)
+                    if (res.code == 503 || res.code == 500) Thread.sleep(600) else break
+                }
             }
-            handle(res)
+            handle(last!!)
         } catch (e: IOException) {
             "لا يوجد اتصال"
         } catch (e: Exception) {
@@ -66,8 +75,16 @@ class GeminiClient(private val apiKey: String, private val model: String) {
             .toString()
     }
 
-    private fun post(body: String): HttpResult {
-        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
+    private fun ask(m: String, b64: String): HttpResult {
+        var res = post(m, buildBody(b64, true))
+        if (res.code == 400 && res.body.contains("thinking", ignoreCase = true)) {
+            res = post(m, buildBody(b64, false))
+        }
+        return res
+    }
+
+    private fun post(m: String, body: String): HttpResult {
+        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent")
         val conn = url.openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
@@ -95,6 +112,8 @@ class GeminiClient(private val apiKey: String, private val model: String) {
             }
             return when {
                 res.code == 429 -> "تم تجاوز الحد المجاني، انتظر قليلاً"
+                res.code == 503 || res.code == 500 || res.code == 504 ->
+                    "خوادم Gemini مشغولة الآن، جرّب بعد قليل"
                 (res.code == 400 || res.code == 403) &&
                     (msg.contains("API key", ignoreCase = true) ||
                         msg.contains("permission", ignoreCase = true) ||
@@ -116,6 +135,15 @@ class GeminiClient(private val apiKey: String, private val model: String) {
     }
 
     companion object {
+        // Tried in order after the user's model. 404 (model not available) also moves on.
+        private val FALLBACK_MODELS = listOf(
+            "gemini-2.5-flash",
+            "gemini-flash-lite-latest",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash"
+        )
+        private val RETRYABLE = setOf(404, 429, 500, 503, 504)
+
         private const val EMPTY = "لم يتم الحصول على إجابة"
 
         private const val PROMPT =
