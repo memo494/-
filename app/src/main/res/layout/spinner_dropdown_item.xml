@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Open list of the Gemini model spinner: up to 3 lines per entry so the end of the text stays visible. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:ellipsize="end"
+    android:gravity="center_vertical"
+    android:layoutDirection="rtl"
+    android:maxLines="3"
+    android:minHeight="48dp"
+    android:paddingStart="16dp"
+    android:paddingTop="8dp"
+    android:paddingEnd="16dp"
+    android:paddingBottom="8dp"
+    android:singleLine="false"
+    android:textAlignment="viewStart"
+    android:textColor="?android:attr/textColorPrimary"
+    android:textDirection="anyRtl"
+    android:textSize="15sp" />

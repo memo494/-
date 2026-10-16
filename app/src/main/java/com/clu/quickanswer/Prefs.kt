@@ -4,16 +4,25 @@ import android.content.Context
 
 object Prefs {
     private const val NAME = "clu_prefs"
-    const val DEFAULT_MODEL = "gemini-3.5-flash"
+    const val DEFAULT_MODEL = GeminiModels.DEFAULT_ID
     const val DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5"
+
+    // Bumped when the meaning of the saved Gemini model changes (see GeminiModels.migrateSavedModel).
+    private const val MODEL_VERSION = 2
 
     private fun sp(c: Context) = c.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
     fun apiKey(c: Context): String = cleanKey(sp(c).getString("api_key", "") ?: "")
     fun model(c: Context): String {
-        val m = cleanModel(sp(c).getString("model", DEFAULT_MODEL) ?: DEFAULT_MODEL)
-        // Gemini 2.x is closed to new API users (404), so treat old saved names as the default.
-        return if (m.isBlank() || m.startsWith("gemini-2.")) DEFAULT_MODEL else m
+        val prefs = sp(c)
+        val saved = cleanModel(prefs.getString("model", DEFAULT_MODEL) ?: DEFAULT_MODEL)
+        val migrated = prefs.getInt("model_version", 0) >= MODEL_VERSION
+        val m = GeminiModels.migrateSavedModel(saved, migrated)
+        if (!migrated) {
+            // Do the one-time replacement of the old default now, so a later deliberate choice sticks.
+            prefs.edit().putString("model", m).putInt("model_version", MODEL_VERSION).apply()
+        }
+        return m
     }
 
     fun provider(c: Context): String =
@@ -28,7 +37,28 @@ object Prefs {
     }
 
     fun save(c: Context, key: String, model: String) {
-        sp(c).edit().putString("api_key", cleanKey(key)).putString("model", cleanModel(model)).apply()
+        sp(c).edit().putString("api_key", cleanKey(key)).putString("model", cleanModel(model))
+            .putInt("model_version", MODEL_VERSION).apply()
+    }
+
+    /** Model ids from the last "refresh model list" (already filtered), empty if never refreshed. */
+    fun modelList(c: Context): List<String> =
+        (sp(c).getString("model_list", "") ?: "").split('\n').map { cleanModel(it) }.filter { it.isNotEmpty() }
+
+    fun saveModelList(c: Context, ids: List<String>) {
+        sp(c).edit().putString("model_list", ids.joinToString("\n")).apply()
+    }
+
+    /** Quota tracker state (see QuotaTracker.encode). */
+    fun quotaState(c: Context): String = sp(c).getString("quota_state", "") ?: ""
+    fun saveQuotaState(c: Context, state: String) {
+        sp(c).edit().putString("quota_state", state).apply()
+    }
+
+    /** Thinking options learned per model (see ThinkingMemory.encode). */
+    fun learnedThinking(c: Context): String = sp(c).getString("learned_thinking", "") ?: ""
+    fun saveLearnedThinking(c: Context, state: String) {
+        sp(c).edit().putString("learned_thinking", state).apply()
     }
 
     // Pasting into an RTL screen can carry invisible direction marks or spaces; any non-ASCII

@@ -10,9 +10,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.RadioGroup
+import android.widget.Spinner
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -21,11 +26,16 @@ import androidx.core.content.ContextCompat
 class MainActivity : AppCompatActivity() {
 
     private lateinit var apiKeyInput: EditText
-    private lateinit var modelInput: EditText
+    private lateinit var modelSpinner: Spinner
+    private lateinit var modelIdText: TextView
+    private lateinit var refreshModelsButton: Button
     private lateinit var overlayButton: Button
     private lateinit var providerGroup: RadioGroup
     private lateinit var claudeKeyInput: EditText
     private lateinit var claudeModelInput: EditText
+
+    // Model ids in the same order as the spinner entries.
+    private var modelIds: List<String> = emptyList()
 
     private val projectionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -48,9 +58,12 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        GeminiRuntime.init(this)
 
         apiKeyInput = findViewById(R.id.apiKeyInput)
-        modelInput = findViewById(R.id.modelInput)
+        modelSpinner = findViewById(R.id.modelSpinner)
+        modelIdText = findViewById(R.id.modelIdText)
+        refreshModelsButton = findViewById(R.id.refreshModelsButton)
         overlayButton = findViewById(R.id.overlayButton)
 
         providerGroup = findViewById(R.id.providerGroup)
@@ -58,7 +71,15 @@ class MainActivity : AppCompatActivity() {
         claudeModelInput = findViewById(R.id.claudeModelInput)
 
         apiKeyInput.setText(Prefs.apiKey(this))
-        modelInput.setText(Prefs.model(this))
+        modelSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                showModelId(position)
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        rebuildModelSpinner(Prefs.model(this))
+        refreshModelsButton.setOnClickListener { refreshModelList() }
         claudeKeyInput.setText(Prefs.claudeKey(this))
         claudeModelInput.setText(Prefs.claudeModel(this))
         providerGroup.check(
@@ -96,18 +117,73 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // A refresh may finish while this screen is showing, or after it was recreated by a rotation.
+    private val refreshListener = Runnable {
+        refreshModelsButton.isEnabled = !GeminiRuntime.refreshingModels
+        rebuildModelSpinner(selectedModelId())
+    }
+
     override fun onResume() {
         super.onResume()
         updateOverlayButton()
+        GeminiRuntime.addRefreshListener(refreshListener)
+        // A model may have run out of quota (or recovered), or a refresh may have finished, since the
+        // list was last drawn.
+        refreshModelsButton.isEnabled = !GeminiRuntime.refreshingModels
+        rebuildModelSpinner(selectedModelId())
     }
 
     override fun onPause() {
         super.onPause()
+        GeminiRuntime.removeRefreshListener(refreshListener)
         saveSettings()
     }
 
+    private fun selectedModelId(): String =
+        modelIds.getOrNull(modelSpinner.selectedItemPosition) ?: Prefs.model(this)
+
+    /**
+     * Fills the spinner with "label — note" lines: the catalog (or, after a refresh, the models the
+     * key can use) with a marker on models the quota tracker has blocked. A saved model that is not
+     * in the list is added so it is never silently replaced.
+     */
+    private fun rebuildModelSpinner(selectedId: String) {
+        val entries = GeminiModels.mergeWithCatalog(Prefs.modelList(this)).toMutableList()
+        if (entries.none { it.id == selectedId }) entries.add(0, GeminiModels.entryFor(selectedId))
+        modelIds = entries.map { it.id }
+        val texts = entries.map { it.pickerText(GeminiRuntime.quota.isBlocked(it.id)) }
+        // Own item layouts: the stock ones are single-line and cut the end of the text, which is
+        // exactly where the "blocked" marker is.
+        val adapter = ArrayAdapter(this, R.layout.spinner_item, texts)
+        adapter.setDropDownViewResource(R.layout.spinner_dropdown_item)
+        modelSpinner.adapter = adapter
+        val index = modelIds.indexOf(selectedId).coerceAtLeast(0)
+        modelSpinner.setSelection(index)
+        showModelId(index)
+    }
+
+    /** The raw id under the spinner, plus the blocked state so it is visible however long the entry is. */
+    private fun showModelId(position: Int) {
+        val id = modelIds.getOrNull(position) ?: ""
+        val blocked = id.isNotEmpty() && GeminiRuntime.quota.isBlocked(id)
+        modelIdText.text = if (blocked) "$id —${ModelEntry.BLOCKED_SUFFIX}" else id
+    }
+
+    /** Asks Google which models the key can use. The network call runs on its own thread. */
+    private fun refreshModelList() {
+        val key = Prefs.cleanKey(apiKeyInput.text.toString()).ifEmpty { Prefs.apiKey(this) }
+        if (key.isEmpty()) {
+            Toast.makeText(this, "أدخل مفتاح API أولاً", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (GeminiRuntime.refreshModelList(this, key)) refreshModelsButton.isEnabled = false
+    }
+
     private fun saveSettings() {
-        Prefs.save(this, apiKeyInput.text.toString(), modelInput.text.toString())
+        val newKey = Prefs.cleanKey(apiKeyInput.text.toString())
+        // Quota blocks belong to one key; a new key starts with a clean slate.
+        if (newKey != Prefs.apiKey(this)) GeminiRuntime.quota.clearAll()
+        Prefs.save(this, newKey, selectedModelId())
         Prefs.saveClaude(
             this,
             if (providerGroup.checkedRadioButtonId == R.id.providerClaude) "claude" else "gemini",

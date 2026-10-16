@@ -104,8 +104,10 @@ class OverlayService : Service() {
         startAsForeground()
 
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        GeminiRuntime.init(this)
         client = if (Prefs.provider(this) == "claude") ClaudeClient(Prefs.claudeKey(this), Prefs.claudeModel(this))
         else GeminiClient(Prefs.apiKey(this), Prefs.model(this))
+        warmUp()
 
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val proj = try {
@@ -245,6 +247,8 @@ class OverlayService : Service() {
             override fun onTouch(v: View, e: MotionEvent): Boolean {
                 when (e.action) {
                     MotionEvent.ACTION_DOWN -> {
+                        // The user is about to ask: have a warm connection ready by the time the capture is sent.
+                        warmUp()
                         startX = params.x
                         startY = params.y
                         touchX = e.rawX
@@ -279,6 +283,17 @@ class OverlayService : Service() {
             }
         })
         wm.addView(tv, params)
+    }
+
+    /** Lets the answer provider open its connection early. Never touches the network on the main thread. */
+    private fun warmUp() {
+        val c = client ?: return
+        scope.launch(Dispatchers.IO) {
+            try {
+                c.warmUp()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun updateBubbleStyle() {

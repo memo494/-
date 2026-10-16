@@ -26,10 +26,13 @@ object ScreenImage {
             "each answer on its own line, numbered. If no question is visible, reply " +
             "exactly: لا يوجد سؤال"
 
-    /** Null if the capture is black; otherwise the JPEG (base64) to send and the bitmap to show. */
-    fun prepare(bitmap: Bitmap): Prepared? {
+    /**
+     * Null if the capture is black; otherwise the JPEG (base64) to send and the bitmap to show. The
+     * long side is scaled down to [maxSide] pixels and the JPEG is saved at [quality] (0-100).
+     */
+    fun prepare(bitmap: Bitmap, maxSide: Int = 1600, quality: Int = 85): Prepared? {
         if (isMostlyDark(bitmap)) return null
-        return encode(cropToContent(bitmap))
+        return encode(cropToContent(bitmap), maxSide, quality)
     }
 
     /** Rows/columns sampled from a small copy; "dark" = luminance below 40. */
@@ -79,8 +82,7 @@ object ScreenImage {
         return Bitmap.createBitmap(src, 0, top, src.width, bottom - top)
     }
 
-    private fun encode(src: Bitmap): Prepared {
-        val maxSide = 1600
+    private fun encode(src: Bitmap, maxSide: Int, quality: Int): Prepared {
         val longest = maxOf(src.width, src.height)
         val bmp = if (longest > maxSide) {
             val s = maxSide.toFloat() / longest
@@ -92,7 +94,7 @@ object ScreenImage {
             )
         } else src
         val out = ByteArrayOutputStream()
-        bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
         // The caller recycles the original capture, so never keep a reference to it.
         val kept = if (bmp === src) bmp.copy(Bitmap.Config.ARGB_8888, false) else bmp
         return Prepared(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP), kept)

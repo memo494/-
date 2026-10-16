@@ -141,18 +141,32 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="اسم النموذج"
+            android:text="نموذج Gemini"
             android:textAlignment="viewStart" />
 
-        <EditText
-            android:id="@+id/modelInput"
+        <Spinner
+            android:id="@+id/modelSpinner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="gemini-3.5-flash"
-            android:importantForAutofill="no"
-            android:inputType="text"
+            android:minHeight="48dp" />
+
+        <TextView
+            android:id="@+id/modelIdText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:layoutDirection="ltr"
-            android:textAlignment="viewStart" />
+            android:textAlignment="viewStart"
+            android:textDirection="ltr"
+            android:textIsSelectable="true"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/refreshModelsButton"
+            style="?android:attr/buttonStyleSmall"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="تحديث قائمة النماذج"
+            android:textSize="12sp" />
 
         <Button
             android:id="@+id/overlayButton"

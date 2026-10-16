@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Closed state of the Gemini model spinner: up to 3 lines instead of one cut-off line. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:ellipsize="end"
+    android:gravity="center_vertical"
+    android:layoutDirection="rtl"
+    android:maxLines="3"
+    android:minHeight="48dp"
+    android:paddingStart="8dp"
+    android:paddingTop="6dp"
+    android:paddingEnd="8dp"
+    android:paddingBottom="6dp"
+    android:singleLine="false"
+    android:textAlignment="viewStart"
+    android:textColor="?android:attr/textColorPrimary"
+    android:textDirection="anyRtl"
+    android:textSize="15sp" />
