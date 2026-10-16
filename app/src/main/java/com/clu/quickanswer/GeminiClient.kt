@@ -22,18 +22,15 @@ class GeminiClient(apiKey: String, model: String) {
         return try {
             val b64 = encode(bitmap)
             // Free-tier models are often overloaded (503) or out of quota (429), and quota is
-            // per model, so retry briefly and then fall back to the next model.
+            // per model, so move straight on to the next model rather than waiting.
             // Report the first real error (normally the user's own model), not whatever the last
             // fallback said; a fallback model that doesn't exist (404) is never the story.
             var first: Pair<String, HttpResult>? = null
             for (m in (listOf(model) + FALLBACK_MODELS).distinct()) {
-                for (attempt in 0 until 2) {
-                    val res = ask(m, b64)
-                    if (res.code in 200..299) return handle(res)
-                    if (first == null || first.second.code == 404) first = m to res
-                    if (res.code !in RETRYABLE || isKeyOrRegionError(res)) return "$m: ${handle(res)}"
-                    if (res.code == 503 || res.code == 500) Thread.sleep(600) else break
-                }
+                val res = ask(m, b64)
+                if (res.code in 200..299) return handle(res)
+                if (first == null || first.second.code == 404) first = m to res
+                if (res.code !in RETRYABLE || isKeyOrRegionError(res)) return "$m: ${handle(res)}"
             }
             val (m, res) = first!!
             "$m: ${handle(res)}"
@@ -45,7 +42,7 @@ class GeminiClient(apiKey: String, model: String) {
     }
 
     private fun encode(src: Bitmap): String {
-        val maxSide = 1280
+        val maxSide = 1024
         val longest = maxOf(src.width, src.height)
         val bmp = if (longest > maxSide) {
             val s = maxSide.toFloat() / longest
@@ -62,7 +59,7 @@ class GeminiClient(apiKey: String, model: String) {
         return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
-    private fun buildBody(b64: String, withThinking: Boolean): String {
+    private fun buildBody(m: String, b64: String, withThinking: Boolean): String {
         val parts = JSONArray()
             .put(JSONObject().put("text", PROMPT))
             .put(
@@ -71,9 +68,13 @@ class GeminiClient(apiKey: String, model: String) {
                     JSONObject().put("mime_type", "image/jpeg").put("data", b64)
                 )
             )
-        val gen = JSONObject().put("temperature", 0).put("maxOutputTokens", 256)
+        // Thinking tokens count toward maxOutputTokens, so leave room beyond the short answer.
+        val gen = JSONObject().put("temperature", 0).put("maxOutputTokens", 1024)
         if (withThinking) {
-            gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+            // Least thinking = fastest answer. Gemini 2.5 takes a token budget, 3.x a level.
+            val cfg = if (m.startsWith("gemini-2.")) JSONObject().put("thinkingBudget", 0)
+            else JSONObject().put("thinkingLevel", "minimal")
+            gen.put("thinkingConfig", cfg)
         }
         return JSONObject()
             .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
@@ -82,11 +83,11 @@ class GeminiClient(apiKey: String, model: String) {
     }
 
     private fun ask(m: String, b64: String): HttpResult {
-        var res = post(m, buildBody(b64, true))
+        var res = post(m, buildBody(m, b64, true))
         // Turning thinking off makes answers much faster, but not every model accepts the option,
         // and some reject it with only a generic "invalid argument", so retry any 400 without it.
         if (res.code == 400 && !isKeyOrRegionError(res)) {
-            res = post(m, buildBody(b64, false))
+            res = post(m, buildBody(m, b64, false))
         }
         return res
     }
@@ -96,8 +97,8 @@ class GeminiClient(apiKey: String, model: String) {
         val conn = url.openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
-            conn.connectTimeout = 20_000
-            conn.readTimeout = 20_000
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 30_000
             conn.doOutput = true
             conn.setRequestProperty("x-goog-api-key", apiKey)
             conn.setRequestProperty("Content-Type", "application/json")
@@ -150,7 +151,9 @@ class GeminiClient(apiKey: String, model: String) {
             ?: return EMPTY
         val sb = StringBuilder()
         for (i in 0 until partsArr.length()) {
-            sb.append(partsArr.getJSONObject(i).optString("text", ""))
+            val part = partsArr.getJSONObject(i)
+            if (part.optBoolean("thought", false)) continue
+            sb.append(part.optString("text", ""))
         }
         val text = sb.toString().trim()
         return if (text.isEmpty()) EMPTY else text
@@ -159,9 +162,12 @@ class GeminiClient(apiKey: String, model: String) {
     companion object {
         // Tried in order after the user's model. 404 (model not available) also moves on.
         private val FALLBACK_MODELS = listOf(
-            "gemini-2.5-flash",
+            "gemini-3.5-flash",
+            "gemini-3.8-flash",
+            "gemini-flash-latest",
+            "gemini-3.5-flash-lite",
             "gemini-flash-lite-latest",
-            "gemini-2.5-flash-lite"
+            "gemini-3.1-flash-lite"
         )
         // 400 included: a request one model rejects (e.g. an unsupported option) may work on another.
         private val RETRYABLE = setOf(400, 404, 429, 500, 503, 504)
@@ -173,7 +179,12 @@ class GeminiClient(apiKey: String, model: String) {
                 "diagrams or answer options. Reply with ONLY the final answer, in the same " +
                 "language as the question: for multiple choice give the option letter/number " +
                 "and its text; otherwise the short answer (number, word or phrase). No " +
-                "explanation, no reasoning, no preamble. If there are several questions, put " +
+                "explanation, no reasoning, no preamble. For a question asking for a number or " +
+                "quantity, answer with digits only: your best single number estimate (the " +
+                "typical or most recent real value), even if the exact number varies. " +
+                "Ignore scores, player names, " +
+                "timers, buttons and number keypads; they are not part of the question. If " +
+                "there are several questions, put " +
                 "each answer on its own line, numbered. If no question is visible, reply " +
                 "exactly: لا يوجد سؤال"
     }

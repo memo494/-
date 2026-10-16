@@ -57,7 +57,7 @@
             android:id="@+id/modelInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="gemini-flash-latest"
+            android:hint="gemini-3.5-flash"
             android:importantForAutofill="no"
             android:inputType="text"
             android:layoutDirection="ltr"
