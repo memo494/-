@@ -62,7 +62,8 @@ object FrameSignature {
         /**
          * The game changed while our answer panel was in the frame. The panel is painted black in
          * what we send, so it could black out part of the new question: hide it and judge again
-         * on the next ticks, with a frame that no longer contains it.
+         * on the next ticks, with a frame that no longer contains it. Hiding is not final: if the
+         * change was a blip, the service brings the answer back (see [HiddenAnswer]).
          */
         HIDE_PANEL,
 

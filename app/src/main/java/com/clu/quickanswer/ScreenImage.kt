@@ -12,6 +12,12 @@ object ScreenImage {
     const val BLACK_SCREEN =
         "الصورة سوداء: أوقف التطبيق وشغّله، واختر \"الشاشة بالكامل\" وليس تطبيقًا واحدًا"
 
+    /** What the model is told to reply when the screen shows no question. */
+    const val NO_QUESTION = "لا يوجد سؤال"
+
+    /** True when [reply] is the model's "no question on screen" reply (ignoring spaces and a final full stop). */
+    fun isNoQuestion(reply: String): Boolean = reply.trim().trimEnd('.', '!', '،', ' ') == NO_QUESTION
+
     const val PROMPT =
         "You see a phone screenshot. Read the question(s) on it, including any images, " +
             "diagrams or answer options. Reply with ONLY the final answer, in the same " +
@@ -24,7 +30,7 @@ object ScreenImage {
             "timers, buttons and number keypads; they are not part of the question. If " +
             "there are several questions, put " +
             "each answer on its own line, numbered. If no question is visible, reply " +
-            "exactly: لا يوجد سؤال"
+            "exactly: " + NO_QUESTION
 
     /**
      * Null if the capture is black; otherwise the JPEG (base64) to send and the bitmap to show. The

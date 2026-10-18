@@ -24,6 +24,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.text.TextUtils
 import android.util.DisplayMetrics
 import android.view.Gravity
@@ -66,6 +67,8 @@ class OverlayService : Service() {
         private const val PANEL_TOP_MAX_LINES = 2
         private const val PANEL_BUBBLE_MAX_LINES = 4
         private const val PREVIEW_AUTO_CLOSE_MS = 20_000L
+        // An answer that auto mode hid is brought back only if it still has this long to live.
+        private const val HIDDEN_ANSWER_MIN_LEFT_MS = 1_000L
         // Android 12+ drops touches that pass through another app's overlay window whose opacity is
         // above 0.8 (the "maximum obscuring opacity"), even with FLAG_NOT_TOUCHABLE. Keep the panel at
         // or below it, or the game never sees taps that land under the panel. Do not raise this.
@@ -95,6 +98,14 @@ class OverlayService : Service() {
     private var panelW = 0
     private var panelH = 0
     private val hidePanelRunnable = Runnable { hidePanel() }
+    // What the panel on screen says and when it hides itself (SystemClock.uptimeMillis), so auto
+    // mode can bring it back if it hid it for what turned out to be a blip.
+    private var panelText = ""
+    private var panelDeadline = 0L
+    private val hiddenAnswer = HiddenAnswer()
+    // The picture that goes with the answer last shown: what "آخر صورة" previews. Not client.lastSent,
+    // which also moves on to auto-mode sends whose "no question" reply is never shown.
+    private var shownImage: Bitmap? = null
 
     // Touchable preview of the last image sent, opened from the notification.
     private var preview: View? = null
@@ -269,6 +280,24 @@ class OverlayService : Service() {
 
     private fun overlayType() = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
 
+    /**
+     * With [on], the window's x/y count from the real top-left corner of the display. Without it the
+     * window is laid out inside the system bars (and beside a display cutout), so a visible status
+     * bar shifts it down by its height, which would put a bubble clamped to getRealMetrics partly
+     * off the bottom of the screen after a rotation.
+     */
+    private fun useScreenCoordinates(p: WindowManager.LayoutParams, on: Boolean) {
+        val flag = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        p.flags = if (on) p.flags or flag else p.flags and flag.inv()
+        if (Build.VERSION.SDK_INT >= 28) {
+            p.layoutInDisplayCutoutMode = when {
+                !on -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                Build.VERSION.SDK_INT >= 30 -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                else -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+    }
+
     private fun createBubble() {
         val size = dp(56)
         val tv = TextView(this).apply {
@@ -288,6 +317,8 @@ class OverlayService : Service() {
             x = dp(8)
             y = screenH / 3
         }
+        // x/y are real screen coordinates, so the clamp after a rotation (getRealMetrics) is exact.
+        useScreenCoordinates(params, true)
         bubbleParams = params
         updateBubbleStyle()
 
@@ -396,9 +427,10 @@ class OverlayService : Service() {
     /**
      * Shows the answer at the top of the screen or next to the bubble, as set in [Prefs.panelMode].
      * The panel window is not touchable, so every tap goes through to the app underneath (the
-     * answer options of the game); it hides itself after [PANEL_AUTO_HIDE_MS].
+     * answer options of the game); it hides itself after [hideAfterMs].
      */
-    private fun showPanel(text: String) {
+    private fun showPanel(text: String, hideAfterMs: Long = PANEL_AUTO_HIDE_MS) {
+        hiddenAnswer.clear() // this answer replaces whatever auto mode had hidden
         panelMode = Prefs.panelMode(this)
         val p = panel ?: createPanelView().also { panel = it }
         p.maxLines = if (panelMode == PanelPlacement.Mode.TOP) PANEL_TOP_MAX_LINES else PANEL_BUBBLE_MAX_LINES
@@ -417,6 +449,10 @@ class OverlayService : Service() {
             alpha = PANEL_WINDOW_ALPHA
         }.also { panelParams = it }
         applyPanelSize(params)
+        // Next to the bubble the panel must share the bubble's coordinates. At the top it is left
+        // inside the system bars on purpose: overlay windows are drawn below the status bar, so a
+        // panel at the real top edge would have the clock and icons painted over its text.
+        useScreenCoordinates(params, panelMode == PanelPlacement.Mode.NEXT_TO_BUBBLE)
         placePanel(params)
         try {
             if (panelAdded) {
@@ -428,7 +464,9 @@ class OverlayService : Service() {
         } catch (_: Exception) {
         }
         handler.removeCallbacks(hidePanelRunnable)
-        handler.postDelayed(hidePanelRunnable, PANEL_AUTO_HIDE_MS)
+        handler.postDelayed(hidePanelRunnable, hideAfterMs)
+        panelText = text
+        panelDeadline = SystemClock.uptimeMillis() + hideAfterMs
     }
 
     /** Measures the panel for the current text and screen size (width capped by [panelMaxWidth]). */
@@ -504,11 +542,12 @@ class OverlayService : Service() {
     }
 
     /**
-     * Shows what was last sent to the model, in a separate touchable window in the centre of the
-     * screen. Tap closes it; it also closes itself after [PREVIEW_AUTO_CLOSE_MS].
+     * Shows the picture behind the answer last shown, in a separate touchable window in the centre
+     * of the screen (before any answer: whatever was sent last). Tap closes it; it also closes
+     * itself after [PREVIEW_AUTO_CLOSE_MS].
      */
     private fun showLastImage() {
-        val bmp = client?.lastSent
+        val bmp = shownImage ?: client?.lastSent
         if (bmp == null) {
             Toast.makeText(this, "لا توجد صورة بعد", Toast.LENGTH_SHORT).show()
             return
@@ -658,6 +697,7 @@ class OverlayService : Service() {
 
     private fun answerNow() {
         if (busy) return
+        hiddenAnswer.clear()
         if (panelAdded || preview != null) {
             // Remove the old answer (and the sent-image preview) first so they don't hide part of the question.
             hidePanel()
@@ -676,10 +716,16 @@ class OverlayService : Service() {
         }
         // In auto mode count this as the last frame sent, or the next tick would see the question as
         // "new", hide this answer and ask again.
-        sendFrame(bmp, if (autoMode) signature(bmp, overlayRects()) else null)
+        sendFrame(bmp, if (autoMode) signature(bmp, overlayRects()) else null, fromAuto = false)
     }
 
-    private fun sendFrame(bmp: Bitmap, sig: IntArray?) {
+    /**
+     * Sends [bmp] and shows the answer. A send that auto mode started on its own ([fromAuto]) shows
+     * nothing when the model says there is no question: that is a screen that is not the quiz
+     * (the notification shade, another app, Clu's settings), and it must neither cover the screen
+     * nor replace the picture "آخر صورة" shows. The screen still counts as sent, so it is not asked again.
+     */
+    private fun sendFrame(bmp: Bitmap, sig: IntArray?, fromAuto: Boolean) {
         setBusy(true)
         scope.launch {
             val answer = withContext(Dispatchers.IO) {
@@ -691,6 +737,8 @@ class OverlayService : Service() {
             }
             if (sig != null) lastSentSig = sig
             setBusy(false)
+            if (fromAuto && ScreenImage.isNoQuestion(answer)) return@launch
+            shownImage = client?.lastSent ?: shownImage
             showPanel(answer)
         }
     }
@@ -701,6 +749,7 @@ class OverlayService : Service() {
         Toast.makeText(this, if (autoMode) "الوضع التلقائي: مفعّل" else "الوضع التلقائي: متوقف", Toast.LENGTH_SHORT).show()
         autoJob?.cancel()
         autoJob = null
+        hiddenAnswer.clear()
         if (autoMode) {
             lastSentSig = null
             prevTickSig = null
@@ -717,7 +766,9 @@ class OverlayService : Service() {
      * One auto-mode step (the decision itself is [FrameSignature.judge]). A change that shows up
      * while our answer panel is on screen does not send anything: the panel is painted black in
      * the capture and could black out part of the new question. The panel is hidden instead, and a
-     * later tick sends the frame once it no longer contains the panel and has settled.
+     * later tick sends the frame once it no longer contains the panel and has settled. If the
+     * change was only a blip and the screen goes back to what the answer was for, the answer is
+     * shown again for the time it had left.
      */
     private suspend fun autoTick() {
         // While the sent-image preview covers the middle of the screen, the capture is mostly black:
@@ -743,12 +794,22 @@ class OverlayService : Service() {
         var toSend: Bitmap? = null
         if (!busy && preview == null) {
             when (verdict) {
-                FrameSignature.Verdict.HIDE_PANEL -> hidePanel()
+                FrameSignature.Verdict.HIDE_PANEL -> if (panelAdded) {
+                    hiddenAnswer.remember(panelText, panelDeadline)
+                    hidePanel()
+                }
                 FrameSignature.Verdict.SEND -> toSend = bmp ?: captureMasked()
-                FrameSignature.Verdict.IDLE, FrameSignature.Verdict.WAIT -> {}
+                FrameSignature.Verdict.IDLE -> if (!panelAdded) {
+                    hiddenAnswer.take(SystemClock.uptimeMillis(), HIDDEN_ANSWER_MIN_LEFT_MS)
+                        ?.let { showPanel(it.text, it.leftMs) }
+                }
+                FrameSignature.Verdict.WAIT -> {}
             }
         }
-        if (toSend != null) sendFrame(toSend, sig)
+        if (toSend != null) {
+            hiddenAnswer.clear()
+            sendFrame(toSend, sig, fromAuto = true)
+        }
         if (bmp != null && bmp !== toSend) bmp.recycle()
     }
 
@@ -775,6 +836,7 @@ class OverlayService : Service() {
         imageReader = null
         lastFrame?.recycle()
         lastFrame = null
+        shownImage = null
         projection?.stop()
         projection = null
         super.onDestroy()

@@ -166,24 +166,39 @@ class FrameSignatureTest {
         return sig
     }
 
-    /** The service's autoTick, with the answer arriving at once after a SEND and showing the panel. */
+    /**
+     * The service's autoTick, with the answer arriving at once after a SEND and showing the panel
+     * for 15 s, and an answer hidden by HIDE_PANEL coming back on IDLE if it still has time left.
+     */
     private class AutoRun(val frameSig: (IntArray, Boolean) -> IntArray) {
         var prev: IntArray? = null
         var lastSent: IntArray? = null
         var panelUp = false
         var sends = 0
         var hides = 0
+        var restores = 0
+        var now = 0L // ms; each tick is 1.5 s
+        var panelDeadline = 0L
+        val hidden = HiddenAnswer()
         val verdicts = mutableListOf<Verdict>()
 
         fun tick(screen: IntArray): Verdict {
+            now += 1500
             val panelInFrame = panelUp
             val sig = frameSig(screen, panelInFrame)
             val v = FrameSignature.judge(sig, prev, lastSent, panelInFrame, 6.0, 2.0)
             prev = sig
             when (v) {
-                Verdict.HIDE_PANEL -> { panelUp = false; hides++ }
-                Verdict.SEND -> { sends++; lastSent = sig; panelUp = true }
-                else -> {}
+                Verdict.HIDE_PANEL -> { hidden.remember("answer", panelDeadline); panelUp = false; hides++ }
+                Verdict.SEND -> {
+                    hidden.clear()
+                    sends++
+                    lastSent = sig
+                    panelUp = true
+                    panelDeadline = now + 15_000
+                }
+                Verdict.IDLE -> if (!panelUp && hidden.take(now, 1000) != null) { panelUp = true; restores++ }
+                Verdict.WAIT -> {}
             }
             verdicts.add(v)
             return v
@@ -256,6 +271,63 @@ class FrameSignatureTest {
         assertTrue(run.ticks(a, 200).all { it == Verdict.IDLE })
         assertEquals(1, run.sends)
         assertEquals(0, run.hides)
+    }
+
+    @Test
+    fun auto_oneTickBlipWhileTheAnswerIsShown_hidesItThenBringsItBack() {
+        val a = game(banner = 30, options = 180)
+        val blip = game(banner = 220, options = 40) // e.g. a heads-up notification, a peek at the shade
+        val run = AutoRun(::frameSig)
+        run.ticks(a, 2)
+        assertTrue(run.panelUp)
+
+        assertEquals(Verdict.HIDE_PANEL, run.tick(blip))
+        assertFalse(run.panelUp)
+        assertEquals(Verdict.IDLE, run.tick(a)) // back to what was answered
+        assertTrue("the answer should be back", run.panelUp)
+        assertEquals(List(10) { Verdict.IDLE }, run.ticks(a, 10))
+        assertEquals(1, run.sends)
+        assertEquals(1, run.hides)
+        assertEquals(1, run.restores)
+    }
+
+    @Test
+    fun auto_blipOfTwoTicks_stillBringsTheAnswerBack_withoutSending() {
+        val a = game(banner = 30, options = 180)
+        val blip = game(banner = 220, options = 40)
+        val run = AutoRun(::frameSig)
+        run.ticks(a, 2)
+        assertEquals(listOf(Verdict.HIDE_PANEL, Verdict.WAIT), run.ticks(blip, 2))
+        assertEquals(Verdict.IDLE, run.tick(a))
+        assertTrue(run.panelUp)
+        assertEquals(1, run.sends)
+    }
+
+    @Test
+    fun auto_answerThatRanOutOfTimeWhileHidden_isNotBroughtBack() {
+        val a = game(banner = 30, options = 180)
+        val blip = game(banner = 220, options = 40)
+        val run = AutoRun(::frameSig)
+        run.ticks(a, 2)
+        assertEquals(Verdict.HIDE_PANEL, run.tick(blip))
+        run.now += 20_000 // the 15 s would have passed anyway
+        assertEquals(Verdict.IDLE, run.tick(a))
+        assertFalse(run.panelUp)
+        assertEquals(0, run.restores)
+    }
+
+    @Test
+    fun auto_afterARealChange_theOldAnswerIsNeverBroughtBack() {
+        val a = game(banner = 30, options = 180)
+        val b = game(banner = 220, options = 40)
+        val run = AutoRun(::frameSig)
+        run.ticks(a, 2)
+        assertEquals(listOf(Verdict.HIDE_PANEL, Verdict.WAIT, Verdict.SEND), run.ticks(b, 3))
+        run.panelUp = false // the new answer's 15 s auto-hide
+        assertTrue(run.ticks(b, 20).all { it == Verdict.IDLE })
+        assertFalse(run.panelUp)
+        assertEquals(0, run.restores)
+        assertEquals(2, run.sends)
     }
 
     @Test
