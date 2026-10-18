@@ -17,6 +17,18 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
+      # Fixed signing key from the CLU_KEYSTORE_B64 secret (base64 of a PKCS12 keystore), so updates
+      # install over the previous version. Without the secret the default debug key is used.
+      - name: Restore signing key
+        env:
+          CLU_KEYSTORE_B64: ${{ secrets.CLU_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$CLU_KEYSTORE_B64" ]; then
+            echo "$CLU_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/clu.p12"
+            echo "CLU_KEYSTORE_FILE=$RUNNER_TEMP/clu.p12" >> "$GITHUB_ENV"
+          else
+            echo "CLU_KEYSTORE_B64 is not set; signing with the default debug key."
+          fi
       - name: Build debug APK
         run: ./gradlew assembleDebug
       - name: Rename APK

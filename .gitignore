@@ -7,3 +7,6 @@ local.properties
 captures/
 .cxx/
 .kotlin/
+*.p12
+*.jks
+*.keystore
