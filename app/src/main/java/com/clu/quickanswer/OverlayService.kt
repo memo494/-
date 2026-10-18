@@ -24,11 +24,14 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.text.TextUtils
 import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -42,6 +45,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.min
 
 class OverlayService : Service() {
 
@@ -51,11 +55,21 @@ class OverlayService : Service() {
         private const val CHANNEL_ID = "clu_overlay"
         private const val NOTIF_ID = 1
         private const val ACTION_STOP = "com.clu.quickanswer.STOP"
+        private const val ACTION_LAST_IMAGE = "com.clu.quickanswer.LAST_IMAGE"
         private const val AUTO_INTERVAL_MS = 1500L
         private const val SIG_SIZE = 32
         private const val CHANGE_THRESHOLD = 6.0
         private const val STABLE_THRESHOLD = 2.0
         private const val LONG_PRESS_MS = 600L
+        private const val PANEL_AUTO_HIDE_MS = 15_000L
+        private const val PANEL_TOP_MARGIN_DP = 6
+        private const val PANEL_TOP_MAX_LINES = 2
+        private const val PANEL_BUBBLE_MAX_LINES = 4
+        private const val PREVIEW_AUTO_CLOSE_MS = 20_000L
+        // Android 12+ drops touches that pass through another app's overlay window whose opacity is
+        // above 0.8 (the "maximum obscuring opacity"), even with FLAG_NOT_TOUCHABLE. Keep the panel at
+        // or below it, or the game never sees taps that land under the panel. Do not raise this.
+        private const val PANEL_WINDOW_ALPHA = 0.8f
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -73,6 +87,18 @@ class OverlayService : Service() {
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var panel: TextView? = null
     private var panelParams: WindowManager.LayoutParams? = null
+    // Where the panel on screen was placed. Read from Prefs each time a panel is shown, so the
+    // setting applies without restarting the service; rotation and bubble drags reuse this value.
+    private var panelMode = PanelPlacement.Mode.TOP
+    // Measured size of the answer panel, used to place it (see PanelPlacement).
+    private var panelAdded = false
+    private var panelW = 0
+    private var panelH = 0
+    private val hidePanelRunnable = Runnable { hidePanel() }
+
+    // Touchable preview of the last image sent, opened from the notification.
+    private var preview: View? = null
+    private val closePreviewRunnable = Runnable { hidePreview() }
 
     private var autoMode = false
     private var autoJob: Job? = null
@@ -88,6 +114,11 @@ class OverlayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             stopSelf()
+            return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_LAST_IMAGE) {
+            // Only meaningful while the bubble is running; a stale tap must not start a half-initialised service.
+            if (projection == null) stopSelf() else showLastImage()
             return START_NOT_STICKY
         }
         if (projection != null) return START_NOT_STICKY
@@ -144,12 +175,18 @@ class OverlayService : Service() {
             Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val lastImageIntent = PendingIntent.getService(
+            this, 1,
+            Intent(this, OverlayService::class.java).setAction(ACTION_LAST_IMAGE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentTitle("Clu")
             .setContentText("الفقاعة تعمل")
             .setOngoing(true)
             .addAction(0, "إيقاف", stopIntent)
+            .addAction(0, "آخر صورة", lastImageIntent)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
@@ -160,19 +197,26 @@ class OverlayService : Service() {
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
-        resizeCapture()
+        // New screen size: the bubble may now be off-screen (landscape -> portrait), so pull it
+        // back in first, then re-measure the panel (max width depends on orientation) and re-place
+        // it (it follows the bubble in NEXT_TO_BUBBLE mode). The centred preview is sized for the
+        // old screen, so just close it.
+        if (resizeCapture()) clampBubble()
+        refreshPanel()
+        hidePreview()
     }
 
     /**
      * The virtual display keeps the size it was created with, so after rotating to landscape the
      * screen would be squeezed into a portrait frame. Match it to the current orientation.
+     * Returns true when the screen size changed.
      */
-    private fun resizeCapture() {
-        val vd = virtualDisplay ?: return
+    private fun resizeCapture(): Boolean {
+        val vd = virtualDisplay ?: return false
         val dm = DisplayMetrics()
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(dm)
-        if (dm.widthPixels == screenW && dm.heightPixels == screenH) return
+        if (dm.widthPixels == screenW && dm.heightPixels == screenH) return false
         screenW = dm.widthPixels
         screenH = dm.heightPixels
         density = dm.densityDpi
@@ -184,7 +228,23 @@ class OverlayService : Service() {
         old?.close()
         lastFrame?.recycle()
         lastFrame = null
-        panel?.maxWidth = (screenW * 0.8f).toInt()
+        // The auto mode's previous signature describes the old orientation.
+        prevTickSig = null
+        return true
+    }
+
+    /** After a rotation the screen has new bounds: keep the bubble fully inside them. */
+    private fun clampBubble() {
+        val v = bubble ?: return
+        val params = bubbleParams ?: return
+        val pos = PanelPlacement.clampInto(params.x, params.y, params.width, params.height, screenW, screenH)
+        if (pos.x == params.x && pos.y == params.y) return
+        params.x = pos.x
+        params.y = pos.y
+        try {
+            wm.updateViewLayout(v, params)
+        } catch (_: Exception) {
+        }
     }
 
     private fun setupCapture(proj: MediaProjection) {
@@ -271,6 +331,7 @@ class OverlayService : Service() {
                                 wm.updateViewLayout(v, params)
                             } catch (_: Exception) {
                             }
+                            followBubble()
                         }
                     }
                     MotionEvent.ACTION_UP -> {
@@ -315,31 +376,178 @@ class OverlayService : Service() {
         }
     }
 
+    /** Widest the panel may be in the current [panelMode] (see [PanelPlacement.maxWidth]). */
+    private fun panelMaxWidth(): Int = PanelPlacement.maxWidth(panelMode, screenW, screenH)
+
+    private fun createPanelView(): TextView = TextView(this).apply {
+        setTextColor(Color.WHITE)
+        textSize = 18f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        gravity = Gravity.CENTER
+        setPadding(dp(12), dp(8), dp(12), dp(8))
+        ellipsize = TextUtils.TruncateAt.END
+        background = GradientDrawable().apply {
+            cornerRadius = dp(12).toFloat()
+            // Opaque: the window itself is drawn at PANEL_WINDOW_ALPHA, which makes it ~80% dark.
+            setColor(Color.parseColor("#FF111111"))
+        }
+    }
+
+    /**
+     * Shows the answer at the top of the screen or next to the bubble, as set in [Prefs.panelMode].
+     * The panel window is not touchable, so every tap goes through to the app underneath (the
+     * answer options of the game); it hides itself after [PANEL_AUTO_HIDE_MS].
+     */
     private fun showPanel(text: String) {
-        val p = panel ?: TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 24f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            gravity = Gravity.CENTER
-            setPadding(dp(16), dp(10), dp(16), dp(10))
-            maxWidth = (screenW * 0.8f).toInt()
-            background = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
-                setColor(Color.parseColor("#CC111111"))
-            }
-            setOnClickListener { hidePanel() }
-            // Long-press shows exactly what was sent to Gemini, to check what it saw.
-            setOnLongClickListener { showSentImage(); true }
-        }.also { panel = it }
-        p.setCompoundDrawables(null, null, null, null)
+        panelMode = Prefs.panelMode(this)
+        val p = panel ?: createPanelView().also { panel = it }
+        p.maxLines = if (panelMode == PanelPlacement.Mode.TOP) PANEL_TOP_MAX_LINES else PANEL_BUBBLE_MAX_LINES
         p.text = text
-        val existing = panelParams
-        if (existing != null && p.isAttachedToWindow) {
-            try {
-                wm.updateViewLayout(p, existing)
-            } catch (_: Exception) {
+        measurePanel(p)
+        val params = panelParams ?: WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            alpha = PANEL_WINDOW_ALPHA
+        }.also { panelParams = it }
+        applyPanelSize(params)
+        placePanel(params)
+        try {
+            if (panelAdded) {
+                wm.updateViewLayout(p, params)
+            } else {
+                wm.addView(p, params)
+                panelAdded = true
             }
+        } catch (_: Exception) {
+        }
+        handler.removeCallbacks(hidePanelRunnable)
+        handler.postDelayed(hidePanelRunnable, PANEL_AUTO_HIDE_MS)
+    }
+
+    /** Measures the panel for the current text and screen size (width capped by [panelMaxWidth]). */
+    private fun measurePanel(p: TextView) {
+        p.maxWidth = panelMaxWidth()
+        p.measure(
+            View.MeasureSpec.makeMeasureSpec(screenW, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(screenH, View.MeasureSpec.AT_MOST)
+        )
+        panelW = p.measuredWidth
+        panelH = p.measuredHeight
+    }
+
+    /**
+     * Gives the window exactly the measured size. A WRAP_CONTENT window is first measured by the
+     * system at a narrower "preferred dialog width" (320dp), which would re-wrap long answers and
+     * make them taller than the size [PanelPlacement] was given.
+     */
+    private fun applyPanelSize(params: WindowManager.LayoutParams) {
+        params.width = panelW.coerceAtLeast(1)
+        params.height = panelH.coerceAtLeast(1)
+    }
+
+    /** Puts the panel where [panelMode] says (see [PanelPlacement]) using the last measured panel size. */
+    private fun placePanel(params: WindowManager.LayoutParams) {
+        val pos = when (panelMode) {
+            PanelPlacement.Mode.TOP ->
+                PanelPlacement.top(panelW, panelH, screenW, screenH, dp(PANEL_TOP_MARGIN_DP))
+            PanelPlacement.Mode.NEXT_TO_BUBBLE -> {
+                val bp = bubbleParams ?: return
+                PanelPlacement.place(bp.x, bp.y, bp.width, panelW, panelH, screenW, screenH, dp(8))
+            }
+        }
+        params.x = pos.x
+        params.y = pos.y
+    }
+
+    /** Keeps a panel that sits next to the bubble with it while the bubble is dragged. */
+    private fun followBubble() {
+        if (panelMode == PanelPlacement.Mode.NEXT_TO_BUBBLE) updatePanelPosition()
+    }
+
+    /** Re-places the visible panel (after the bubble moved or the screen size changed). */
+    private fun updatePanelPosition() {
+        val p = panel ?: return
+        val params = panelParams ?: return
+        if (!panelAdded) return
+        placePanel(params)
+        try {
+            wm.updateViewLayout(p, params)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Re-measures and re-places the visible panel after the screen size changed (either mode). */
+    private fun refreshPanel() {
+        val p = panel ?: return
+        if (!panelAdded) return
+        measurePanel(p)
+        panelParams?.let { applyPanelSize(it) }
+        updatePanelPosition()
+    }
+
+    private fun hidePanel() {
+        handler.removeCallbacks(hidePanelRunnable)
+        val p = panel ?: return
+        if (!panelAdded) return
+        panelAdded = false
+        try {
+            wm.removeView(p)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Shows what was last sent to the model, in a separate touchable window in the centre of the
+     * screen. Tap closes it; it also closes itself after [PREVIEW_AUTO_CLOSE_MS].
+     */
+    private fun showLastImage() {
+        val bmp = client?.lastSent
+        if (bmp == null) {
+            Toast.makeText(this, "لا توجد صورة بعد", Toast.LENGTH_SHORT).show()
             return
+        }
+        hidePreview()
+        val maxW = (screenW * 0.8f).toInt()
+        val maxH = (screenH * 0.6f).toInt()
+        val scale = min(maxW.toFloat() / bmp.width, maxH.toFloat() / bmp.height)
+        val w = (bmp.width * scale).toInt().coerceAtLeast(1)
+        val h = (bmp.height * scale).toInt().coerceAtLeast(1)
+
+        val image = ImageView(this).apply {
+            setImageBitmap(bmp)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+        val caption = TextView(this).apply {
+            text = "الصورة المرسلة — اضغط للإغلاق"
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(8), 0, 0)
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(Color.parseColor("#E6111111"))
+            }
+            addView(image, LinearLayout.LayoutParams(w, h))
+            addView(
+                caption,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+            setOnClickListener { hidePreview() }
         }
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -349,33 +557,24 @@ class OverlayService : Service() {
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            y = dp(96)
+            gravity = Gravity.CENTER
         }
-        panelParams = params
-        wm.addView(p, params)
+        try {
+            wm.addView(box, params)
+        } catch (_: Exception) {
+            return
+        }
+        preview = box
+        handler.postDelayed(closePreviewRunnable, PREVIEW_AUTO_CLOSE_MS)
     }
 
-    private fun showSentImage() {
-        val p = panel ?: return
-        val bmp = client?.lastSent ?: return
-        var w = (screenW * 0.75f).toInt()
-        var h = w * bmp.height / bmp.width
-        val maxH = (screenH * 0.5f).toInt()
-        if (h > maxH) { w = w * maxH / h; h = maxH }
-        val d = android.graphics.drawable.BitmapDrawable(resources, bmp).apply { setBounds(0, 0, w, h) }
-        p.setCompoundDrawables(null, d, null, null)
-        p.text = "الصورة المرسلة"
-        panelParams?.let { try { wm.updateViewLayout(p, it) } catch (_: Exception) {} }
-    }
-
-    private fun hidePanel() {
-        val p = panel ?: return
-        if (p.isAttachedToWindow) {
-            try {
-                wm.removeView(p)
-            } catch (_: Exception) {
-            }
+    private fun hidePreview() {
+        handler.removeCallbacks(closePreviewRunnable)
+        val v = preview ?: return
+        preview = null
+        try {
+            wm.removeView(v)
+        } catch (_: Exception) {
         }
     }
 
@@ -403,10 +602,12 @@ class OverlayService : Service() {
         val bmp = lastFrame?.copy(Bitmap.Config.ARGB_8888, true) ?: return null
         val canvas = Canvas(bmp)
         val paint = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL }
-        viewRect(bubble)?.let { canvas.drawRect(it, paint) }
-        viewRect(panel)?.let { canvas.drawRect(it, paint) }
+        for (r in overlayRects()) canvas.drawRect(r, paint)
         return bmp
     }
+
+    /** Screen rectangles of our own windows that are currently showing (bubble, panel, image preview). */
+    private fun overlayRects(): List<Rect> = listOfNotNull(viewRect(bubble), viewRect(panel), viewRect(preview))
 
     private fun readFrame(): Bitmap? {
         val reader = imageReader ?: return null
@@ -429,21 +630,23 @@ class OverlayService : Service() {
         return bmp
     }
 
-    private fun signature(bmp: Bitmap): IntArray {
+    /**
+     * Luminance grid of the frame. Cells under one of [overlays] (our own windows) are marked
+     * ignored: the panel appearing, moving or auto-hiding must not look like the game changing.
+     */
+    private fun signature(bmp: Bitmap, overlays: List<Rect>): IntArray {
+        val w = bmp.width
+        val h = bmp.height
         val small = Bitmap.createScaledBitmap(bmp, SIG_SIZE, SIG_SIZE, true)
         val px = IntArray(SIG_SIZE * SIG_SIZE)
         small.getPixels(px, 0, SIG_SIZE, 0, 0, SIG_SIZE, SIG_SIZE)
         if (small !== bmp) small.recycle()
-        return IntArray(px.size) {
+        val sig = IntArray(px.size) {
             val c = px[it]
             (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000
         }
-    }
-
-    private fun diff(a: IntArray, b: IntArray): Double {
-        var s = 0L
-        for (i in a.indices) s += abs(a[i] - b[i])
-        return s.toDouble() / a.size
+        for (r in overlays) FrameSignature.ignoreRect(sig, SIG_SIZE, w, h, r.left, r.top, r.right, r.bottom)
+        return sig
     }
 
     // ---------------------------------------------------------------- actions
@@ -455,9 +658,10 @@ class OverlayService : Service() {
 
     private fun answerNow() {
         if (busy) return
-        if (panel?.isAttachedToWindow == true) {
-            // Remove the old answer first so it doesn't hide part of the question.
+        if (panelAdded || preview != null) {
+            // Remove the old answer (and the sent-image preview) first so they don't hide part of the question.
             hidePanel()
+            hidePreview()
             setBusy(true)
             handler.postDelayed({
                 setBusy(false)
@@ -470,7 +674,9 @@ class OverlayService : Service() {
             showPanel("لم يتم الحصول على إجابة")
             return
         }
-        sendFrame(bmp, null)
+        // In auto mode count this as the last frame sent, or the next tick would see the question as
+        // "new", hide this answer and ask again.
+        sendFrame(bmp, if (autoMode) signature(bmp, overlayRects()) else null)
     }
 
     private fun sendFrame(bmp: Bitmap, sig: IntArray?) {
@@ -507,20 +713,43 @@ class OverlayService : Service() {
         }
     }
 
+    /**
+     * One auto-mode step (the decision itself is [FrameSignature.judge]). A change that shows up
+     * while our answer panel is on screen does not send anything: the panel is painted black in
+     * the capture and could black out part of the new question. The panel is hidden instead, and a
+     * later tick sends the frame once it no longer contains the panel and has settled.
+     */
     private suspend fun autoTick() {
-        if (busy) return
-        val bmp = captureMasked(newOnly = true) ?: return
-        val sig = withContext(Dispatchers.Default) { signature(bmp) }
-        val prev = prevTickSig
-        prevTickSig = sig
-        val last = lastSentSig
-        val changed = last == null || diff(sig, last) > CHANGE_THRESHOLD
-        val stable = prev != null && diff(sig, prev) < STABLE_THRESHOLD
-        if (changed && stable && !busy) {
-            sendFrame(bmp, sig)
+        // While the sent-image preview covers the middle of the screen, the capture is mostly black:
+        // not worth sending, and it would overwrite client.lastSent.
+        if (busy || preview != null) return
+        // Fixed before anything suspends: is the panel part of the frame being judged?
+        val panelShown = panelAdded
+        val fresh = captureMasked(newOnly = true)
+        val overlays = overlayRects()
+        val previous = prevTickSig
+        // The virtual display only emits a frame when the screen changes, so "no new frame" means
+        // the screen is exactly as at the last tick: count it as one more stable tick (reusing that
+        // signature) instead of waiting for a frame that may never come on a static screen.
+        // Only the very first tick has nothing to reuse and takes the kept frame.
+        val bmp: Bitmap? = fresh ?: if (previous == null) (captureMasked() ?: return) else null
+        val sig = if (bmp != null) {
+            withContext(Dispatchers.Default) { signature(bmp, overlays) }
         } else {
-            bmp.recycle()
+            previous ?: return
         }
+        val verdict = FrameSignature.judge(sig, previous, lastSentSig, panelShown, CHANGE_THRESHOLD, STABLE_THRESHOLD)
+        prevTickSig = sig
+        var toSend: Bitmap? = null
+        if (!busy && preview == null) {
+            when (verdict) {
+                FrameSignature.Verdict.HIDE_PANEL -> hidePanel()
+                FrameSignature.Verdict.SEND -> toSend = bmp ?: captureMasked()
+                FrameSignature.Verdict.IDLE, FrameSignature.Verdict.WAIT -> {}
+            }
+        }
+        if (toSend != null) sendFrame(toSend, sig)
+        if (bmp != null && bmp !== toSend) bmp.recycle()
     }
 
     // ---------------------------------------------------------------- lifecycle
@@ -530,6 +759,7 @@ class OverlayService : Service() {
         scope.cancel()
         handler.removeCallbacksAndMessages(null)
         hidePanel()
+        hidePreview()
         bubble?.let {
             if (it.isAttachedToWindow) {
                 try {

@@ -31,6 +31,17 @@ object Prefs {
     fun claudeModel(c: Context): String =
         cleanModel(sp(c).getString("claude_model", DEFAULT_CLAUDE_MODEL) ?: "").ifBlank { DEFAULT_CLAUDE_MODEL }
 
+    /**
+     * Where the answer panel is shown. Read each time a panel is shown, so a change made in the
+     * settings screen applies to the running service without a restart.
+     */
+    fun panelMode(c: Context): PanelPlacement.Mode =
+        PanelPlacement.Mode.fromKey(sp(c).getString("panel_position", PanelPlacement.Mode.TOP.key))
+
+    fun savePanelMode(c: Context, mode: PanelPlacement.Mode) {
+        sp(c).edit().putString("panel_position", mode.key).apply()
+    }
+
     fun saveClaude(c: Context, provider: String, key: String, model: String) {
         sp(c).edit().putString("provider", provider).putString("claude_key", cleanKey(key))
             .putString("claude_model", cleanModel(model)).apply()

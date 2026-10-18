@@ -33,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var providerGroup: RadioGroup
     private lateinit var claudeKeyInput: EditText
     private lateinit var claudeModelInput: EditText
+    private lateinit var panelPositionGroup: RadioGroup
 
     // Model ids in the same order as the spinner entries.
     private var modelIds: List<String> = emptyList()
@@ -69,6 +70,7 @@ class MainActivity : AppCompatActivity() {
         providerGroup = findViewById(R.id.providerGroup)
         claudeKeyInput = findViewById(R.id.claudeKeyInput)
         claudeModelInput = findViewById(R.id.claudeModelInput)
+        panelPositionGroup = findViewById(R.id.panelPositionGroup)
 
         apiKeyInput.setText(Prefs.apiKey(this))
         modelSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -84,6 +86,9 @@ class MainActivity : AppCompatActivity() {
         claudeModelInput.setText(Prefs.claudeModel(this))
         providerGroup.check(
             if (Prefs.provider(this) == "claude") R.id.providerClaude else R.id.providerGemini
+        )
+        panelPositionGroup.check(
+            if (Prefs.panelMode(this) == PanelPlacement.Mode.NEXT_TO_BUBBLE) R.id.panelPosBubble else R.id.panelPosTop
         )
         findViewById<Button>(R.id.opusButton).setOnClickListener {
             claudeModelInput.setText("claude-opus-5-5")
@@ -189,6 +194,11 @@ class MainActivity : AppCompatActivity() {
             if (providerGroup.checkedRadioButtonId == R.id.providerClaude) "claude" else "gemini",
             claudeKeyInput.text.toString(),
             claudeModelInput.text.toString()
+        )
+        Prefs.savePanelMode(
+            this,
+            if (panelPositionGroup.checkedRadioButtonId == R.id.panelPosBubble) PanelPlacement.Mode.NEXT_TO_BUBBLE
+            else PanelPlacement.Mode.TOP
         )
     }
 

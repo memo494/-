@@ -168,6 +168,36 @@
             android:text="تحديث قائمة النماذج"
             android:textSize="12sp" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="مكان الإجابة"
+            android:textAlignment="viewStart" />
+
+        <RadioGroup
+            android:id="@+id/panelPositionGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/panelPosTop"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="أعلى الشاشة"
+                android:textSize="14sp" />
+
+            <RadioButton
+                android:id="@+id/panelPosBubble"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="بجانب الفقاعة"
+                android:textSize="14sp" />
+        </RadioGroup>
+
         <Button
             android:id="@+id/overlayButton"
             android:layout_width="match_parent"
