@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var panelPositionGroup: RadioGroup
     private lateinit var smartReadingCheck: CheckBox
     private lateinit var highlightCheck: CheckBox
+    private lateinit var vibrateCheck: CheckBox
     private lateinit var clearMemoryButton: Button
     private lateinit var volumeKeyCheck: CheckBox
     private lateinit var volumeKeyStatus: TextView
@@ -154,9 +155,11 @@ class MainActivity : AppCompatActivity() {
         )
         smartReadingCheck = findViewById(R.id.smartReadingCheck)
         highlightCheck = findViewById(R.id.highlightCheck)
+        vibrateCheck = findViewById(R.id.vibrateCheck)
         clearMemoryButton = findViewById(R.id.clearMemoryButton)
         smartReadingCheck.isChecked = Prefs.smartReading(this)
         highlightCheck.isChecked = Prefs.highlightAnswer(this)
+        vibrateCheck.isChecked = Prefs.vibrateOnAnswer(this)
         AnswerStore.init(this)
         volumeKeyCheck = findViewById(R.id.volumeKeyCheck)
         volumeKeyStatus = findViewById(R.id.volumeKeyStatus)
@@ -318,6 +321,7 @@ class MainActivity : AppCompatActivity() {
             else PanelPlacement.Mode.TOP
         )
         Prefs.saveReading(this, smartReadingCheck.isChecked, highlightCheck.isChecked)
+        Prefs.saveVibrateOnAnswer(this, vibrateCheck.isChecked)
         Prefs.saveVolumeKey(this, volumeKeyCheck.isChecked)
     }
 

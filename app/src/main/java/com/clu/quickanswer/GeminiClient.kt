@@ -30,30 +30,25 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
     @Volatile override var lastSent: Bitmap? = null
         private set
 
-    /** Returns the short answer, or a short Arabic error message. Never throws. */
-    override fun answer(bitmap: Bitmap): String {
+    /** The model's answer for the screenshot, or a short Arabic error message. Never throws. */
+    override fun answer(bitmap: Bitmap): Reply {
         return try {
             val prepared = ScreenImage.prepare(bitmap, IMAGE_MAX_SIDE, IMAGE_QUALITY)
-                ?: return ScreenImage.BLACK_SCREEN
+                ?: return Reply.error(ScreenImage.BLACK_SCREEN)
             lastSent = prepared.kept
             val b64 = prepared.base64
-            race { m, mode -> imageBody(m, b64, mode) }.text
+            race { m, mode -> imageBody(m, b64, mode) }.toReply()
         } catch (e: IOException) {
-            NO_CONNECTION
+            Reply.error(NO_CONNECTION)
         } catch (e: Exception) {
-            "خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim()
+            Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
         }
     }
 
     /** A question already read on the device: text only, no image (fewer tokens, faster). */
     override fun answerText(prompt: String): Reply {
         return try {
-            val outcome = race { m, mode -> textBody(m, prompt, mode) }
-            when {
-                outcome.ok -> Reply.answer(outcome.text)
-                outcome.final -> Reply.error(outcome.text)
-                else -> Reply.empty(outcome.text)
-            }
+            race { m, mode -> textBody(m, prompt, mode) }.toReply()
         } catch (e: IOException) {
             Reply.error(NO_CONNECTION)
         } catch (e: Exception) {
@@ -66,6 +61,12 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
      * would hit any other request too (quota, key, region), so trying the image instead is pointless.
      */
     private class Outcome(val text: String, val ok: Boolean, val final: Boolean)
+
+    private fun Outcome.toReply(): Reply = when {
+        ok -> Reply.answer(text)
+        final -> Reply.error(text)
+        else -> Reply.empty(text)
+    }
 
     /**
      * Asks the models for one request whose body [body] builds per model and thinking mode.

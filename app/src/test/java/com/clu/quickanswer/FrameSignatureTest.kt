@@ -166,9 +166,14 @@ class FrameSignatureTest {
         return sig
     }
 
+    private val tickMs = FrameSignature.TICK_MS
+    private val panelMs = 15_000L // the answer panel hides itself after this long (OverlayService.PANEL_AUTO_HIDE_MS)
+
     /**
-     * The service's autoTick, with the answer arriving at once after a SEND and showing the panel
-     * for 15 s, and an answer hidden by HIDE_PANEL coming back on IDLE if it still has time left.
+     * The service's autoTick, one call per [FrameSignature.TICK_MS] of simulated time (everything
+     * below is counted in ticks, so the wall-clock figures follow that constant), with the answer
+     * arriving at once after a SEND and showing the panel for [panelMs], and an answer hidden by
+     * HIDE_PANEL coming back on IDLE if it still has time left.
      */
     private class AutoRun(val frameSig: (IntArray, Boolean) -> IntArray) {
         var prev: IntArray? = null
@@ -177,13 +182,16 @@ class FrameSignatureTest {
         var sends = 0
         var hides = 0
         var restores = 0
-        var now = 0L // ms; each tick is 1.5 s
+        var now = 0L // simulated ms
+        var lastSendAt = -1L
         var panelDeadline = 0L
         val hidden = HiddenAnswer()
         val verdicts = mutableListOf<Verdict>()
 
         fun tick(screen: IntArray): Verdict {
-            now += 1500
+            now += FrameSignature.TICK_MS
+            // The panel's own 15 s timer fires between ticks, before this one looks at the frame.
+            if (panelUp && now >= panelDeadline) panelUp = false
             val panelInFrame = panelUp
             val sig = frameSig(screen, panelInFrame)
             val v = FrameSignature.judge(sig, prev, lastSent, panelInFrame, 6.0, 2.0)
@@ -193,6 +201,7 @@ class FrameSignatureTest {
                 Verdict.SEND -> {
                     hidden.clear()
                     sends++
+                    lastSendAt = now
                     lastSent = sig
                     panelUp = true
                     panelDeadline = now + 15_000
@@ -205,6 +214,12 @@ class FrameSignatureTest {
         }
 
         fun ticks(screen: IntArray, n: Int) = List(n) { tick(screen) }
+    }
+
+    @Test
+    fun tickInterval_reactsWithinAboutASecond() {
+        // Auto mode used to tick every 1.5 s (a new question took 1.5-3 s); it has to stay well under that.
+        assertTrue(FrameSignature.TICK_MS in 250L..1000L)
     }
 
     @Test
@@ -235,15 +250,21 @@ class FrameSignatureTest {
         val run = AutoRun(::frameSig)
         run.ticks(a, 2)
         assertTrue(run.panelUp)
+        val firstSendAt = run.lastSendAt
 
         // Hidden behind the panel and small elsewhere: not visible while the panel is up ...
         assertTrue(FrameSignature.diff(frameSig(a, true), frameSig(bannerOnly, true)) < 6.0)
-        assertEquals(List(5) { Verdict.IDLE }, run.ticks(bannerOnly, 5))
+        var idleTicks = 0
+        while (run.now + tickMs < run.panelDeadline) {
+            assertEquals(Verdict.IDLE, run.tick(bannerOnly))
+            idleTicks++
+        }
+        assertEquals("every tick until the panel's 15 s are up", (panelMs / tickMs).toInt() - 1, idleTicks)
 
-        // ... but the 15 s auto-hide uncovers it, and it is sent two ticks later.
-        run.panelUp = false
-        assertTrue(FrameSignature.diff(frameSig(a, false), frameSig(bannerOnly, false)) > 6.0)
+        // ... but the 15 s auto-hide uncovers it (the tick at the deadline sees a frame without the
+        // panel, not comparable to the one before), and it is sent one tick later.
         assertEquals(listOf(Verdict.WAIT, Verdict.SEND), run.ticks(bannerOnly, 2))
+        assertEquals(firstSendAt + panelMs + tickMs, run.lastSendAt)
         assertEquals(2, run.sends)
         assertEquals(0, run.hides)
     }
@@ -254,6 +275,7 @@ class FrameSignatureTest {
         val a = game(banner = 30, options = 180)
         val run = AutoRun(::frameSig)
         run.panelUp = true
+        run.panelDeadline = run.now + panelMs
         assertEquals(Verdict.HIDE_PANEL, run.tick(a))
         assertEquals(Verdict.WAIT, run.tick(a))
         assertEquals(Verdict.SEND, run.tick(a))
@@ -266,11 +288,41 @@ class FrameSignatureTest {
         val a = game(banner = 30, options = 180)
         val run = AutoRun(::frameSig)
         run.ticks(a, 2)
-        assertTrue(run.ticks(a, 200).all { it == Verdict.IDLE })
-        run.panelUp = false // auto-hide
-        assertTrue(run.ticks(a, 200).all { it == Verdict.IDLE })
+        // 100 s on the same screen: the answer panel's 15 s run out in the middle of it.
+        assertTrue(run.ticks(a, 40).all { it == Verdict.IDLE })
+        assertFalse("the panel hid itself", run.panelUp)
+        assertTrue(run.ticks(a, 160).all { it == Verdict.IDLE })
         assertEquals(1, run.sends)
         assertEquals(0, run.hides)
+        assertEquals(0, run.restores)
+    }
+
+    @Test
+    fun auto_newQuestion_isSentWithinTwoTicks_orThreeWhenThePanelIsUp() {
+        val a = game(banner = 30, options = 180)
+        val b = game(banner = 220, options = 40)
+        val c = game(banner = 90, options = 120)
+        val run = AutoRun(::frameSig)
+        run.ticks(a, 2)
+
+        // Worst case for the wait: the question appears just after a tick. The panel is still up,
+        // so: hide, one tick to compare against, send.
+        var appearedAt = run.now
+        assertEquals(listOf(Verdict.HIDE_PANEL, Verdict.WAIT, Verdict.SEND), run.ticks(b, 3))
+        assertEquals(3 * tickMs, run.lastSendAt - appearedAt)
+        assertEquals(1_500L, run.lastSendAt - appearedAt)
+
+        // Without a panel (it timed out): the first tick sees the change, the second finds it stable.
+        while (run.panelUp) assertEquals(Verdict.IDLE, run.tick(b))
+        assertEquals(Verdict.IDLE, run.tick(b))
+        appearedAt = run.now
+        assertEquals(listOf(Verdict.WAIT, Verdict.SEND), run.ticks(c, 2))
+        assertEquals(1_000L, run.lastSendAt - appearedAt)
+
+        // And exactly one send per question, however long the screen then stays the same.
+        assertTrue(run.ticks(c, 100).all { it == Verdict.IDLE })
+        assertEquals(3, run.sends)
+        assertEquals(1, run.hides)
     }
 
     @Test
@@ -297,6 +349,7 @@ class FrameSignatureTest {
         val blip = game(banner = 220, options = 40)
         val run = AutoRun(::frameSig)
         run.ticks(a, 2)
+        // A blip of 2 ticks (1 s) is the longest that still counts as one: the third tick would send.
         assertEquals(listOf(Verdict.HIDE_PANEL, Verdict.WAIT), run.ticks(blip, 2))
         assertEquals(Verdict.IDLE, run.tick(a))
         assertTrue(run.panelUp)
@@ -322,9 +375,9 @@ class FrameSignatureTest {
         val b = game(banner = 220, options = 40)
         val run = AutoRun(::frameSig)
         run.ticks(a, 2)
+        // A change that holds for 3 ticks (1.5 s) is a new screen, not a blip: sent, never undone.
         assertEquals(listOf(Verdict.HIDE_PANEL, Verdict.WAIT, Verdict.SEND), run.ticks(b, 3))
-        run.panelUp = false // the new answer's 15 s auto-hide
-        assertTrue(run.ticks(b, 20).all { it == Verdict.IDLE })
+        assertTrue(run.ticks(b, 40).all { it == Verdict.IDLE }) // 20 s: the new answer's 15 s auto-hide is in it
         assertFalse(run.panelUp)
         assertEquals(0, run.restores)
         assertEquals(2, run.sends)
@@ -344,9 +397,11 @@ class FrameSignatureTest {
             prevOptions = options
             val screen = game(banner = rnd.nextInt(256), options = options)
             questions++
+            // 4 to 8 ticks (2 to 4 s), as short as a question can be and still be sent: with the
+            // panel up that takes 3 ticks (hide, compare, send).
             val hold = 4 + rnd.nextInt(5)
             repeat(hold) {
-                // Now and then the 15 s auto-hide fires between two ticks.
+                // Besides the real 15 s timer (in AutoRun), now and then it fires early between two ticks.
                 if (run.panelUp && rnd.nextInt(8) == 0) run.panelUp = false
                 val panelBefore = run.panelUp
                 val before = run.verdicts.lastOrNull()
@@ -356,7 +411,7 @@ class FrameSignatureTest {
                 if (before == Verdict.HIDE_PANEL) assertTrue("sent right after a hide", v != Verdict.SEND)
                 if (before == Verdict.HIDE_PANEL) assertTrue("hide twice in a row", v != Verdict.HIDE_PANEL)
             }
-            // Every question that stayed for 4+ ticks was sent (the latest sent frame shows it).
+            // Every question that stayed for 4+ ticks (2 s) was sent (the latest sent frame shows it).
             val sent = run.lastSent!!
             assertTrue("question $questions was missed", FrameSignature.diff(frameSig(screen, false), sent) <= 6.0)
         }

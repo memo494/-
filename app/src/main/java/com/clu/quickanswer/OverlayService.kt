@@ -66,7 +66,8 @@ class OverlayService : Service() {
         private const val NOTIF_ID = 1
         private const val ACTION_STOP = "com.clu.quickanswer.STOP"
         private const val ACTION_LAST_IMAGE = "com.clu.quickanswer.LAST_IMAGE"
-        private const val AUTO_INTERVAL_MS = 1500L
+        // How often auto mode looks at the screen; FrameSignature.judge and its tests count in these ticks.
+        private const val AUTO_INTERVAL_MS = FrameSignature.TICK_MS
         private const val SIG_SIZE = 32
         private const val CHANGE_THRESHOLD = 6.0
         private const val STABLE_THRESHOLD = 2.0
@@ -685,17 +686,28 @@ class OverlayService : Service() {
     // ---------------------------------------------------------------- capture
 
     /**
-     * Must be called on the main thread (reads view geometry). Returns a bitmap with our overlays
-     * painted over. With [newOnly], returns null when no new frame arrived since the last capture.
+     * Takes the newest frame the virtual display has produced (if any) as [lastFrame]; true when a
+     * new one arrived. The display only produces frames when the screen changes, so on a static
+     * screen this costs next to nothing. Main thread.
      */
-    private fun captureMasked(newOnly: Boolean = false): Bitmap? {
-        val fresh = readFrame()
-        if (fresh != null) {
-            lastFrame?.recycle()
-            lastFrame = fresh
-        } else if (newOnly) {
-            return null
-        }
+    private fun grabFrame(): Boolean {
+        val fresh = readFrame() ?: return false
+        lastFrame?.recycle()
+        lastFrame = fresh
+        return true
+    }
+
+    /**
+     * Must be called on the main thread (reads view geometry). Returns the newest frame as a copy
+     * with our overlays painted over.
+     */
+    private fun captureMasked(): Bitmap? {
+        grabFrame()
+        return maskedCopy()
+    }
+
+    /** A full-size copy of [lastFrame] with our overlays painted black (the caller owns and recycles it). */
+    private fun maskedCopy(): Bitmap? {
         val bmp = lastFrame?.copy(Bitmap.Config.ARGB_8888, true) ?: return null
         val canvas = Canvas(bmp)
         val paint = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL }
@@ -803,7 +815,7 @@ class OverlayService : Service() {
                 try {
                     solve(bmp, masks, bypass)
                 } catch (e: Exception) {
-                    Solved("خطأ: ${e.javaClass.simpleName}", null, null, null)
+                    Solved("خطأ: ${e.javaClass.simpleName}", null, null, null, isAnswer = false)
                 } finally {
                     bmp.recycle()
                 }
@@ -815,6 +827,7 @@ class OverlayService : Service() {
             lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
             shownImage = solved.image ?: shownImage
             showPanel(solved.text)
+            if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
             // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
             val rect = solved.rect
             if (rect != null && capturedW == screenW && capturedH == screenH && Prefs.highlightAnswer(this@OverlayService)) {
@@ -826,8 +839,16 @@ class OverlayService : Service() {
     /**
      * What one answer produced: the text for the bar, the option's button to box (screen pixels),
      * the picture "آخر صورة" shows, and the memory entry it came from (null if not from memory).
+     * [isAnswer]: the text is an answer (from memory or the model), not an error or "no question";
+     * only an answer gets a haptic tick (see [Reply.isAnswer]).
      */
-    private class Solved(val text: String, val rect: PxRect?, val image: Bitmap?, val memoryKey: String?)
+    private class Solved(
+        val text: String,
+        val rect: PxRect?,
+        val image: Bitmap?,
+        val memoryKey: String?,
+        val isAnswer: Boolean
+    )
 
     /**
      * Answers the question on [bmp] (blocking; run off the main thread). [masks] are the places where
@@ -840,7 +861,7 @@ class OverlayService : Service() {
      *    remembered. A correction goes straight here: the text request would get the same reply again.
      */
     private fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?): Solved {
-        val c = client ?: return Solved("خطأ", null, null, null)
+        val c = client ?: return Solved("خطأ", null, null, null, isAnswer = false)
         val memory = AnswerStore.memory
         val q = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else null
         val wordsDecide = q != null && !QuestionPrompt.refersToPicture(q.questionText)
@@ -852,23 +873,25 @@ class OverlayService : Service() {
             } else {
                 if (hit != null) {
                     AnswerParser.resolveStored(q, hit.answer)?.let { r ->
-                        return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key)
+                        return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key, isAnswer = true)
                     }
                 }
                 val reply = c.answerText(QuestionPrompt.build(q))
                 when (reply.kind) {
                     Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
                         memory.put(q.questionText, q.options, q.numeric, r.answer)
-                        return Solved(r.answer, r.rect, shownCopy(bmp), null)
+                        return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true)
                     }
                     // Quota, key, region, no connection: the image request would fail the same way.
-                    Reply.Kind.ERROR -> return Solved(reply.text, null, null, null)
+                    Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false)
                     Reply.Kind.EMPTY -> {}
                 }
             }
         }
-        val text = c.answer(bmp)
-        if (q != null) {
+        val imageReply = c.answer(bmp)
+        val text = imageReply.text
+        // An error message is never matched against the options (or taken for a number).
+        if (q != null && imageReply.kind == Reply.Kind.ANSWER) {
             val r = if (q.numeric) {
                 // Only a bare number counts (an error message can contain digits too).
                 AnswerParser.numberOnly(text)?.let { AnswerParser.Resolved(it, null) }
@@ -882,10 +905,10 @@ class OverlayService : Service() {
                     if (corrected != null && corrected.exact) memory.remove(corrected.key)
                     memory.put(q.questionText, q.options, q.numeric, r.answer)
                 }
-                return Solved(r.answer, r.rect, c.lastSent, null)
+                return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true)
             }
         }
-        return Solved(text, null, c.lastSent, null)
+        return Solved(text, null, c.lastSent, null, imageReply.isAnswer)
     }
 
     /** The question on [bmp], or null when it cannot be read (or the reader is not loaded). */
@@ -1047,56 +1070,59 @@ class OverlayService : Service() {
     }
 
     /**
-     * One auto-mode step (the decision itself is [FrameSignature.judge]). A change that shows up
-     * while our answer panel is on screen does not send anything: the panel is painted black in
-     * the capture and could black out part of the new question. The panel is hidden instead, and a
-     * later tick sends the frame once it no longer contains the panel and has settled. If the
-     * change was only a blip and the screen goes back to what the answer was for, the answer is
-     * shown again for the time it had left.
+     * One auto-mode step (the decision itself is [FrameSignature.judge]); runs every
+     * [AUTO_INTERVAL_MS]. A change that shows up while our answer panel is on screen does not send
+     * anything: the panel is painted black in the capture and could black out part of the new
+     * question. The panel is hidden instead, and a later tick sends the frame once it no longer
+     * contains the panel and has settled. If the change was only a blip and the screen goes back to
+     * what the answer was for, the answer is shown again for the time it had left.
+     *
+     * Cheap by design, since it runs twice a second: a tick on a static screen finds no new frame
+     * and reuses the previous signature (no bitmap work at all); a tick with a new frame reads it
+     * once and scales it down to the signature grid. The full-size masked copy that gets sent is
+     * made only for the tick that sends. All on the main thread, one tick at a time: the scaling is
+     * a few thousand pixel reads, and it keeps the frame, the overlay rectangles and the panel
+     * state of one tick consistent (nothing can swap the frame out from under it).
      */
-    private suspend fun autoTick() {
+    private fun autoTick() {
         // While the sent-image preview covers the middle of the screen, the capture is mostly black:
         // not worth sending, and it would overwrite client.lastSent.
         if (busy || preview != null) return
-        // Fixed before anything suspends: is the panel part of the frame being judged?
+        // Is the panel part of the frame being judged?
         val panelShown = panelAdded
-        val fresh = captureMasked(newOnly = true)
-        val overlays = ignoreRects()
+        val gotNewFrame = grabFrame()
         val previous = prevTickSig
         // The virtual display only emits a frame when the screen changes, so "no new frame" means
         // the screen is exactly as at the last tick: count it as one more stable tick (reusing that
         // signature) instead of waiting for a frame that may never come on a static screen.
         // Only the very first tick has nothing to reuse and takes the kept frame.
-        val bmp: Bitmap? = fresh ?: if (previous == null) (captureMasked() ?: return) else null
-        val sig = if (bmp != null) {
-            withContext(Dispatchers.Default) { signature(bmp, overlays) }
+        val sig = if (gotNewFrame || previous == null) {
+            val frame = lastFrame ?: return
+            // Taken from the unmasked frame: the cells our windows touch are ignored anyway.
+            signature(frame, ignoreRects())
         } else {
-            previous ?: return
+            previous
         }
         val verdict = FrameSignature.judge(sig, previous, lastSentSig, panelShown, CHANGE_THRESHOLD, STABLE_THRESHOLD)
         prevTickSig = sig
-        var toSend: Bitmap? = null
-        if (!busy && preview == null) {
-            when (verdict) {
-                FrameSignature.Verdict.HIDE_PANEL -> if (panelAdded) {
-                    hiddenAnswer.remember(panelText, panelDeadline, highlightBox)
-                    hidePanel()
-                }
-                FrameSignature.Verdict.SEND -> toSend = bmp ?: captureMasked()
-                FrameSignature.Verdict.IDLE -> if (!panelAdded) {
-                    hiddenAnswer.take(SystemClock.uptimeMillis(), HIDDEN_ANSWER_MIN_LEFT_MS)?.let {
-                        showPanel(it.text, it.leftMs)
-                        restoreHighlight(it.box)
-                    }
-                }
-                FrameSignature.Verdict.WAIT -> {}
+        when (verdict) {
+            FrameSignature.Verdict.HIDE_PANEL -> if (panelAdded) {
+                hiddenAnswer.remember(panelText, panelDeadline, highlightBox)
+                hidePanel()
             }
+            FrameSignature.Verdict.SEND -> {
+                val toSend = maskedCopy() ?: return
+                hiddenAnswer.clear()
+                sendFrame(toSend, sig, fromAuto = true)
+            }
+            FrameSignature.Verdict.IDLE -> if (!panelAdded) {
+                hiddenAnswer.take(SystemClock.uptimeMillis(), HIDDEN_ANSWER_MIN_LEFT_MS)?.let {
+                    showPanel(it.text, it.leftMs)
+                    restoreHighlight(it.box)
+                }
+            }
+            FrameSignature.Verdict.WAIT -> {}
         }
-        if (toSend != null) {
-            hiddenAnswer.clear()
-            sendFrame(toSend, sig, fromAuto = true)
-        }
-        if (bmp != null && bmp !== toSend) bmp.recycle()
     }
 
     // ---------------------------------------------------------------- lifecycle

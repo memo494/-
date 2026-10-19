@@ -51,6 +51,13 @@ object Prefs {
     /** Draw a green box around the right option on screen. Read at each answer. */
     fun highlightAnswer(c: Context): Boolean = sp(c).getBoolean("highlight_answer", true)
 
+    /** A short haptic tick when an answer is shown (not for errors). Read each time one is shown. */
+    fun vibrateOnAnswer(c: Context): Boolean = sp(c).getBoolean("vibrate_on_answer", true)
+
+    fun saveVibrateOnAnswer(c: Context, on: Boolean) {
+        sp(c).edit().putBoolean("vibrate_on_answer", on).apply()
+    }
+
     /** Volume down asks for an answer (needs the accessibility service on). Read at each key press. */
     fun volumeKey(c: Context): Boolean = sp(c).getBoolean("volume_key", true)
 

@@ -211,6 +211,12 @@
             android:layout_height="wrap_content"
             android:text="تحديد الجواب الصحيح بمربع أخضر" />
 
+        <CheckBox
+            android:id="@+id/vibrateCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="اهتزاز خفيف عند ظهور الجواب" />
+
         <Button
             android:id="@+id/clearMemoryButton"
             style="?android:attr/buttonBarButtonStyle"

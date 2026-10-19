@@ -13,6 +13,18 @@ object FrameSignature {
     const val IGNORED = -1
 
     /**
+     * How often auto mode looks at the screen. [judge] counts in ticks: "stable" means unchanged
+     * between two consecutive ticks, so a picture must hold still for one tick ([TICK_MS]) before
+     * it is sent, and a change is noticed at most one tick after it happens. A new question is
+     * therefore sent 1 to 2 ticks after it appears (0.5 to 1 s), or 2 to 3 ticks when our answer
+     * panel was in the frame (the first tick only hides it). Shorter ticks react faster but also
+     * shrink how long a transient screen (an answer-reveal animation, a loading card) may last
+     * before it is treated as a settled one. Everything measured in ticks (the simulations in the
+     * tests) derives its wall-clock time from this one constant.
+     */
+    const val TICK_MS = 500L
+
+    /**
      * Marks every cell of the [size]x[size] grid [sig] that the rectangle (in pixels of an image
      * [imgW]x[imgH]) touches. Parts of the rectangle outside the image are ignored.
      */

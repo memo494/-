@@ -4,6 +4,13 @@ import android.graphics.Bitmap
 
 /** What one provider call produced, see [Answerer.answerText]. */
 class Reply(val text: String, val kind: Kind) {
+    /**
+     * True when [text] is a real answer to show as one: not an error, not an empty or refused reply,
+     * and not the model's "no question on screen". Decides whether showing it earns a haptic tick.
+     */
+    val isAnswer: Boolean
+        get() = kind == Kind.ANSWER && text.isNotBlank() && !ScreenImage.isNoQuestion(text)
+
     enum class Kind {
         /** The model's answer. */
         ANSWER,
@@ -23,8 +30,11 @@ class Reply(val text: String, val kind: Kind) {
 }
 
 interface Answerer {
-    /** Returns the short answer, or a short Arabic error message. Never throws. */
-    fun answer(bitmap: Bitmap): String
+    /**
+     * Asks about the whole screenshot. [Reply.text] is the short answer, or a short Arabic error
+     * message ([Reply.kind] tells which). Never throws.
+     */
+    fun answer(bitmap: Bitmap): Reply
 
     /**
      * Asks a question that was already read off the screen (see [QuestionPrompt]); no image is

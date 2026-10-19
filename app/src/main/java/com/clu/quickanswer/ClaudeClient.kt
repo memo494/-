@@ -36,12 +36,12 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
     @Volatile override var lastSent: Bitmap? = null
         private set
 
-    /** Returns the short answer, or a short Arabic error message. Never throws. */
-    override fun answer(bitmap: Bitmap): String {
+    /** The model's answer for the screenshot, or a short Arabic error message. Never throws. */
+    override fun answer(bitmap: Bitmap): Reply {
         val prepared = try {
-            ScreenImage.prepare(bitmap) ?: return ScreenImage.BLACK_SCREEN
+            ScreenImage.prepare(bitmap) ?: return Reply.error(ScreenImage.BLACK_SCREEN)
         } catch (e: Exception) {
-            return "خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim()
+            return Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
         }
         lastSent = prepared.kept
         val image = ImageBlockParam.builder()
@@ -57,7 +57,7 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
                 ContentBlockParam.ofImage(image),
                 ContentBlockParam.ofText(TextBlockParam.builder().text(ScreenImage.PROMPT).build())
             )
-        ).text
+        )
     }
 
     /** A question already read on the device: text only, no image. */
