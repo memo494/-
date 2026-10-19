@@ -1,6 +1,9 @@
 package com.clu.quickanswer
 
+import com.clu.quickanswer.ocr.PxRect
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -349,5 +352,38 @@ class PanelPlacementTest {
         val q = PanelPlacement.clampInto(80, 80, bubble, bubble, 100, 100)
         assertEquals(0, q.x)
         assertEquals(0, q.y)
+    }
+
+    // ------------------------------------------------------------ keeping clear of the green box
+
+    @Test
+    fun overlaps_countsSharedAreaOnly() {
+        val a = PxRect(0, 0, 100, 100)
+        assertTrue(PanelPlacement.overlaps(a, PxRect(99, 99, 200, 200)))
+        assertFalse(PanelPlacement.overlaps(a, PxRect(100, 0, 200, 100))) // touching edges
+        assertFalse(PanelPlacement.overlaps(a, PxRect(0, 100, 100, 200)))
+        assertFalse(PanelPlacement.overlaps(a, PxRect(300, 300, 400, 400)))
+    }
+
+    @Test
+    fun moveOffBox_picksTheNearestFreePlace_andNeverOverlapsTheBox() {
+        // Portrait: a wide panel next to the bubble covers the top part of the box (an option button).
+        val box = PxRect(300, 1200, 900, 1400)
+        val panel = PxRect(200, 1100, 800, 1300)
+        val to = PanelPlacement.moveOffBox(panel, box, portW, portH, gap)!!
+        val moved = PxRect(to.x, to.y, to.x + panel.width, to.y + panel.height)
+        assertFalse(PanelPlacement.overlaps(moved, box))
+        assertTrue(moved.left >= 0 && moved.top >= 0 && moved.right <= portW && moved.bottom <= portH)
+        // Above the box is the shortest way: 1200 - gap - 200 = 976.
+        assertEquals(PanelPlacement.Pos(200, 976), to)
+    }
+
+    @Test
+    fun moveOffBox_goesBelowOrBesideWhenThereIsNoRoomAbove() {
+        val box = PxRect(300, 100, 900, 300)
+        val panel = PxRect(200, 150, 800, 350)
+        assertEquals(PanelPlacement.Pos(200, 300 + gap), PanelPlacement.moveOffBox(panel, box, portW, portH, gap))
+        // A box as wide as the screen with a panel as tall as the rest: only a side could do, none fits.
+        assertNull(PanelPlacement.moveOffBox(PxRect(0, 0, 1000, 2600), PxRect(0, 600, 1220, 800), portW, portH, gap))
     }
 }

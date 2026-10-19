@@ -78,6 +78,35 @@ object ArabicText {
         return max(0.0, 1.0 - levenshtein(h, r).toDouble() / max(1, r.length))
     }
 
+    /** True for a letter of the Arabic script (the basic block, its supplements and the presentation forms). */
+    fun isArabicLetter(c: Char): Boolean =
+        c.isLetter() && (c in '\u0600'..'\u06FF' || c in '\u0750'..'\u077F' || c in '\u08A0'..'\u08FF' ||
+            c in '\uFB50'..'\uFDFF' || c in '\uFE70'..'\uFEFF')
+
+    /** The share of the letters in [s] that are Arabic letters, 0.0 when there are no letters. */
+    fun arabicLetterRatio(s: String): Double {
+        var letters = 0
+        var arabic = 0
+        for (c in s) {
+            if (!c.isLetter()) continue
+            letters++
+            if (isArabicLetter(c)) arabic++
+        }
+        return if (letters == 0) 0.0 else arabic.toDouble() / letters
+    }
+
+    /** The share of the letters and digits in [s] that are Arabic letters or digits, 0.0 when there are none. */
+    fun arabicOrDigitRatio(s: String): Double {
+        var total = 0
+        var good = 0
+        for (c in s) {
+            if (!c.isLetterOrDigit()) continue
+            total++
+            if (c.isDigit() || isArabicLetter(c)) good++
+        }
+        return if (total == 0) 0.0 else good.toDouble() / total
+    }
+
     private fun isDiacritic(c: Char): Boolean =
         c in '\u0610'..'\u061A' || c in '\u064B'..'\u065F' || c == '\u0670' ||
             c in '\u06D6'..'\u06ED' || c == '\u0640' // tatweel

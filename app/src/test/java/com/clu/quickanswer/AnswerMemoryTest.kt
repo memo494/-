@@ -91,6 +91,17 @@ class AnswerMemoryTest {
     }
 
     @Test
+    fun put_ignoresNumericAnswersThatAreNotNumbers_andTooLongText() {
+        val m = AnswerMemory()
+        m.put("كم عدد أيام الأسبوع؟", emptyList(), true, "سبعة")
+        m.put("كم عدد أيام الأسبوع؟", emptyList(), true, "7 أيام")
+        m.put("ا".repeat(AnswerMemory.MAX_QUESTION_CHARS + 1), emptyList(), true, "7")
+        assertEquals(0, m.size)
+        m.put("كم عدد أيام الأسبوع؟", emptyList(), true, "٧")
+        assertEquals(1, m.size)
+    }
+
+    @Test
     fun put_ignoresAnswersThatAreNotAnOption_andAmbiguousOptions() {
         val m = AnswerMemory()
         m.put(q, opts, false, "سورة يس")
@@ -149,10 +160,197 @@ class AnswerMemoryMergeTest {
         val friend = AnswerMemory()
         friend.put("سؤال مشترك طويل بما يكفي", opts, false, "ب")
         friend.put("سؤال جديد عند الصديق", opts, false, "ج")
-        org.junit.Assert.assertEquals(1, mine.merge(friend.encode()))
+        val result = mine.merge(friend.encode())!!
+        org.junit.Assert.assertEquals(1, result.added)
+        org.junit.Assert.assertEquals(0, result.noRoom)
         org.junit.Assert.assertEquals("أ", mine.lookup("سؤال مشترك طويل بما يكفي", opts, false)?.answer)
         org.junit.Assert.assertEquals("ج", mine.lookup("سؤال جديد عند الصديق", opts, false)?.answer)
-        org.junit.Assert.assertEquals(-1, mine.merge("{broken"))
+        org.junit.Assert.assertNull(mine.merge("{broken"))
         org.junit.Assert.assertEquals(2, mine.size)
+    }
+
+    private val opts = listOf("أ", "ب", "ج")
+
+    private fun question(i: Int) = "سؤال رقم $i من البنك الكبير جدا"
+
+    @org.junit.Test
+    fun merge_neverEvictsYourOwnEntries_whenTheBankIsBigger() {
+        val mine = AnswerMemory(capacity = 150)
+        for (i in 0 until 100) mine.put("سؤال خاص بي رقم $i", opts, false, "ب")
+        val friend = AnswerMemory()
+        for (i in 0 until 200) friend.put(question(i), opts, false, "ج")
+        val result = mine.merge(friend.encode())!!
+        org.junit.Assert.assertEquals(50, result.added)
+        org.junit.Assert.assertEquals(150, result.noRoom)
+        org.junit.Assert.assertEquals(150, mine.size)
+        for (i in 0 until 100) org.junit.Assert.assertNotNull("own $i", mine.lookup("سؤال خاص بي رقم $i", opts, false))
+        // Of the incoming entries the most recently used (the end of the file) are the ones that fit.
+        org.junit.Assert.assertNotNull(mine.lookup(question(199), opts, false))
+        org.junit.Assert.assertNull(mine.lookup(question(0), opts, false))
+    }
+
+    @org.junit.Test
+    fun merge_ofAFullMemory_addsNothing() {
+        val mine = AnswerMemory(capacity = 2)
+        mine.put("سؤال أول طويل بما يكفي", opts, false, "أ")
+        mine.put("سؤال ثان طويل بما يكفي", opts, false, "ب")
+        val friend = AnswerMemory()
+        friend.put("سؤال ثالث طويل بما يكفي", opts, false, "ج")
+        val result = mine.merge(friend.encode())!!
+        org.junit.Assert.assertEquals(0, result.added)
+        org.junit.Assert.assertEquals(1, result.noRoom)
+        org.junit.Assert.assertEquals(2, mine.size)
+    }
+
+    private fun entryJson(q: String, o: List<String>, n: Int, a: String): String {
+        val arr = org.json.JSONArray(o)
+        return org.json.JSONObject().put("q", q).put("o", arr).put("n", n).put("a", a).toString()
+    }
+
+    private fun bankOf(vararg entries: String) = "{\"v\":1,\"e\":[${entries.joinToString(",")}]}"
+
+    @org.junit.Test
+    fun merge_andRestore_skipEntriesThatPutWouldRefuse() {
+        val huge = "ا".repeat(200_000)
+        val bank = bankOf(
+            entryJson("كم عدد أيام الأسبوع؟", emptyList(), 1, "حمّل التطبيق من موقعنا www.example.com"), // numeric, not a number
+            entryJson("ما عاصمة ألمانيا حاليا؟", listOf("باريس", "روما", "مدريد"), 0, "برلين"), // answer not an option
+            entryJson("ما أكبر المحيطات في العالم؟", listOf("الهادي", "الهادي", "الهندي"), 0, "الهادي"), // duplicate options
+            entryJson(huge, listOf("أ", "ب"), 0, "أ"), // question too long
+            entryJson("سؤال بإجابة طويلة جدا؟", listOf("أ", "ب"), 0, "أ".repeat(1000)),
+            entryJson("سؤال بخيارات كثيرة جدا؟", List(20) { "خيار $it" }, 0, "خيار 1"),
+            entryJson("ما هو أطول نهر في العالم؟", listOf("النيل", "الأمازون", "الفرات"), 0, "النيل"), // fine
+            entryJson("كم عدد أيام السنة الميلادية؟", emptyList(), 1, "٣٦٥"), // fine
+        )
+        val m = AnswerMemory()
+        org.junit.Assert.assertEquals(2, m.merge(bank)!!.added)
+        org.junit.Assert.assertEquals(2, m.size)
+        org.junit.Assert.assertNull(m.lookup("كم عدد أيام الأسبوع؟", emptyList(), true))
+        org.junit.Assert.assertEquals("النيل", m.lookup("ما هو أطول نهر في العالم؟", listOf("الفرات", "النيل", "الأمازون"), false)?.answer)
+        val r = AnswerMemory()
+        org.junit.Assert.assertTrue(r.restore(bank))
+        org.junit.Assert.assertEquals(2, r.size)
+    }
+
+    @org.junit.Test
+    fun restore_readsAtMostTheGivenNumberOfEntries_andSurvivesGarbage() {
+        val m = AnswerMemory()
+        for (i in 0 until 10) m.put(question(i), opts, false, "ب")
+        val copy = AnswerMemory()
+        org.junit.Assert.assertTrue(copy.restore(m.encode(), maxEntries = 4))
+        org.junit.Assert.assertEquals(4, copy.size)
+        // Deeply nested or plainly broken input is "not readable", never an exception.
+        org.junit.Assert.assertFalse(copy.restore("{\"e\":" + "[".repeat(100_000)))
+        org.junit.Assert.assertEquals(0, copy.size)
+        org.junit.Assert.assertFalse(copy.restore(""))
+    }
+
+    @org.junit.Test
+    fun readAtMost_stopsAtTheLimit() {
+        val data = ByteArray(1000) { 7 }
+        org.junit.Assert.assertEquals(1000, AnswerMemory.readAtMost(java.io.ByteArrayInputStream(data), 1000)?.size)
+        org.junit.Assert.assertNull(AnswerMemory.readAtMost(java.io.ByteArrayInputStream(data), 999))
+        org.junit.Assert.assertEquals(0, AnswerMemory.readAtMost(java.io.ByteArrayInputStream(ByteArray(0)), 10)?.size)
+    }
+}
+
+/** Questions that differ by one word are different questions, however alike their letters are. */
+class AnswerMemoryNearDuplicateTest {
+
+    private val planets = listOf("المشتري", "عطارد", "زحل", "المريخ")
+    private val suras = listOf("البقرة", "الإخلاص", "الفاتحة", "الكوثر")
+    private val currencies = listOf("الجنيه", "الريال", "الدينار", "الدولار")
+    private val caliphs = listOf("أبو بكر الصديق", "عمر بن الخطاب", "عثمان بن عفان", "علي بن أبي طالب")
+
+    private fun assertDifferent(a: String, b: String, options: List<String>, answer: String) {
+        val m = AnswerMemory()
+        m.put(a, options, false, answer)
+        assertNull("'$b' must not hit the answer of '$a'", m.lookup(b, options, false))
+    }
+
+    @Test
+    fun oneSwappedWord_isNotTheSameQuestion() {
+        assertDifferent("ما هو أكبر كوكب في المجموعة الشمسية؟", "ما هو أصغر كوكب في المجموعة الشمسية؟", planets, "المشتري")
+        assertDifferent("ما هي أطول سورة في القرآن الكريم؟", "ما هي أقصر سورة في القرآن الكريم؟", suras, "البقرة")
+        assertDifferent("ما هي عملة مصر؟", "ما هي عملة قطر؟", currencies, "الجنيه")
+        assertDifferent("من هو أول خليفة للمسلمين بعد الرسول؟", "من هو آخر خليفة للمسلمين بعد الرسول؟", caliphs, "أبو بكر الصديق")
+    }
+
+    @Test
+    fun numericQuestionsThatDifferByOneWord_areDifferent() {
+        val pairs = listOf(
+            "كم عدد ركعات صلاة الفجر المفروضة على المسلم في اليوم؟" to "كم عدد ركعات صلاة الظهر المفروضة على المسلم في اليوم؟",
+            "كم عدد سكان مصر حسب آخر إحصاء رسمي في العالم؟" to "كم عدد سكان قطر حسب آخر إحصاء رسمي في العالم؟",
+            "كم عدد اللاعبين في فريق كرة القدم داخل الملعب؟" to "كم عدد اللاعبين في فريق كرة اليد داخل الملعب؟",
+        )
+        for ((a, b) in pairs) {
+            val m = AnswerMemory()
+            m.put(a, emptyList(), true, "11")
+            assertNull("'$b' must not hit the answer of '$a'", m.lookup(b, emptyList(), true))
+            // The first question itself, with OCR noise (one letter, a dropped diacritic), still hits.
+            assertNotNull(m.lookup(a.replace("؟", ""), emptyList(), true))
+        }
+    }
+
+    @Test
+    fun readingNoise_stillHitsFuzzily() {
+        val q = "ما هي السورة التي بفضلها أسلم الصحابي الجليل عمر بن الخطاب؟"
+        val opts = listOf("سورة البقرة", "سورة طه", "سورة الإخلاص", "سورة النور")
+        val m = AnswerMemory()
+        m.put(q, opts, false, "سورة طه")
+        // A wrong letter in a long word, a merged pair of words, a split word, a stray one-letter word.
+        for (noisy in listOf(
+            "ما هي السورة التي بفضلها أسلم الصحابي الجليل عمر بن الخطاف؟",
+            "ما هي السورة التي بفضلها أسلم الصحابي الجليل عمربن الخطاف؟",
+            "ما هي السورة التي بفضلها أسلم الصحابي الجل يل عمر بن الخطاف؟",
+            "ما هي السورة التي بفضلها أسلم الصحابي الجليل ا عمر بن الخطاف؟",
+        )) {
+            val hit = m.lookup(noisy, opts, false)
+            assertNotNull(noisy, hit)
+            assertEquals("سورة طه", hit!!.answer)
+        }
+    }
+
+    @Test
+    fun correctingAFuzzyHit_doesNotDeleteTheOtherQuestionsAnswer() {
+        // What OverlayService does: a fuzzy hit is corrected by storing the answer under the question's
+        // own key; the entry that was hit belongs to another question and stays.
+        val q = "ما هي السورة التي بفضلها أسلم الصحابي الجليل عمر بن الخطاب؟"
+        val similar = "ما هي السورة التي بفضلها أسلم الصحابي الجليل عمر بن الخطاف؟"
+        val opts = listOf("سورة البقرة", "سورة طه", "سورة الإخلاص", "سورة النور")
+        val m = AnswerMemory()
+        m.put(q, opts, false, "سورة طه")
+        val hit = m.lookup(similar, opts, false)!!
+        assertFalse(hit.exact)
+        m.put(similar, opts, false, "سورة النور")
+        assertEquals("سورة طه", m.lookup(q, opts, false)?.answer)
+        assertEquals("سورة النور", m.lookup(similar, opts, false)?.answer)
+        assertEquals(2, m.size)
+    }
+
+    @Test
+    fun numbersWithSeparators_keepTheirOwnEntries() {
+        val m = AnswerMemory()
+        m.put("ما ناتج 1.5 × 2؟", emptyList(), true, "3")
+        assertNull(m.lookup("ما ناتج 15 × 2؟", emptyList(), true))
+        m.put("ما ناتج 12 - 4؟", emptyList(), true, "8")
+        assertNull(m.lookup("ما ناتج 1 - 24؟", emptyList(), true))
+        m.put("ما ناتج 12 / 4؟", emptyList(), true, "3")
+        assertNull(m.lookup("ما ناتج 124؟", emptyList(), true))
+        // The same question still hits exactly, in any digit script.
+        assertEquals("8", m.lookup("ما ناتج ١٢ - ٤؟", emptyList(), true)?.answer)
+    }
+
+    @Test
+    fun wordsCompatible_followsTheWordRules() {
+        fun ok(a: String, b: String) = AnswerMemory.wordsCompatible(AnswerMemory.wordsOf(a), AnswerMemory.wordsOf(b))
+        assertTrue(ok("ما هو أكبر كوكب", "ما هو أكبر كوكب"))
+        assertTrue(ok("عمر بن الخطاب", "عمربن الخطاب")) // merged
+        assertTrue(ok("عمربن الخطاب", "عمر بن الخطاب")) // split
+        assertTrue(ok("الخطاب", "الخطاف")) // one letter in a six-letter word
+        assertFalse(ok("أكبر", "أصغر")) // two letters
+        assertFalse(ok("مصر", "قطر")) // no letter may differ in a short word
+        assertFalse(ok("ما هو أكبر كوكب", "ما هو كوكب")) // a word missing
+        assertTrue(ok("ما هو أكبر كوكب", "ما هو ا أكبر كوكب")) // a stray letter
     }
 }

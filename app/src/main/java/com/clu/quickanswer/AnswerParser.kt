@@ -26,6 +26,7 @@ object AnswerParser {
     // A reply longer than this, or whose number comes late, is prose ("I can't tell, but 3 of ...").
     private const val MAX_REPLY_CHARS = 80
     private const val MAX_PREFIX_CHARS = 20
+    private const val MAX_OPTION_REPLY_CHARS = 40
 
     /**
      * [s] with Arabic-Indic and Persian digits as 0-9, the Arabic thousands separator as "," and the
@@ -48,33 +49,68 @@ object AnswerParser {
         return sb.toString()
     }
 
-    private val INTEGER = Regex("\\d+")
-    private val NUMBER = Regex("(?<![\\p{L}\\d])[-\\u2212]?\\d+(?:,\\d{3})*(?:\\.\\d+)?")
+    // One number: "1,234.5", "-3", or groups separated by a (non-breaking) space ("8 000 000").
+    private const val NUMBER_PATTERN =
+        "[-\\u2212]?(?:\\d{1,3}(?:[ \\u00A0\\u202F]\\d{3})+|\\d+(?:,\\d{3})*)(?:\\.\\d+)?"
+    private val NUMBER = Regex("(?<![\\p{L}\\d])$NUMBER_PATTERN")
+    private val WHOLE_NUMBER = Regex(NUMBER_PATTERN)
+
+    // The word before the option number in a reply like "الخيار 2" or "Option 2:".
+    private const val LABEL_WORDS =
+        "option|answer|choice|number|no|الخيار|خيار|الاختيار|اختيار|الإجابة|الاجابة|إجابة|اجابة|الجواب|جواب|رقم"
+
+    // Nothing but the number, which may carry a label word and brackets: "2", "٢", "(2)", "2)", "الخيار 2.".
+    private val BARE_OPTION = Regex("^(?:(?:$LABEL_WORDS)\\s*[:：]?\\s*)*[(\\[]?(\\d{1,3})[)\\].:\\-]?$", RegexOption.IGNORE_CASE)
+
+    // The number that labels the option text after it: "3) القرن 2" gives 3.
+    private val LABEL_NUMBER = Regex("^\\s*(\\d{1,3})\\s*[)\\].:\\-\\u2013]\\s*\\S")
+
+    // A word after a number that makes it thousands, millions...: "5 ملايين", "300 ألف", "1.5 billion".
+    private val SCALE_WORDS = setOf(
+        "الف", "الاف", "ألف", "آلاف", "مليون", "ملايين", "مليار", "مليارات", "بليون", "بلايين", "تريليون",
+        "thousand", "thousands", "million", "millions", "billion", "billions", "trillion", "k", "bn", "mn",
+    )
 
     /**
-     * The 1-based option number a short reply names ("2", "الخيار 2", "2) سورة طه", "٢"), or null
-     * when there is none, it is not within 1..[optionCount], or the reply is prose.
+     * The 1-based option number a reply names, or null. Only a reply that is nothing but the number
+     * counts ("2", "الخيار 2", "٢", "(2)"): a longer one is the option's text or prose, and a number
+     * inside it ("ليس 1 بل 2", "القرن 3") must not be taken for the option number.
      */
     fun optionNumber(reply: String, optionCount: Int): Int? {
         val text = asciiDigits(reply.trim())
-        if (text.isEmpty() || text.length > MAX_REPLY_CHARS) return null
-        val m = INTEGER.find(text) ?: return null
-        if (m.range.first > MAX_PREFIX_CHARS) return null
-        val n = m.value.toIntOrNull() ?: return null
+        if (text.isEmpty() || text.length > MAX_OPTION_REPLY_CHARS) return null
+        val n = BARE_OPTION.matchEntire(text)?.groupValues?.get(1)?.toIntOrNull() ?: return null
         return if (n in 1..optionCount) n else null
     }
 
     /**
-     * The number a short reply gives ("123", "١٢٣", "حوالي 1,234 شخص") as plain digits (a "." for a
-     * decimal part, a leading "-" when negative), or null when there is none.
+     * The number a short reply gives ("123", "١٢٣", "حوالي 1,234 شخص", "8 000 000") as plain digits (a
+     * "." for a decimal part, a leading "-" when negative), or null when there is none, or when it is
+     * not safe to read: a scale word follows ("5 ملايين", "300 ألف": the digits alone would be off by
+     * a thousand or a million) or the comma is a decimal comma ("1,5").
      */
     fun number(reply: String): String? {
         val text = asciiDigits(reply.trim())
         if (text.isEmpty() || text.length > MAX_REPLY_CHARS) return null
         val m = NUMBER.find(text) ?: return null
         if (m.range.first > MAX_PREFIX_CHARS) return null
-        return m.value.replace(",", "").replace('\u2212', '-')
+        val rest = text.substring(m.range.last + 1)
+        if (rest.isNotEmpty() && rest[0].isDigit()) return null
+        if (rest.length > 1 && (rest[0] == ',' || rest[0] == '.') && rest[1].isDigit()) return null
+        val following = rest.trimStart(' ', '\u00A0', '\u202F').takeWhile { it.isLetter() }.lowercase()
+        if (following in SCALE_WORDS) return null
+        return normalizedNumber(m.value)
     }
+
+    /** [reply] when it is exactly one number (see [number]) and nothing else, as plain digits, else null. */
+    fun numberOnly(reply: String): String? {
+        val text = asciiDigits(reply.trim())
+        if (text.isEmpty() || text.length > MAX_REPLY_CHARS || !WHOLE_NUMBER.matches(text)) return null
+        return normalizedNumber(text)
+    }
+
+    private fun normalizedNumber(raw: String): String =
+        raw.replace(",", "").replace(" ", "").replace("\u00A0", "").replace("\u202F", "").replace('\u2212', '-')
 
     // "2) ", "2- ", "٢.", "ب) ": a leading option label.
     private val LABEL = Regex("^\\s*(?:\\d+|\\p{L})\\s*[)\\].:\\-\\u2013]\\s*")
@@ -102,13 +138,30 @@ object AnswerParser {
 
     /**
      * The text reply [reply] to [QuestionPrompt.build] of [q], mapped onto it, or null if it cannot
-     * be mapped. A multiple-choice reply that is the option's text instead of its number also maps.
+     * be mapped (the caller then asks with the picture). A multiple-choice reply is the option
+     * number alone, or the option's text (a "2)" label in front is fine). It is declined when
+     * - the label and the text name different options ("3) القرن 2" with option 2 "القرن 2"), or
+     * - the number alone is also the text of another option (options 4, 6, 5, 3 and the reply "3":
+     *   the third option or the option "3"?).
      */
     fun resolve(q: Question, reply: String): Resolved? {
         if (q.numeric) return number(reply)?.let { Resolved(it, null) }
-        val index = (optionNumber(reply, q.options.size)?.minus(1)) ?: matchOption(reply, q.options) ?: return null
-        return Resolved(q.options[index], q.optionRects.getOrNull(index))
+        val n = q.options.size
+        optionNumber(reply, n)?.let { number ->
+            val valueOfOther = q.options.withIndex().any { (i, o) -> i != number - 1 && AnswerMemory.keyOf(o) == number.toString() }
+            return if (valueOfOther) null else option(q, number - 1)
+        }
+        return matchLabelled(reply, q.options)?.let { option(q, it) }
     }
+
+    /** Index of the option [reply] is the text of, or null when it is none, or its label says another one. */
+    private fun matchLabelled(reply: String, options: List<String>): Int? {
+        val index = matchOption(reply, options) ?: return null
+        val label = LABEL_NUMBER.find(asciiDigits(reply.trim()))?.groupValues?.get(1)?.toIntOrNull()
+        return if (label != null && label in 1..options.size && label - 1 != index) null else index
+    }
+
+    private fun option(q: Question, index: Int) = Resolved(q.options[index], q.optionRects.getOrNull(index))
 
     /**
      * An answer taken from the memory, mapped onto [q]: the option [stored] names (the options may
@@ -134,7 +187,6 @@ object AnswerParser {
      */
     fun resolveImageAnswer(q: Question, reply: String): Resolved? {
         if (q.numeric) return null
-        val index = matchOption(reply, q.options) ?: return null
-        return Resolved(q.options[index], q.optionRects.getOrNull(index))
+        return matchLabelled(reply, q.options)?.let { option(q, it) }
     }
 }

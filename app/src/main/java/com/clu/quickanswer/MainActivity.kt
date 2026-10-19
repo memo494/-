@@ -85,19 +85,31 @@ class MainActivity : AppCompatActivity() {
             if (uri == null) return@registerForActivityResult
             val app = applicationContext
             AnswerStore.runAfterLoad {
-                val added = try {
-                    val text = app.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
-                    if (text == null) -1 else AnswerStore.memory.merge(text)
-                } catch (_: Exception) {
-                    -1
+                var tooBig = false
+                // Throwable: a huge or deeply nested file can run out of memory or stack, which is not an Exception.
+                val merged = try {
+                    val bytes = app.contentResolver.openInputStream(uri)?.use {
+                        AnswerMemory.readAtMost(it, AnswerMemory.MAX_IMPORT_BYTES)
+                    }
+                    if (bytes == null) {
+                        tooBig = true
+                        null
+                    } else {
+                        AnswerStore.memory.merge(bytes.toString(Charsets.UTF_8))
+                    }
+                } catch (_: Throwable) {
+                    null
                 }
                 val n = AnswerStore.memory.size
                 runOnUiThread {
-                    Toast.makeText(
-                        app,
-                        if (added < 0) "الملف ليس بنك أسئلة من Clu" else "أُضيف $added سؤال (المجموع $n)",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    val message = when {
+                        tooBig -> "الملف كبير جدًا (الحد 5 ميغابايت)"
+                        merged == null -> "الملف ليس بنك أسئلة من Clu"
+                        merged.noRoom > 0 ->
+                            "أُضيف ${merged.added} سؤال (المجموع $n)؛ الذاكرة ممتلئة فتُرك ${merged.noRoom} سؤال"
+                        else -> "أُضيف ${merged.added} سؤال (المجموع $n)"
+                    }
+                    Toast.makeText(app, message, Toast.LENGTH_LONG).show()
                     if (!isDestroyed) updateMemoryButton(n)
                 }
             }

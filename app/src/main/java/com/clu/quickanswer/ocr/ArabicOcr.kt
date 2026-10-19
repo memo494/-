@@ -15,8 +15,11 @@ class ArabicOcr private constructor(
     private val reader: ScreenReader,
 ) : AutoCloseable {
 
-    /** The question on [bitmap], or null when it cannot be read reliably (see [ScreenReader]). */
-    fun read(bitmap: Bitmap): Question? {
+    /**
+     * The question on [bitmap], or null when it cannot be read reliably (see [ScreenReader]).
+     * [masks] are the rectangles painted over the capture (our own windows), in bitmap pixels.
+     */
+    fun read(bitmap: Bitmap, masks: List<PxRect> = emptyList()): Question? {
         // Hardware bitmaps cannot be read pixel by pixel.
         val src = if (bitmap.config == Bitmap.Config.HARDWARE) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
         try {
@@ -24,7 +27,7 @@ class ArabicOcr private constructor(
             val h = src.height
             val pixels = IntArray(w * h)
             src.getPixels(pixels, 0, w, 0, 0, w, h)
-            return reader.read(pixels, w, h)
+            return reader.read(pixels, w, h, masks)
         } finally {
             if (src !== bitmap) src.recycle()
         }

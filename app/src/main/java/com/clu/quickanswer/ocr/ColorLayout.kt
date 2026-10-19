@@ -1,5 +1,6 @@
 package com.clu.quickanswer.ocr
 
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -14,7 +15,11 @@ import kotlin.math.min
  *  3. Answer buttons are near-white, wide, mostly filled rectangles below the middle of the banner
  *     that overlap it horizontally. One that starts above the banner's bottom edge is the number
  *     entry box of a numeric question, not an option.
- *  4. Text lines inside a region: Otsu on the grey ROI, row projection into bands, column extent
+ *  4. Shape checks decline screens that merely contain a pale box and white rectangles (a settings
+ *     tip, a chat notice, a dialog): the banner must be wide and about 3.5-8 times wider than high,
+ *     the answer buttons one regular, centred stack under it (same size, evenly spaced), a numeric
+ *     question needs its keypad. See [inspect].
+ *  5. Text lines inside a region: Otsu on the grey ROI, row projection into bands, column extent
  *     of each band. The boxes are TIGHT (+-2 px); vertical padding made recognition clearly worse
  *     (0.997 -> 0.854), so none is added.
  *
@@ -23,16 +28,37 @@ import kotlin.math.min
  */
 class ColorLayout {
 
-    /** Banner and buttons in input-image pixels. */
-    private class Regions(val banner: PxRect, val buttons: List<PxRect>)
+    /** Banner, wide white boxes and squarish white boxes (keypad keys) in input-image pixels. */
+    private class Regions(val banner: PxRect, val buttons: List<PxRect>, val keys: List<PxRect>)
 
-    /** Null when no cream banner is found. [argb] is row-major ARGB (alpha ignored). */
-    fun analyze(argb: IntArray, width: Int, height: Int): ScreenLayout? {
+    /** What [inspect] made of a screen: the [layout], or null with the [rejection] reason. */
+    class Result(val layout: ScreenLayout?, val rejection: String?)
+
+    /** Null when the screen does not look like the quiz (see [inspect]). [argb] is row-major ARGB (alpha ignored). */
+    fun analyze(argb: IntArray, width: Int, height: Int): ScreenLayout? = inspect(argb, width, height).layout
+
+    /** Like [analyze], but says why a screen was declined. */
+    fun inspect(argb: IntArray, width: Int, height: Int): Result {
         require(width > 0 && height > 0 && argb.size >= width * height) { "bad image size" }
-        val regions = findRegions(argb, width, height) ?: return null
+        val regions = findRegions(argb, width, height) ?: return Result(null, "no question banner")
         val unit = max(width, height).toDouble() / REFERENCE_LONG_SIDE
 
         val banner = regions.banner
+        fun reject(why: String) = Result(null, why)
+        val bannerAspect = banner.width.toDouble() / max(1, banner.height)
+        if (bannerAspect < MIN_BANNER_ASPECT || bannerAspect > MAX_BANNER_ASPECT) {
+            return reject("banner shape (aspect %.2f)".format(bannerAspect))
+        }
+        if (banner.width < MIN_BANNER_WIDTH_FRACTION * width) return reject("banner too narrow")
+        val belowBanner = regions.buttons.filter { it.top >= banner.bottom }
+        val field = regions.buttons.firstOrNull { it.top < banner.bottom }
+        val shapeProblem = if (field != null) {
+            numericProblem(banner, field, belowBanner, regions.keys)
+        } else {
+            stackProblem(banner, belowBanner, width)
+        }
+        if (shapeProblem != null) return reject(shapeProblem)
+
         // A white box (answer field / first button) may overlap the banner bottom: stop above it.
         var bannerBottom = banner.bottom
         for (b in regions.buttons) {
@@ -44,20 +70,63 @@ class ColorLayout {
             0.13f, 0.85f, 0.12f, 0.98f, unit,
         )
 
-        val fields = regions.buttons.filter { it.top < banner.bottom }
-        val options = regions.buttons.filter { it.top >= banner.bottom }
-        val optionLines = if (fields.isNotEmpty()) {
-            emptyList()
-        } else {
-            options.map { textLines(argb, width, height, it, 0.04f, 0.96f, 0.12f, 0.88f, unit) }
-        }
-        return ScreenLayout(
-            banner = banner,
-            buttons = if (fields.isNotEmpty()) emptyList() else options,
-            numericField = fields.firstOrNull(),
-            questionLines = questionLines,
-            optionLines = optionLines,
+        // Two or more text lines are one banner; one that is a big part of the banner is several lines
+        // merged by something painted over them.
+        if (questionLines.any { it.height > MAX_LINE_FRACTION * banner.height }) return reject("question text band merged")
+
+        val options = if (field != null) emptyList() else belowBanner
+        val optionLines = options.map { textLines(argb, width, height, it, 0.04f, 0.96f, 0.12f, 0.88f, unit) }
+        return Result(
+            ScreenLayout(
+                banner = banner,
+                buttons = options,
+                numericField = field,
+                questionLines = questionLines,
+                optionLines = optionLines,
+            ),
+            null,
         )
+    }
+
+    /**
+     * Why the number [field] under [banner] is not the number entry of this game, or null when it
+     * is: it is centred, about a third of the banner wide, has no answer buttons next to it and
+     * sits on a keypad ([keys] are the squarish white boxes).
+     */
+    private fun numericProblem(banner: PxRect, field: PxRect, belowBanner: List<PxRect>, keys: List<PxRect>): String? {
+        if (belowBanner.size >= 2) return "number field together with answer buttons"
+        val fieldWidth = field.width.toDouble() / banner.width
+        if (fieldWidth < MIN_FIELD_WIDTH || fieldWidth > MAX_FIELD_WIDTH) return "number field width"
+        if (abs(field.centerX - banner.centerX) > MAX_CENTRE_OFFSET * banner.width) return "number field off-centre"
+        val keypad = keys.count {
+            it.top >= field.bottom && it.height >= 0.5 * field.height && it.height <= 2.5 * field.height
+        }
+        return if (keypad < MIN_KEYPAD_KEYS) "no keypad under the number field" else null
+    }
+
+    /**
+     * Why [options] (the wide white boxes under [banner]) are not this game's answer stack, or null
+     * when they are (or there are none): all the same size, centred under the banner and not as wide
+     * as the screen, one after the other with no hole (a missing one is hidden or recoloured).
+     */
+    private fun stackProblem(banner: PxRect, options: List<PxRect>, imageWidth: Int): String? {
+        if (options.isEmpty()) return null
+        val medianWidth = options.map { it.width }.sorted()[options.size / 2]
+        val medianHeight = options.map { it.height }.sorted()[options.size / 2]
+        for (b in options) {
+            val ratio = b.width.toDouble() / banner.width
+            if (ratio < MIN_BUTTON_WIDTH || ratio > MAX_BUTTON_WIDTH) return "button width"
+            if (abs(b.width - medianWidth) > WIDTH_TOLERANCE * medianWidth ||
+                abs(b.height - medianHeight) > HEIGHT_TOLERANCE * medianHeight
+            ) return "buttons differ in size"
+            if (abs(b.centerX - banner.centerX) > MAX_CENTRE_OFFSET * banner.width) return "buttons off-centre"
+            if (b.left <= 0 || b.right >= imageWidth) return "button touches the screen edge"
+        }
+        if (options.first().top - banner.bottom > MAX_FIRST_GAP * medianHeight) return "first button far below the banner"
+        for ((a, b) in options.zipWithNext()) {
+            if (b.top - a.top > MAX_PITCH * medianHeight) return "a button is missing in the stack"
+        }
+        return null
     }
 
     private fun findRegions(argb: IntArray, width: Int, height: Int): Regions? {
@@ -88,14 +157,19 @@ class ColorLayout {
             sat < 30 && v > 228
         }
         val buttons = ArrayList<PxRect>()
+        val keys = ArrayList<PxRect>()
         for (b in ImageOps.blobs(ImageOps.close(white, dw, dh, 3), dw, dh)) {
-            if (b.height < 6 || b.width < 0.25 * bw) continue
+            if (b.height < 6) continue
             val aspect = b.width.toDouble() / b.height
-            if (aspect < 2.5 || aspect > 14.0) continue
             if (b.area < 0.6 * b.width * b.height) continue // must be a mostly filled rectangle
             val cx = b.left + b.width / 2.0
             if (cx < bx || cx > bx + bw || b.top < by + 0.5 * bh) continue
-            buttons.add(PxRect(b.left, b.top, b.left + b.width, b.top + b.height))
+            val rect = PxRect(b.left, b.top, b.left + b.width, b.top + b.height)
+            if (aspect in 0.6..1.7) {
+                keys.add(rect) // squarish: a keypad key
+            } else if (b.width >= 0.25 * bw && aspect >= 2.5 && aspect <= 14.0) {
+                buttons.add(rect)
+            }
         }
         buttons.sortBy { it.top }
 
@@ -105,7 +179,7 @@ class ColorLayout {
             Math.rint(r.right / s).toInt().coerceIn(0, width),
             Math.rint(r.bottom / s).toInt().coerceIn(0, height),
         )
-        return Regions(up(PxRect(bx, by, bx + bw, by + bh)), buttons.map { up(it) })
+        return Regions(up(PxRect(bx, by, bx + bw, by + bh)), buttons.map { up(it) }, keys.map { up(it) })
     }
 
     /**
@@ -206,5 +280,28 @@ class ColorLayout {
 
         /** Horizontal padding added to a line as a fraction of its height (vertical padding is harmful). */
         private const val PAD_X = 0.25
+
+        // The game's shapes, measured on screenshots (S1-S3, also at 3/4 and 1/2 size); a screen
+        // outside them is not this quiz. Banner: aspect 4.9-5.3, 0.71-0.79 of the screen width.
+        private const val MIN_BANNER_ASPECT = 3.5
+        private const val MAX_BANNER_ASPECT = 8.0
+        private const val MIN_BANNER_WIDTH_FRACTION = 0.5
+
+        // Answer buttons (S2 = S3): 0.46 of the banner wide, centred, pitch 1.3-1.5 button heights.
+        private const val MIN_BUTTON_WIDTH = 0.30
+        private const val MAX_BUTTON_WIDTH = 0.65
+        private const val WIDTH_TOLERANCE = 0.05
+        private const val HEIGHT_TOLERANCE = 0.20
+        private const val MAX_CENTRE_OFFSET = 0.08
+        private const val MAX_FIRST_GAP = 1.5
+        private const val MAX_PITCH = 1.8
+
+        // Number field (S1): 0.30 of the banner wide, with a keypad of 10 keys under it.
+        private const val MIN_FIELD_WIDTH = 0.20
+        private const val MAX_FIELD_WIDTH = 0.45
+        private const val MIN_KEYPAD_KEYS = 6
+
+        // A text line is 0.15-0.21 of the banner; a merged band is 0.5 or more.
+        private const val MAX_LINE_FRACTION = 0.30
     }
 }

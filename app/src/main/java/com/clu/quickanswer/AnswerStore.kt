@@ -28,7 +28,7 @@ object AnswerStore {
         io.execute {
             try {
                 if (f.exists()) memory.restore(f.readText(Charsets.UTF_8))
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 // An unreadable file means starting empty; it is overwritten on the next save.
             }
             memory.onChange = { scheduleSave() }

@@ -1,5 +1,7 @@
 package com.clu.quickanswer
 
+import com.clu.quickanswer.ocr.PxRect
+
 /**
  * Decides where the answer panel goes relative to the floating bubble. Pure Kotlin (no Android
  * imports) so it can be unit tested on the JVM. All values are pixels in screen coordinates.
@@ -96,6 +98,34 @@ object PanelPlacement {
      */
     fun clampInto(x: Int, y: Int, w: Int, h: Int, screenW: Int, screenH: Int): Pos =
         Pos(clampX(x, w, screenW), clampY(y, h, screenH))
+
+    /** True when [a] and [b] share some area (touching edges do not count). */
+    fun overlaps(a: PxRect, b: PxRect): Boolean =
+        a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+
+    /**
+     * Where the [panel] can go so that it no longer covers the [box] (the green frame around the
+     * answer): just above, below, left or right of it, [gap] away, whichever of those is entirely on
+     * the screen and needs the shortest move. Android 12+ drops a tap that lands where two of an
+     * app's overlay windows lie on top of each other and are together more than 80% opaque, so the
+     * two must not overlap. Null when there is no such place (the caller then drops the box).
+     */
+    fun moveOffBox(panel: PxRect, box: PxRect, screenW: Int, screenH: Int, gap: Int): Pos? {
+        val w = panel.width
+        val h = panel.height
+        val x = panel.left.coerceIn(0, maxOf(0, screenW - w))
+        val y = panel.top.coerceIn(0, maxOf(0, screenH - h))
+        val candidates = listOf(
+            Pos(x, box.top - gap - h), // above
+            Pos(x, box.bottom + gap), // below
+            Pos(box.left - gap - w, y), // left
+            Pos(box.right + gap, y), // right
+        )
+        return candidates
+            .filter { it.x >= 0 && it.y >= 0 && it.x + w <= screenW && it.y + h <= screenH }
+            .filter { !overlaps(PxRect(it.x, it.y, it.x + w, it.y + h), box) }
+            .minByOrNull { Math.abs(it.x - panel.left) + Math.abs(it.y - panel.top) }
+    }
 
     private fun clampX(x: Int, w: Int, screenW: Int) = x.coerceIn(0, maxOf(0, screenW - w))
 

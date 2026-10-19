@@ -191,4 +191,117 @@ class OcrPipelineTest {
         assertEquals(ArabicText.key(a.questionText), ArabicText.key(b.questionText))
         assertEquals(1.0, ArabicText.similarity(a.questionText, S3_Q), 0.05)
     }
+
+    // --- screens the reader must decline (each one used to come back as a confident, wrong question) ---
+
+    private fun painted(src: TestImage, r: PxRect, color: Int): TestImage {
+        val px = src.argb.copyOf()
+        for (y in r.top until minOf(r.bottom, src.height)) for (x in r.left until minOf(r.right, src.width)) px[y * src.width + x] = color
+        return TestImage("${src.name}-painted", px, src.width, src.height)
+    }
+
+    private fun why(img: TestImage, masks: List<PxRect> = emptyList()) =
+        OcrFixtures.reader.analyze(img.argb, img.width, img.height, masks).failure
+
+    @Test
+    fun anOptionWhoseTextVanished_declinesInsteadOfLosingTheRightAnswer() {
+        // S2's correct option ("سورة طه") filled flat white: the button is still found, but has no text.
+        val s2 = OcrFixtures.image("s2")
+        val layout = ColorLayout().analyze(s2.argb, s2.width, s2.height)!!
+        val b = layout.buttons[1]
+        val blank = painted(s2, PxRect(b.left + 8, b.top + 8, b.right - 8, b.bottom - 8), Canvas.WHITE)
+        assertEquals("a button has no readable text", why(blank))
+    }
+
+    @Test
+    fun aCoveredOption_declines() {
+        val s2 = OcrFixtures.image("s2")
+        val b = ColorLayout().analyze(s2.argb, s2.width, s2.height)!!.buttons[1]
+        // Painted black like our own windows are (d02/d11): the stack has a hole.
+        val covered = painted(s2, PxRect(b.left - 20, b.top - 10, b.right + 20, b.bottom + 10), Canvas.BLACK)
+        assertNotNull(why(covered))
+        assertNull(OcrFixtures.reader.read(covered.argb, covered.width, covered.height))
+        // Part of an option covered (the bubble on its right end): the button is cut short.
+        val s3 = OcrFixtures.image("s3")
+        val b3 = ColorLayout().analyze(s3.argb, s3.width, s3.height)!!.buttons[2]
+        val cut = painted(s3, PxRect(b3.left + 500, b3.top - 5, b3.right + 5, b3.bottom + 5), Canvas.BLACK)
+        assertNotNull(why(cut))
+    }
+
+    @Test
+    fun anOverlayMask_overTheQuestionOrAnOption_declines_butNotElsewhere() {
+        val s3 = OcrFixtures.image("s3")
+        val layout = ColorLayout().analyze(s3.argb, s3.width, s3.height)!!
+        val onOption = layout.buttons[2].let { PxRect(it.left + 100, it.top + 20, it.left + 300, it.top + 120) }
+        val onQuestion = layout.questionLines[1].let { PxRect(it.left + 50, it.top, it.left + 250, it.bottom) }
+        assertEquals("an overlay window covers the question", why(s3, listOf(onOption)))
+        assertEquals("an overlay window covers the question", why(s3, listOf(onQuestion)))
+        // The bubble's usual place, at the left edge of the screen, is nowhere near the text.
+        assertNull(why(s3, listOf(PxRect(20, 400, 170, 550))))
+    }
+
+    @Test
+    fun aBannerPartlyCovered_declines_butNotWhenOnlyItsEdgeIs() {
+        // d01/d08: a bar or the bubble over the question used to leave a garbled or half question that
+        // was accepted because the options were read well.
+        for (name in listOf("s2", "s3")) {
+            val img = OcrFixtures.image(name)
+            val bn = ColorLayout().analyze(img.argb, img.width, img.height)!!.banner
+            val h = bn.height
+            for ((a, b) in listOf(0.0 to 0.35, 0.3 to 0.6, 0.55 to 0.9)) {
+                val bar = painted(img, PxRect(bn.left - 10, bn.top + (h * a).toInt(), bn.right + 10, bn.top + (h * b).toInt()), Canvas.BLACK)
+                assertNull("$name bar $a-$b", OcrFixtures.reader.read(bar.argb, bar.width, bar.height))
+            }
+            val cx = (bn.left + bn.right) / 2
+            val bubble = painted(img, PxRect(cx - 75, bn.top + h / 2 - 75, cx + 75, bn.top + h / 2 + 75), Canvas.BLACK)
+            assertNull("$name bubble", OcrFixtures.reader.read(bubble.argb, bubble.width, bubble.height))
+            // A bubble over the banner's right end, away from the text, changes nothing.
+            val edge = painted(img, PxRect(bn.right - 120, bn.top + h / 2 - 75, bn.right + 30, bn.top + h / 2 + 75), Canvas.BLACK)
+            assertNotNull("$name edge", OcrFixtures.reader.read(edge.argb, edge.width, edge.height))
+        }
+    }
+
+    @Test
+    fun aLastOptionHiddenByOurOwnWindow_isCaughtByTheMask() {
+        // With the last button painted black the layout still looks like a 3-option screen; only the
+        // mask (where our windows were painted) tells that something is hidden there.
+        val s3 = OcrFixtures.image("s3")
+        val b = ColorLayout().analyze(s3.argb, s3.width, s3.height)!!.buttons[3]
+        val area = PxRect(b.left - 20, b.top - 10, b.right + 20, b.bottom + 10)
+        val hidden = painted(s3, area, Canvas.BLACK)
+        assertNotNull(OcrFixtures.reader.read(hidden.argb, hidden.width, hidden.height)) // 3 options, as the geometry sees it
+        assertEquals("an overlay window covers the question", why(hidden, listOf(area)))
+    }
+
+    @Test
+    fun aPaleStripUnderTheBanner_doesNotTurnAMultipleChoiceIntoANumericQuestion() {
+        // d15: something pale joined to the banner's lower edge made option 1 look like a number field.
+        val s3 = OcrFixtures.image("s3")
+        val layout = ColorLayout().analyze(s3.argb, s3.width, s3.height)!!
+        val bannerPixel = s3.argb[(layout.banner.top + 10) * s3.width + layout.banner.left + 30]
+        val joined = painted(s3, PxRect(layout.banner.left + 20, layout.banner.bottom - 5, layout.banner.left + 160, layout.banner.bottom + 100), bannerPixel)
+        val result = ColorLayout().inspect(joined.argb, joined.width, joined.height)
+        assertNull(result.layout?.takeIf { it.numeric })
+        assertNull(OcrFixtures.reader.read(joined.argb, joined.width, joined.height)?.takeIf { it.numeric })
+    }
+
+    @Test
+    fun aNumberFieldWithoutItsKeypad_isNotANumericQuestion() {
+        val s1 = OcrFixtures.image("s1")
+        val layout = ColorLayout().analyze(s1.argb, s1.width, s1.height)!!
+        val field = layout.numericField!!
+        val backdrop = s1.argb[(field.bottom + 120) * s1.width + 150]
+        val bare = painted(s1, PxRect(0, field.bottom + 12, s1.width, minOf(s1.height, field.bottom + 700)), backdrop)
+        assertEquals("no keypad under the number field", why(bare))
+    }
+
+    @Test
+    fun theRealScreens_passEveryGuard_atFullAndSmallSizes() {
+        for (name in listOf("s1", "s2", "s3")) {
+            for (factor in listOf(1.0, 0.75, 0.5)) {
+                val img = if (factor == 1.0) OcrFixtures.image(name) else OcrFixtures.scaled(OcrFixtures.image(name), factor)
+                assertNull("$name x$factor", ColorLayout().inspect(img.argb, img.width, img.height).rejection)
+            }
+        }
+    }
 }

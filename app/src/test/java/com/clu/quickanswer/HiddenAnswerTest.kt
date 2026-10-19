@@ -56,4 +56,24 @@ class HiddenAnswerTest {
         h.remember("ج", 20_000)
         assertEquals(HiddenAnswer.Restore("ج", 20_000), h.take(0, 1000))
     }
+
+    @Test
+    fun theGreenBox_comesBackWithTheAnswer() {
+        val box = HiddenAnswer.Box(com.clu.quickanswer.ocr.PxRect(10, 20, 300, 80), 1080, 2400)
+        val h = HiddenAnswer()
+        h.remember("ب", 15_000, box)
+        assertEquals(HiddenAnswer.Restore("ب", 9_000, box), h.take(now = 6_000, minLeftMs = 1_000))
+    }
+
+    @Test
+    fun theGreenBox_isForgottenWithTheAnswer_andDoesNotOutliveARememberWithoutOne() {
+        val box = HiddenAnswer.Box(com.clu.quickanswer.ocr.PxRect(10, 20, 300, 80), 1080, 2400)
+        val h = HiddenAnswer()
+        h.remember("ب", 15_000, box)
+        h.clear()
+        assertNull(h.take(0, 1000))
+        h.remember("أ", 15_000, box)
+        h.remember("ج", 15_000) // an answer without a box replaces the one with
+        assertNull(h.take(0, 1000)?.box)
+    }
 }

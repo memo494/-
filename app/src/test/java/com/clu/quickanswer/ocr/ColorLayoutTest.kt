@@ -27,14 +27,14 @@ class ColorLayoutTest {
         assertFalse(layout.numeric)
 
         val b = layout.banner
-        assertNear(60, b.left, 4); assertNear(520, b.top, 4); assertNear(540, b.right, 4); assertNear(676, b.bottom, 4)
+        assertNear(60, b.left, 4); assertNear(520, b.top, 4); assertNear(540, b.right, 4); assertNear(637, b.bottom, 4)
 
         assertEquals(4, layout.buttons.size)
         for ((i, btn) in layout.buttons.withIndex()) {
             val expectedTop = 1300 * (56 + i * 8) / 100
-            assertNear(150, btn.left, 6)
+            assertNear(180, btn.left, 6)
             assertNear(expectedTop, btn.top, 6)
-            assertNear(450, btn.right, 6)
+            assertNear(420, btn.right, 6)
             assertNear(expectedTop + 78, btn.bottom, 6)
         }
         // top-to-bottom, no overlap
@@ -46,8 +46,8 @@ class ColorLayoutTest {
 
         // Lines are tight vertically: the ink bar plus a few pixels, never the 25 % padding.
         val q1 = layout.questionLines[0]
-        val inkTop = 1300 * 4350 / 10000
-        val inkBottom = 1300 * 4600 / 10000
+        val inkTop = 1300 * SyntheticScreens.LINE1_TOP / 10000
+        val inkBottom = 1300 * SyntheticScreens.LINE1_BOTTOM / 10000
         assertTrue("top ${q1.top} vs $inkTop", q1.top in (inkTop - 4)..inkTop)
         assertTrue("bottom ${q1.bottom} vs $inkBottom", q1.bottom in inkBottom..(inkBottom + 4))
         val o1 = layout.optionLines[0][0]
@@ -63,7 +63,7 @@ class ColorLayoutTest {
             val h = (600 * scale).toInt()
             val c = Canvas(w, h, black)
             c.fill(w * 20 / 100, h * 3 / 100, w * 80 / 100, h * 30 / 100, cream)
-            c.ink(w * 35 / 100, h * 10 / 100, w * 65 / 100, h * 18 / 100)
+            c.ink(w * 35 / 100, h * 10 / 100, w * 65 / 100, h * 15 / 100)
             for (i in 0 until 4) {
                 val top = h * (35 + i * 16) / 100
                 c.fill(w * 35 / 100, top, w * 65 / 100, top + h * 13 / 100, white)
@@ -102,10 +102,120 @@ class ColorLayoutTest {
     @Test
     fun bannerWithoutText_hasNoLines() {
         val c = Canvas(600, 1300, black)
-        c.fill(60, 520, 540, 676, cream)
+        c.fill(60, 520, 540, 637, cream)
         val layout = ColorLayout().analyze(c.px, c.w, c.h)!!
         assertTrue(layout.questionLines.isEmpty())
         assertTrue(layout.buttons.isEmpty())
+    }
+
+    private fun why(c: Canvas): String? = ColorLayout().inspect(c.px, c.w, c.h).rejection
+
+    @Test
+    fun theQuizShapes_arePassedAtAnySize() {
+        for ((w, h) in listOf(600 to 1300, 900 to 1950, 300 to 650)) {
+            assertNull("$w x $h quiz: ${why(SyntheticScreens.quiz(w, h))}", why(SyntheticScreens.quiz(w, h)))
+            assertNull("$w x $h numeric: ${why(SyntheticScreens.numeric(w, h))}", why(SyntheticScreens.numeric(w, h)))
+        }
+    }
+
+    @Test
+    fun aPaleBox_thatIsNotAsWideAsTheQuizBanner_isDeclined() {
+        // A settings tip: a pale yellow card (aspect 3) above white cards, on a grey page.
+        val c = Canvas(600, 1300, 0xFFC8CAD0.toInt())
+        c.fill(60, 300, 540, 460, cream)
+        c.ink(120, 350, 480, 380)
+        for (i in 0 until 4) c.fill(60, 500 + i * 120, 540, 590 + i * 120, white)
+        assertTrue(why(c)!!.startsWith("banner shape"))
+        // A narrow banner (under half the screen) is declined whatever its shape.
+        val narrow = Canvas(1000, 1300, black)
+        narrow.fill(350, 300, 650, 380, cream)
+        assertEquals("banner too narrow", why(narrow))
+    }
+
+    @Test
+    fun whiteButtonsAsWideAsTheBanner_orOffCentre_orAtTheEdge_areDeclined() {
+        // A dialog: the banner shape is right, but the buttons fill the dialog's width.
+        val wide = SyntheticScreens.quiz(600, 1300, hiddenButtons = setOf(0, 1, 2, 3))
+        for (i in 0 until 3) wide.fill(60, 1300 * (56 + i * 8) / 100, 540, 1300 * (56 + i * 8) / 100 + 78, white)
+        assertEquals("button width", why(wide))
+
+        val offCentre = SyntheticScreens.quiz(600, 1300, hiddenButtons = setOf(0, 1, 2, 3))
+        for (i in 0 until 3) offCentre.fill(250, 1300 * (56 + i * 8) / 100, 490, 1300 * (56 + i * 8) / 100 + 78, white)
+        assertEquals("buttons off-centre", why(offCentre))
+    }
+
+    @Test
+    fun aHiddenOrRecolouredButton_leavesAHoleInTheStack_andIsDeclined() {
+        for (hidden in 0..2) {
+            val c = SyntheticScreens.quiz(600, 1300, hiddenButtons = setOf(hidden))
+            val reason = why(c)
+            assertNotNull("button $hidden hidden", reason)
+            assertTrue("button $hidden hidden: $reason", reason!!.contains("missing") || reason.contains("far below"))
+        }
+    }
+
+    @Test
+    fun aButtonCutShort_orOfAnotherSize_isDeclined() {
+        val cut = SyntheticScreens.quiz(600, 1300)
+        val top = 1300 * (56 + 2 * 8) / 100
+        cut.fill(380, top, 420, top + 78, Canvas.BLUE) // the bubble sat on the right end of button 3
+        assertEquals("buttons differ in size", why(cut))
+    }
+
+    @Test
+    fun aLastButtonCovered_leavesTheOthersADecisionForTheMasks() {
+        // Nothing in the picture shows that a 4th button is missing: the layout accepts three, and
+        // ScreenReader checks the overlay masks (see ScreenReaderTest).
+        val c = SyntheticScreens.quiz(600, 1300, hiddenButtons = setOf(3))
+        assertEquals(3, ColorLayout().analyze(c.px, c.w, c.h)!!.buttons.size)
+    }
+
+    @Test
+    fun aNumberFieldNeedsAKeypad() {
+        assertEquals("no keypad under the number field", why(SyntheticScreens.numeric(600, 1300, keypad = false)))
+        // A game-style name dialog: a field under the banner and no keys.
+        val dialog = Canvas(600, 1300, 0xFF204060.toInt())
+        dialog.fill(60, 520, 540, 637, cream)
+        dialog.ink(180, 539, 420, 559)
+        dialog.fill(228, 604, 372, 656, white)
+        assertEquals("no keypad under the number field", why(dialog))
+    }
+
+    @Test
+    fun aNumberFieldNextToAnswerButtons_isAmbiguous() {
+        // The first of four answer buttons reaches over the banner's lower edge (a pale patch joined
+        // the banner downwards): it looks like a number field, but three more buttons sit below it.
+        val c = Canvas(600, 1300, 0xFF204060.toInt())
+        c.fill(60, 520, 540, 620, cream)
+        c.ink(180, 545, 420, 565)
+        for (i in 0 until 4) c.fill(180, 636 + i * 104, 420, 714 + i * 104, white)
+        c.fill(70, 620, 200, 655, cream) // joins the banner downwards, over the top of button 1
+        assertEquals("number field together with answer buttons", why(c))
+        // Without the patch it is an ordinary multiple-choice screen.
+        val plain = Canvas(600, 1300, 0xFF204060.toInt())
+        plain.fill(60, 520, 540, 620, cream)
+        plain.ink(180, 545, 420, 565)
+        for (i in 0 until 4) plain.fill(180, 636 + i * 104, 420, 714 + i * 104, white)
+        assertNull(why(plain))
+    }
+
+    @Test
+    fun aNumberFieldAsWideAsAWebForm_orOffCentre_isDeclined() {
+        val c = SyntheticScreens.numeric(600, 1300)
+        c.fill(120, 604, 456, 656, white) // a field 0.7 of the banner wide
+        assertEquals("number field width", why(c))
+        val off = SyntheticScreens.numeric(600, 1300)
+        off.fill(228, 604, 372, 656, Canvas.CREAM)
+        off.fill(330, 604, 474, 656, white)
+        assertEquals("number field off-centre", why(off))
+    }
+
+    @Test
+    fun aMergedTextBand_isDeclined() {
+        // Something dark over the two question lines turns them into one tall band.
+        val c = SyntheticScreens.quiz(600, 1300)
+        c.ink(180, 1300 * SyntheticScreens.LINE1_TOP / 10000, 420, 1300 * SyntheticScreens.LINE2_BOTTOM / 10000)
+        assertEquals("question text band merged", why(c))
     }
 
     @Test

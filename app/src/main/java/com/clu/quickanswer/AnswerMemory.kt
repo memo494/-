@@ -13,11 +13,15 @@ import org.json.JSONObject
  * as the number for a numeric question.
  *
  * - Exact lookup: same normalised question and same normalised options (a numeric question has none).
+ * - Exact lookup also needs the same numbers (see [guardOf]): "1.5 x 2" and "15 x 2" are different
+ *   questions although punctuation is not part of the text compared.
  * - Fuzzy lookup, when no exact one exists: the same option set (numeric: any numeric question)
  *   and a question that is at least [QUESTION_SIMILARITY] similar, as long as it keeps the same
- *   numbers and the same negation words (see [Entry.guard]); "in 1990" and "in 1991" are
- *   different questions.
- * - At most [capacity] entries; the one least recently used or stored goes first.
+ *   numbers and the same negation words (see [Entry.guard]) and no single word is replaced by a
+ *   different one (see [wordsCompatible]): "in 1990" and "in 1991", "the biggest planet" and "the
+ *   smallest planet" are different questions. OCR noise is a letter or two, not another word.
+ * - At most [capacity] entries; the one least recently used or stored goes first. Nothing that
+ *   [isValidEntry] refuses is kept, however it came in (answer, restored file, imported file).
  *
  * Thread-safe.
  */
@@ -28,11 +32,15 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
         private val questionKey = keyOf(question)
         private val optionKeys = if (numeric) emptyList() else options.map { keyOf(it) }.sorted()
 
-        /** Same for every ordering of the options. */
-        val key: String = (if (numeric) "N" else "M") + SEP + questionKey + SEP + optionKeys.joinToString(SEP.toString())
-
         /** Questions with a different one of these are never the same question. */
         internal val guard: String = guardOf(question)
+
+        /** Same for every ordering of the options. */
+        val key: String =
+            (if (numeric) "N" else "M") + SEP + questionKey + SEP + guard + SEP + optionKeys.joinToString(SEP.toString())
+
+        /** The words of the question (normalised), for [wordsCompatible]. */
+        internal val words: List<String> = wordsOf(question)
 
         /** Same for entries that offer the same options (all numeric questions share one). */
         internal val optionSet: String = if (numeric) "" else optionKeys.joinToString(SEP.toString())
@@ -69,7 +77,7 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
             val longest = maxOf(e.questionKeyLength, qKey.length)
             if (kotlin.math.abs(e.questionKeyLength - qKey.length) > longest * (1 - QUESTION_SIMILARITY)) continue
             val sim = e.similarityTo(qKey)
-            if (sim >= bestSim && (best == null || sim > bestSim)) {
+            if (sim >= bestSim && (best == null || sim > bestSim) && wordsCompatible(e.words, probe.words)) {
                 best = e
                 bestSim = sim
             }
@@ -81,16 +89,12 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
 
     /**
      * Remembers [answer] (an option's text, or a number when [numeric]), replacing the entry for
-     * the same question. Does nothing for an empty question or answer, or for options that cannot
-     * be told apart after normalising (the answer would be ambiguous).
+     * the same question. Does nothing for what [isValidEntry] refuses: an empty question or answer,
+     * options that cannot be told apart after normalising (the answer would be ambiguous), an
+     * answer that is not one of them or, for a numeric question, not a number.
      */
     fun put(question: String, options: List<String>, numeric: Boolean, answer: String) {
-        if (keyOf(question).isEmpty() || answer.isBlank()) return
-        if (!numeric) {
-            val keys = options.map { keyOf(it) }
-            if (keys.size < 2 || keys.any { it.isEmpty() } || keys.toSet().size != keys.size) return
-            if (keys.none { it == keyOf(answer) }) return
-        }
+        if (!isValidEntry(question, options, numeric, answer)) return
         val entry = Entry(question, if (numeric) emptyList() else options, numeric, answer.trim())
         synchronized(this) {
             entries.remove(entry.key)
@@ -126,52 +130,65 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
 
     /**
      * Replaces the contents with what [encode] produced. Returns false (and leaves the memory
-     * empty) when [json] is not readable; single bad entries are skipped. Does not call [onChange].
+     * empty) when [json] is not readable; single bad entries (see [isValidEntry]) are skipped, and
+     * at most [maxEntries] are read. Does not call [onChange].
      */
     @Synchronized
-    fun restore(json: String): Boolean {
+    fun restore(json: String, maxEntries: Int = Int.MAX_VALUE): Boolean {
         entries.clear()
         try {
             val arr = JSONObject(json).getJSONArray("e")
+            var read = 0
             for (i in 0 until arr.length()) {
+                if (read >= maxEntries) break
                 try {
                     val o = arr.getJSONObject(i)
                     val opts = o.getJSONArray("o")
-                    val e = Entry(
-                        o.getString("q"), List(opts.length()) { opts.getString(it) }, o.optInt("n", 0) == 1, o.getString("a")
-                    )
+                    val numeric = o.optInt("n", 0) == 1
+                    val question = o.getString("q")
+                    val options = if (numeric) emptyList() else List(opts.length()) { opts.getString(it) }
+                    val answer = o.getString("a")
+                    if (!isValidEntry(question, options, numeric, answer)) continue
+                    val e = Entry(question, options, numeric, answer.trim())
                     entries[e.key] = e
+                    read++
                 } catch (_: Exception) {
                     // skip this entry
                 }
             }
             while (entries.size > capacity) entries.remove(entries.keys.first())
             return true
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
+            // Not JSON, or so deeply nested or big that the parser gave up.
             entries.clear()
             return false
         }
     }
 
+    /** What [merge] did: [added] entries are new, [noRoom] more were left out because the memory is full. */
+    class MergeResult(val added: Int, val noRoom: Int)
+
     /**
      * Adds the entries of [json] (what [encode] produced, e.g. a friend's exported memory) without
      * removing anything. An entry for a question already remembered is skipped: your own answer
-     * wins. Returns how many entries were added, or -1 when [json] is not readable.
+     * wins. When the memory cannot hold them all, the entries of your own stay and only the most
+     * recently used of the incoming ones that fit are added. Returns null when [json] is not readable.
      */
-    fun merge(json: String): Int {
+    fun merge(json: String): MergeResult? {
         val incoming = AnswerMemory(Int.MAX_VALUE)
-        if (!incoming.restore(json)) return -1
+        if (!incoming.restore(json, MAX_IMPORT_ENTRIES)) return null
         var added = 0
+        var noRoom = 0
         synchronized(this) {
-            for (e in incoming.entries.values) {
-                if (entries.containsKey(e.key)) continue
-                entries[e.key] = e
-                added++
-            }
-            while (entries.size > capacity) entries.remove(entries.keys.first())
+            val fresh = incoming.entries.values.filter { !entries.containsKey(it.key) }
+            val room = maxOf(0, capacity - entries.size)
+            val take = if (fresh.size > room) fresh.subList(fresh.size - room, fresh.size) else fresh
+            for (e in take) entries[e.key] = e
+            added = take.size
+            noRoom = fresh.size - take.size
         }
         if (added > 0) onChange?.invoke()
-        return added
+        return MergeResult(added, noRoom)
     }
 
     companion object {
@@ -179,6 +196,85 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
 
         /** Fuzzy lookup: how alike two questions must be (see [ArabicText.similarity]). */
         const val QUESTION_SIMILARITY = 0.92
+
+        // Limits of one entry. The game's questions are under 100 characters and have 4 options.
+        const val MAX_QUESTION_CHARS = 500
+        const val MAX_ANSWER_CHARS = 200
+        const val MAX_OPTIONS = 8
+
+        /** An imported file is not read beyond this many bytes, nor beyond this many entries. */
+        const val MAX_IMPORT_BYTES = 5 * 1024 * 1024
+        const val MAX_IMPORT_ENTRIES = 20_000
+
+        private val NUMERIC_ANSWER = Regex("-?\\d+(?:\\.\\d+)?")
+
+        /**
+         * Whether an entry may be kept: a question, a bounded size, and either a number (numeric) or at
+         * least two options that differ after normalising, one of which is the answer.
+         */
+        fun isValidEntry(question: String, options: List<String>, numeric: Boolean, answer: String): Boolean {
+            if (question.length > MAX_QUESTION_CHARS || keyOf(question).isEmpty()) return false
+            val a = answer.trim()
+            if (a.isEmpty() || a.length > MAX_ANSWER_CHARS) return false
+            if (numeric) return NUMERIC_ANSWER.matches(AnswerParser.asciiDigits(a))
+            if (options.size < 2 || options.size > MAX_OPTIONS || options.any { it.length > MAX_ANSWER_CHARS }) return false
+            val keys = options.map { keyOf(it) }
+            if (keys.any { it.isEmpty() } || keys.toSet().size != keys.size) return false
+            return keys.any { it == keyOf(a) }
+        }
+
+        /** The bytes of [input], or null when there are more than [limit] (it is not read further). */
+        fun readAtMost(input: java.io.InputStream, limit: Int): ByteArray? {
+            val out = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(16 * 1024)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                if (out.size() + n > limit) return null
+                out.write(buffer, 0, n)
+            }
+            return out.toByteArray()
+        }
+
+        /** The normalised words of [question] (digits as 0-9). */
+        internal fun wordsOf(question: String): List<String> =
+            ArabicText.normalize(AnswerParser.asciiDigits(question)).split(' ').filter { it.isNotEmpty() }
+
+        /**
+         * Whether two questions that are alike as a whole could differ only by reading noise: their
+         * words can be paired up (a word with its neighbour merged into one, or split in two, is fine)
+         * so that every pair is the same word or differs by a letter. How many letters a pair may
+         * differ by grows with the word: none up to 3 letters (مصر / قطر, أول / آخر), one up to 8
+         * letters (أكبر / أصغر, الفجر / الظهر are 2 apart and refused), two beyond that. A stray
+         * one-letter word may be left out on either side.
+         */
+        internal fun wordsCompatible(a: List<String>, b: List<String>): Boolean {
+            val n = a.size
+            val m = b.size
+            val ok = Array(n + 1) { BooleanArray(m + 1) }
+            ok[0][0] = true
+            for (i in 0..n) {
+                for (j in 0..m) {
+                    if (i == 0 && j == 0) continue
+                    ok[i][j] = (i > 0 && j > 0 && ok[i - 1][j - 1] && wordClose(a[i - 1], b[j - 1])) ||
+                        (i > 1 && j > 0 && ok[i - 2][j - 1] && wordClose(a[i - 2] + a[i - 1], b[j - 1])) ||
+                        (i > 0 && j > 1 && ok[i - 1][j - 2] && wordClose(a[i - 1], b[j - 2] + b[j - 1])) ||
+                        (i > 0 && a[i - 1].length <= 1 && ok[i - 1][j]) ||
+                        (j > 0 && b[j - 1].length <= 1 && ok[i][j - 1])
+                }
+            }
+            return ok[n][m]
+        }
+
+        private fun wordClose(x: String, y: String): Boolean {
+            val shortest = minOf(x.length, y.length)
+            val allowed = when {
+                shortest <= 3 -> 0
+                shortest <= 8 -> 1
+                else -> 2
+            }
+            return ArabicText.levenshtein(x, y) <= allowed
+        }
 
         private const val SEP = '\u0001'
 
@@ -188,12 +284,26 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
         private val NEGATIONS = setOf("ليس", "ليست", "ليسوا", "لا", "لم", "لن", "غير", "عدا", "الا", "بدون", "دون")
         private val DIGIT_RUN = Regex("\\d+(?:[.,]\\d+)*")
 
-        /** The numbers and negation words of a question: two questions that differ here are different questions. */
+        // An arithmetic sign between two numbers: "12 - 4", "3 × 4", "8 / 2" (x, X and × are one sign).
+        private val OPERATOR = Regex("(?<=\\d)\\s*([-+\\u2212\\u2013\\u00D7\\u00F7*/^=xX])\\s*(?=\\d)")
+
+        /**
+         * The numbers, the arithmetic signs between them and the negation words of a question: two
+         * questions that differ here are different questions ("12 - 4" and "12 / 4" have the same letters
+         * once the punctuation is gone).
+         */
         internal fun guardOf(question: String): String {
             val ascii = AnswerParser.asciiDigits(question)
-            val numbers = DIGIT_RUN.findAll(ascii).joinToString(",") { it.value }
+            val numbers = DIGIT_RUN.findAll(ascii).joinToString(";") { it.value }
+            val signs = OPERATOR.findAll(ascii).joinToString("") {
+                when (val c = it.groupValues[1][0]) {
+                    'x', 'X', '\u00D7' -> "*"
+                    '\u2212', '\u2013' -> "-"
+                    else -> c.toString()
+                }
+            }
             val negations = ArabicText.normalize(ascii).split(' ').filter { it in NEGATIONS }.joinToString(",")
-            return "$numbers|$negations"
+            return "$numbers|$negations|$signs"
         }
     }
 }

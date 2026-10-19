@@ -4,9 +4,15 @@ package com.clu.quickanswer.ocr
  * Reads the quiz question and its answer options off a screenshot, fully on the device: colour
  * layout ([ColorLayout]) -> tight text lines -> Arabic recogniser ([LineRecognizer]). No network.
  *
- * It declines (null) instead of guessing: no question banner, no readable question text, a
- * multiple-choice screen with fewer than two readable options, or a mean per-character confidence
- * under [minConfidence]. The caller should then fall back to a cloud model.
+ * It declines (null) instead of guessing, so the caller falls back to a cloud model on the picture:
+ * - the screen is not the quiz (no banner, or the banner and buttons are not shaped like the game's);
+ * - the question is unreadable, too short, not Arabic, or one of its lines is unreliable;
+ * - any answer button has no readable text (a missing option could be the right one), two options
+ *   read the same, or an option is not Arabic text or digits;
+ * - one of our own overlay windows ([masks], painted black in the capture) covers the question or
+ *   the answer buttons;
+ * - the mean per-character confidence is under [minConfidence], over everything and over the
+ *   question alone (clean options must not hide a garbled question).
  *
  * Stateless apart from the models it was given, so it is safe to share between threads.
  */
@@ -27,59 +33,124 @@ class ScreenReader(
         val recognizeMs: Double,
     )
 
-    /** [argb] is row-major ARGB ints of size [width] x [height] (android.graphics.Bitmap.getPixels layout). */
-    fun read(argb: IntArray, width: Int, height: Int): Question? = analyze(argb, width, height).question
+    /**
+     * [argb] is row-major ARGB ints of size [width] x [height] (android.graphics.Bitmap.getPixels
+     * layout). [masks] are the rectangles that were painted over the capture (our own windows).
+     */
+    fun read(argb: IntArray, width: Int, height: Int, masks: List<PxRect> = emptyList()): Question? =
+        analyze(argb, width, height, masks).question
 
-    fun analyze(argb: IntArray, width: Int, height: Int): Reading {
+    fun analyze(argb: IntArray, width: Int, height: Int, masks: List<PxRect> = emptyList()): Reading {
         val t0 = System.nanoTime()
-        val found = layout.analyze(argb, width, height)
+        val inspected = layout.inspect(argb, width, height)
+        val found = inspected.layout
         val t1 = System.nanoTime()
         val layoutMs = (t1 - t0) / 1e6
         fun fail(why: String, lq: List<RecognizedLine> = emptyList(), lo: List<List<RecognizedLine>> = emptyList()): Reading =
             Reading(null, why, found, lq, lo, layoutMs, (System.nanoTime() - t1) / 1e6)
 
-        if (found == null) return fail("no question banner")
+        if (found == null) return fail(inspected.rejection ?: "no question banner")
         if (found.questionLines.isEmpty()) return fail("no question text lines")
+        if (coveredByOverlay(found, masks)) return fail("an overlay window covers the question")
 
-        val qLines = found.questionLines.map { recognizer.recognize(argb, width, height, it) }
+        val qLines = dropStrayTrailingLines(found.questionLines.map { recognizer.recognize(argb, width, height, it) })
         val questionText = joinLines(qLines)
         if (questionText.isEmpty()) return fail("question unreadable", qLines)
+        if (ArabicText.key(questionText).length < MIN_QUESTION_CHARS || wordCount(questionText) < MIN_QUESTION_WORDS) {
+            return fail("question too short", qLines)
+        }
+        if (ArabicText.arabicLetterRatio(questionText) < MIN_ARABIC_RATIO) return fail("question is not Arabic", qLines)
+        if (qLines.any { it.charCount > 0 && it.confidence < MIN_LINE_CONFIDENCE }) {
+            return fail("a question line is unreliable", qLines)
+        }
 
         val oLines = ArrayList<List<RecognizedLine>>()
         val options = ArrayList<String>()
-        val rects = ArrayList<PxRect>()
-        for ((i, button) in found.buttons.withIndex()) {
+        for ((i, _) in found.buttons.withIndex()) {
             val lines = found.optionLines[i].map { recognizer.recognize(argb, width, height, it) }
-            val text = joinLines(lines)
             oLines.add(lines)
-            // A button without readable text is left out together with its rect, so options and
-            // optionRects stay index-aligned.
-            if (text.isNotEmpty()) {
-                options.add(text)
-                rects.add(button)
+            val text = joinLines(lines)
+            // A button without readable text is not skipped: the option that cannot be read could be
+            // the right one, and the model would then only be able to pick a wrong answer.
+            if (text.isEmpty()) return fail("a button has no readable text", qLines, oLines)
+            options.add(text)
+        }
+        if (!found.numeric) {
+            if (options.size < MIN_OPTIONS) return fail("fewer than $MIN_OPTIONS options read", qLines, oLines)
+            if (options.map { ArabicText.key(it) }.toSet().size != options.size) return fail("two options read the same", qLines, oLines)
+            if (options.any { ArabicText.arabicOrDigitRatio(it) < MIN_OPTION_ARABIC_RATIO }) {
+                return fail("an option is not Arabic text", qLines, oLines)
             }
         }
-        if (!found.numeric && options.size < MIN_OPTIONS) return fail("fewer than $MIN_OPTIONS options read", qLines, oLines)
 
-        var probSum = 0.0
-        var chars = 0
-        for (line in qLines) { probSum += line.probSum; chars += line.charCount }
-        for (lines in oLines) for (line in lines) { probSum += line.probSum; chars += line.charCount }
-        val confidence = if (chars > 0) (probSum / chars).toFloat() else 0f
+        val confidence = meanConfidence(qLines + oLines.flatten())
         if (confidence < minConfidence) return fail("low confidence %.3f".format(confidence), qLines, oLines)
+        val questionConfidence = meanConfidence(qLines)
+        if (questionConfidence < minConfidence) {
+            return fail("low question confidence %.3f".format(questionConfidence), qLines, oLines)
+        }
 
         val question = Question(
             questionText = questionText,
             options = options,
-            optionRects = rects,
+            optionRects = found.buttons,
             numeric = found.numeric,
             meanConfidence = confidence,
         )
         return Reading(question, null, found, qLines, oLines, layoutMs, (System.nanoTime() - t1) / 1e6)
     }
 
+    private fun meanConfidence(lines: List<RecognizedLine>): Float {
+        var probSum = 0.0
+        var chars = 0
+        for (line in lines) { probSum += line.probSum; chars += line.charCount }
+        return if (chars > 0) (probSum / chars).toFloat() else 0f
+    }
+
     private fun joinLines(lines: List<RecognizedLine>): String =
         lines.map { it.text.trim() }.filter { it.isNotEmpty() }.joinToString(" ")
+
+    private fun wordCount(text: String): Int = ArabicText.normalize(text).split(' ').count { it.isNotEmpty() }
+
+    /**
+     * A last question line that is a stray mark at the banner's lower edge is not part of the
+     * question: a few characters ([STRAY_MAX_CHARS] at most) with no letter or digit of the language,
+     * or read with low confidence. A longer line is the question's own and stays.
+     */
+    private fun dropStrayTrailingLines(lines: List<RecognizedLine>): List<RecognizedLine> {
+        var end = lines.size
+        while (end > 1) {
+            val last = lines[end - 1]
+            val text = last.text.trim()
+            val short = ArabicText.key(text).length <= STRAY_MAX_CHARS
+            val noWord = text.none { ArabicText.isArabicLetter(it) || it.isDigit() }
+            if (!(short && (noWord || last.confidence < MIN_LINE_CONFIDENCE))) break
+            end--
+        }
+        return lines.subList(0, end)
+    }
+
+    /**
+     * True when one of [masks] (painted black over the capture) hides part of what is read: a
+     * question line, the number field, an answer button, or where one more button of the stack
+     * would be (below the last).
+     */
+    private fun coveredByOverlay(found: ScreenLayout, masks: List<PxRect>): Boolean {
+        if (masks.isEmpty()) return false
+        val needed = ArrayList<PxRect>(found.questionLines)
+        found.numericField?.let { needed.add(it) }
+        needed.addAll(found.buttons)
+        val last = found.buttons.lastOrNull()
+        if (last != null) {
+            val before = found.buttons.getOrNull(found.buttons.size - 2)
+            val pitch = if (before != null) last.top - before.top else (last.height * 1.4).toInt()
+            needed.add(PxRect(last.left, last.bottom, last.right, last.bottom + pitch))
+        }
+        return masks.any { m -> needed.any { overlaps(m, it) } }
+    }
+
+    private fun overlaps(a: PxRect, b: PxRect): Boolean =
+        a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
 
     companion object {
         /**
@@ -91,5 +162,20 @@ class ScreenReader(
 
         /** A multiple-choice screen needs at least this many readable options. */
         const val MIN_OPTIONS = 2
+
+        /**
+         * Every question line that has characters must reach this on its own. The worst real line
+         * is 0.78 (S1); a band merged by an overlay or a cut-off banner reads 0.30-0.56.
+         */
+        const val MIN_LINE_CONFIDENCE = 0.6f
+
+        // The game's questions are 56-89 characters of Arabic; a headline of a few letters is a dialog or a mistake.
+        private const val MIN_QUESTION_CHARS = 10
+        private const val MIN_QUESTION_WORDS = 2
+        private const val MIN_ARABIC_RATIO = 0.8
+        private const val MIN_OPTION_ARABIC_RATIO = 0.5
+
+        /** A trailing question line this short (key characters) that is unsure or not text is noise. */
+        private const val STRAY_MAX_CHARS = 3
     }
 }
