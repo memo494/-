@@ -38,27 +38,39 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
 
     /** Returns the short answer, or a short Arabic error message. Never throws. */
     override fun answer(bitmap: Bitmap): String {
-        return try {
-            val prepared = ScreenImage.prepare(bitmap) ?: return ScreenImage.BLACK_SCREEN
-            lastSent = prepared.kept
+        val prepared = try {
+            ScreenImage.prepare(bitmap) ?: return ScreenImage.BLACK_SCREEN
+        } catch (e: Exception) {
+            return "خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim()
+        }
+        lastSent = prepared.kept
+        val image = ImageBlockParam.builder()
+            .source(
+                Base64ImageSource.builder()
+                    .data(prepared.base64)
+                    .mediaType(Base64ImageSource.MediaType.IMAGE_JPEG)
+                    .build()
+            )
+            .build()
+        return send(
+            listOf(
+                ContentBlockParam.ofImage(image),
+                ContentBlockParam.ofText(TextBlockParam.builder().text(ScreenImage.PROMPT).build())
+            )
+        ).text
+    }
 
-            val image = ImageBlockParam.builder()
-                .source(
-                    Base64ImageSource.builder()
-                        .data(prepared.base64)
-                        .mediaType(Base64ImageSource.MediaType.IMAGE_JPEG)
-                        .build()
-                )
-                .build()
+    /** A question already read on the device: text only, no image. */
+    override fun answerText(prompt: String): Reply =
+        send(listOf(ContentBlockParam.ofText(TextBlockParam.builder().text(prompt).build())))
+
+    /** One request with [blocks] as the user turn. Never throws. */
+    private fun send(blocks: List<ContentBlockParam>): Reply {
+        return try {
             val builder = MessageCreateParams.builder()
                 .model(model)
                 .maxTokens(1024L)
-                .addUserMessageOfBlockParams(
-                    listOf(
-                        ContentBlockParam.ofImage(image),
-                        ContentBlockParam.ofText(TextBlockParam.builder().text(ScreenImage.PROMPT).build())
-                    )
-                )
+                .addUserMessageOfBlockParams(blocks)
                 // Lowest effort = fastest answer. No thinking param (disabled thinking is a 400 on Opus 5.5).
                 .outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.LOW).build())
             if (model in FALLBACK_MODELS) {
@@ -67,38 +79,38 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
             }
             val message = client.messages().create(builder.build())
 
-            if (message.stopReason().orElse(null) == StopReason.REFUSAL) return REFUSED
+            if (message.stopReason().orElse(null) == StopReason.REFUSAL) return Reply.empty(REFUSED)
             val text = message.content()
                 .mapNotNull { it.text().orElse(null)?.text() }
                 .joinToString("")
                 .trim()
-            text.ifEmpty { EMPTY }
+            if (text.isEmpty()) Reply.empty(EMPTY) else Reply.answer(text)
         } catch (e: UnauthorizedException) {
-            "مفتاح Claude غير صالح"
+            Reply.error("مفتاح Claude غير صالح")
         } catch (e: PermissionDeniedException) {
-            "مفتاح Claude لا يملك صلاحية لهذا النموذج"
+            Reply.error("مفتاح Claude لا يملك صلاحية لهذا النموذج")
         } catch (e: RateLimitException) {
-            "تم تجاوز حد Claude، انتظر قليلاً"
+            Reply.error("تم تجاوز حد Claude، انتظر قليلاً")
         } catch (e: NotFoundException) {
-            "اسم نموذج Claude غير صحيح"
+            Reply.error("اسم نموذج Claude غير صحيح")
         } catch (e: BadRequestException) {
             val msg = e.message ?: ""
             if (msg.contains("credit", ignoreCase = true) || msg.contains("billing", ignoreCase = true)) {
-                "رصيد Claude غير كافٍ، اشحن حسابك"
+                Reply.error("رصيد Claude غير كافٍ، اشحن حسابك")
             } else {
-                "Claude: ${msg.take(160)}"
+                Reply.empty("Claude: ${msg.take(160)}")
             }
         } catch (e: InternalServerException) {
-            "خوادم Claude مشغولة، جرّب بعد قليل"
+            Reply.error("خوادم Claude مشغولة، جرّب بعد قليل")
         } catch (e: AnthropicServiceException) {
-            if (e.statusCode() == 529) "خوادم Claude مشغولة، جرّب بعد قليل"
-            else "خطأ Claude ${e.statusCode()}: ${e.message?.take(120) ?: ""}".trim()
+            if (e.statusCode() == 529) Reply.error("خوادم Claude مشغولة، جرّب بعد قليل")
+            else Reply.empty("خطأ Claude ${e.statusCode()}: ${e.message?.take(120) ?: ""}".trim())
         } catch (e: AnthropicIoException) {
-            "لا يوجد اتصال"
+            Reply.error("لا يوجد اتصال")
         } catch (e: IOException) {
-            "لا يوجد اتصال"
+            Reply.error("لا يوجد اتصال")
         } catch (e: Exception) {
-            "خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim()
+            Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
         }
     }
 

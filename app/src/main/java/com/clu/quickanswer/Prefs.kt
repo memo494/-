@@ -42,6 +42,19 @@ object Prefs {
         sp(c).edit().putString("panel_position", mode.key).apply()
     }
 
+    /**
+     * Read the question on the device (OCR), answer from memory when it was seen before, and ask the
+     * model with text only. Off: always send the screenshot, as before. Read at each answer.
+     */
+    fun smartReading(c: Context): Boolean = sp(c).getBoolean("smart_reading", true)
+
+    /** Draw a green box around the right option on screen. Read at each answer. */
+    fun highlightAnswer(c: Context): Boolean = sp(c).getBoolean("highlight_answer", true)
+
+    fun saveReading(c: Context, smart: Boolean, highlight: Boolean) {
+        sp(c).edit().putBoolean("smart_reading", smart).putBoolean("highlight_answer", highlight).apply()
+    }
+
     fun saveClaude(c: Context, provider: String, key: String, model: String) {
         sp(c).edit().putString("provider", provider).putString("claude_key", cleanKey(key))
             .putString("claude_model", cleanModel(model)).apply()

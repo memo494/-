@@ -36,6 +36,9 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import com.clu.quickanswer.ocr.ArabicOcr
+import com.clu.quickanswer.ocr.PxRect
+import com.clu.quickanswer.ocr.Question
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -73,6 +76,14 @@ class OverlayService : Service() {
         // above 0.8 (the "maximum obscuring opacity"), even with FLAG_NOT_TOUCHABLE. Keep the panel at
         // or below it, or the game never sees taps that land under the panel. Do not raise this.
         private const val PANEL_WINDOW_ALPHA = 0.8f
+
+        // A second tap within this time after an answer from memory asks the model again and
+        // overwrites the remembered answer (the way to correct a wrong one).
+        private const val CORRECTION_WINDOW_MS = 20_000L
+        private const val HIGHLIGHT_PAD_DP = 6
+        private const val HIGHLIGHT_STROKE_DP = 4
+        private const val HIGHLIGHT_COLOR = "#22C55E"
+        private const val SHOWN_IMAGE_MAX_SIDE = 1024
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -120,6 +131,19 @@ class OverlayService : Service() {
     // The virtual display only emits frames when the screen changes, so keep the last one.
     private var lastFrame: Bitmap? = null
 
+    // On-device question reader; loaded in the background when the service starts (null until then,
+    // or if it cannot load on this phone). Every use holds ocrLock, so it is never closed mid-read.
+    private val ocrLock = Any()
+    private var ocr: ArabicOcr? = null
+    private var destroyed = false
+
+    // The green box around the right option (its own touch-through window), shown and hidden with the panel.
+    private var highlight: View? = null
+
+    // The last answer that came from memory, for the correction tap (see CORRECTION_WINDOW_MS).
+    private var lastHitKey: String? = null
+    private var lastHitAt = 0L
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -150,6 +174,8 @@ class OverlayService : Service() {
         client = if (Prefs.provider(this) == "claude") ClaudeClient(Prefs.claudeKey(this), Prefs.claudeModel(this))
         else GeminiClient(Prefs.apiKey(this), Prefs.model(this))
         warmUp()
+        AnswerStore.init(this)
+        loadOcr()
 
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val proj = try {
@@ -215,6 +241,8 @@ class OverlayService : Service() {
         if (resizeCapture()) clampBubble()
         refreshPanel()
         hidePreview()
+        // The box marks a button of the old layout.
+        hideHighlight()
     }
 
     /**
@@ -532,6 +560,7 @@ class OverlayService : Service() {
 
     private fun hidePanel() {
         handler.removeCallbacks(hidePanelRunnable)
+        hideHighlight()
         val p = panel ?: return
         if (!panelAdded) return
         panelAdded = false
@@ -645,8 +674,15 @@ class OverlayService : Service() {
         return bmp
     }
 
-    /** Screen rectangles of our own windows that are currently showing (bubble, panel, image preview). */
+    /** Screen rectangles of our own windows that are painted black in captures (bubble, panel, image preview). */
     private fun overlayRects(): List<Rect> = listOfNotNull(viewRect(bubble), viewRect(panel), viewRect(preview))
+
+    /**
+     * What auto mode's change detection ignores: [overlayRects] plus the green box. The box is never
+     * painted into a capture (it sits on an answer button the next question needs); it is hidden with
+     * the panel before anything is sent instead.
+     */
+    private fun ignoreRects(): List<Rect> = overlayRects() + listOfNotNull(viewRect(highlight))
 
     private fun readFrame(): Bitmap? {
         val reader = imageReader ?: return null
@@ -716,7 +752,7 @@ class OverlayService : Service() {
         }
         // In auto mode count this as the last frame sent, or the next tick would see the question as
         // "new", hide this answer and ask again.
-        sendFrame(bmp, if (autoMode) signature(bmp, overlayRects()) else null, fromAuto = false)
+        sendFrame(bmp, if (autoMode) signature(bmp, ignoreRects()) else null, fromAuto = false)
     }
 
     /**
@@ -727,19 +763,160 @@ class OverlayService : Service() {
      */
     private fun sendFrame(bmp: Bitmap, sig: IntArray?, fromAuto: Boolean) {
         setBusy(true)
+        val bypass = if (!fromAuto && SystemClock.uptimeMillis() - lastHitAt < CORRECTION_WINDOW_MS) lastHitKey else null
+        val capturedW = bmp.width
+        val capturedH = bmp.height
         scope.launch {
-            val answer = withContext(Dispatchers.IO) {
+            val solved = withContext(Dispatchers.IO) {
                 try {
-                    client?.answer(bmp) ?: "خطأ"
+                    solve(bmp, bypass)
+                } catch (e: Exception) {
+                    Solved("خطأ: ${e.javaClass.simpleName}", null, null, null)
                 } finally {
                     bmp.recycle()
                 }
             }
             if (sig != null) lastSentSig = sig
             setBusy(false)
-            if (fromAuto && ScreenImage.isNoQuestion(answer)) return@launch
-            shownImage = client?.lastSent ?: shownImage
-            showPanel(answer)
+            if (fromAuto && ScreenImage.isNoQuestion(solved.text)) return@launch
+            lastHitKey = solved.memoryKey
+            lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
+            shownImage = solved.image ?: shownImage
+            showPanel(solved.text)
+            // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
+            val rect = solved.rect
+            if (rect != null && capturedW == screenW && capturedH == screenH && Prefs.highlightAnswer(this@OverlayService)) {
+                showHighlight(rect)
+            }
+        }
+    }
+
+    /**
+     * What one answer produced: the text for the bar, the option's button to box (screen pixels),
+     * the picture "آخر صورة" shows, and the memory entry it came from (null if not from memory).
+     */
+    private class Solved(val text: String, val rect: PxRect?, val image: Bitmap?, val memoryKey: String?)
+
+    /**
+     * Answers the question on [bmp] (blocking; run off the main thread):
+     * 1. Read it on the device. If that works: answer from memory when the question was seen before
+     *    (unless it is [bypassKey], the answer being corrected), else ask the model with text only and
+     *    remember the answer.
+     * 2. Otherwise, or when the text answer cannot be used, send the screenshot as before. If the
+     *    question was read, an image answer that names one of its options still gets the box and is
+     *    remembered.
+     */
+    private fun solve(bmp: Bitmap, bypassKey: String?): Solved {
+        val c = client ?: return Solved("خطأ", null, null, null)
+        val memory = AnswerStore.memory
+        val q = if (Prefs.smartReading(this)) readQuestion(bmp) else null
+        if (q != null) {
+            val hit = memory.lookup(q.questionText, q.options, q.numeric)
+            if (hit != null && hit.key != bypassKey) {
+                AnswerParser.resolveStored(q, hit.answer)?.let { r ->
+                    return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key)
+                }
+            }
+            val reply = c.answerText(QuestionPrompt.build(q))
+            when (reply.kind) {
+                Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
+                    // A corrected answer replaces the old entry (a fuzzy hit may have another key).
+                    if (hit != null && hit.key == bypassKey) memory.remove(hit.key)
+                    memory.put(q.questionText, q.options, q.numeric, r.answer)
+                    return Solved(r.answer, r.rect, shownCopy(bmp), null)
+                }
+                // Quota, key, region, no connection: the image request would fail the same way.
+                Reply.Kind.ERROR -> return Solved(reply.text, null, null, null)
+                Reply.Kind.EMPTY -> {}
+            }
+        }
+        val text = c.answer(bmp)
+        if (q != null) {
+            val r = if (q.numeric) {
+                // Only a bare number counts (an error message can contain digits too).
+                text.trim().takeIf { t -> t.isNotEmpty() && t.all { it.isDigit() || it in ".,-٫٬ " } }
+                    ?.let { AnswerParser.number(it) }?.let { AnswerParser.Resolved(it, null) }
+            } else {
+                AnswerParser.resolveImageAnswer(q, text)
+            }
+            if (r != null) {
+                memory.put(q.questionText, q.options, q.numeric, r.answer)
+                return Solved(r.answer, r.rect, c.lastSent, null)
+            }
+        }
+        return Solved(text, null, c.lastSent, null)
+    }
+
+    /** The question on [bmp], or null when it cannot be read (or the reader is not loaded). */
+    private fun readQuestion(bmp: Bitmap): Question? = try {
+        synchronized(ocrLock) { ocr?.read(bmp) }
+    } catch (t: Throwable) {
+        null
+    }
+
+    /** A smaller copy of [bmp] for "آخر صورة" (the caller recycles [bmp]). */
+    private fun shownCopy(bmp: Bitmap): Bitmap {
+        val longest = maxOf(bmp.width, bmp.height)
+        if (longest <= SHOWN_IMAGE_MAX_SIDE) return bmp.copy(Bitmap.Config.ARGB_8888, false)
+        val s = SHOWN_IMAGE_MAX_SIDE.toFloat() / longest
+        return Bitmap.createScaledBitmap(bmp, maxOf(1, (bmp.width * s).toInt()), maxOf(1, (bmp.height * s).toInt()), true)
+    }
+
+    /** Loads the on-device reader in the background; the app works without it (image path). */
+    private fun loadOcr() {
+        scope.launch(Dispatchers.IO) {
+            val loaded = try {
+                ArabicOcr.create(this@OverlayService)
+            } catch (t: Throwable) {
+                null
+            }
+            synchronized(ocrLock) {
+                if (destroyed) loaded?.close() else ocr = loaded
+            }
+        }
+    }
+
+    /** Draws the green box around [r] (screen pixels: captures are the real screen, 1:1). */
+    private fun showHighlight(r: PxRect) {
+        hideHighlight()
+        val pad = dp(HIGHLIGHT_PAD_DP)
+        val v = View(this).apply {
+            background = GradientDrawable().apply {
+                setColor(Color.TRANSPARENT)
+                setStroke(dp(HIGHLIGHT_STROKE_DP), Color.parseColor(HIGHLIGHT_COLOR))
+                cornerRadius = dp(12).toFloat()
+            }
+        }
+        val params = WindowManager.LayoutParams(
+            r.width + 2 * pad,
+            r.height + 2 * pad,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = r.left - pad
+            y = r.top - pad
+            // Android 12+ only lets taps through overlays at most 80% opaque.
+            alpha = PANEL_WINDOW_ALPHA
+        }
+        // Real display coordinates, the same as the capture's pixels.
+        useScreenCoordinates(params, true)
+        try {
+            wm.addView(v, params)
+            highlight = v
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun hideHighlight() {
+        val v = highlight ?: return
+        highlight = null
+        try {
+            wm.removeView(v)
+        } catch (_: Exception) {
         }
     }
 
@@ -777,7 +954,7 @@ class OverlayService : Service() {
         // Fixed before anything suspends: is the panel part of the frame being judged?
         val panelShown = panelAdded
         val fresh = captureMasked(newOnly = true)
-        val overlays = overlayRects()
+        val overlays = ignoreRects()
         val previous = prevTickSig
         // The virtual display only emits a frame when the screen changes, so "no new frame" means
         // the screen is exactly as at the last tick: count it as one more stable tick (reusing that
@@ -821,6 +998,13 @@ class OverlayService : Service() {
         handler.removeCallbacksAndMessages(null)
         hidePanel()
         hidePreview()
+        hideHighlight()
+        // Taken under the lock, so no read is running; closing (native) happens off the main thread.
+        val reader = synchronized(ocrLock) {
+            destroyed = true
+            ocr.also { ocr = null }
+        }
+        if (reader != null) Thread { reader.close() }.start()
         bubble?.let {
             if (it.isAttachedToWindow) {
                 try {

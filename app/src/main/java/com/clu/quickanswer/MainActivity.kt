@@ -14,6 +14,7 @@ import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.RadioGroup
 import android.widget.Spinner
@@ -34,6 +35,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var claudeKeyInput: EditText
     private lateinit var claudeModelInput: EditText
     private lateinit var panelPositionGroup: RadioGroup
+    private lateinit var smartReadingCheck: CheckBox
+    private lateinit var highlightCheck: CheckBox
+    private lateinit var clearMemoryButton: Button
 
     // Model ids in the same order as the spinner entries.
     private var modelIds: List<String> = emptyList()
@@ -90,6 +94,23 @@ class MainActivity : AppCompatActivity() {
         panelPositionGroup.check(
             if (Prefs.panelMode(this) == PanelPlacement.Mode.NEXT_TO_BUBBLE) R.id.panelPosBubble else R.id.panelPosTop
         )
+        smartReadingCheck = findViewById(R.id.smartReadingCheck)
+        highlightCheck = findViewById(R.id.highlightCheck)
+        clearMemoryButton = findViewById(R.id.clearMemoryButton)
+        smartReadingCheck.isChecked = Prefs.smartReading(this)
+        highlightCheck.isChecked = Prefs.highlightAnswer(this)
+        AnswerStore.init(this)
+        clearMemoryButton.setOnClickListener {
+            AnswerStore.runAfterLoad {
+                AnswerStore.memory.clear()
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        updateMemoryButton(0)
+                        Toast.makeText(this, "تم مسح الذاكرة", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
         findViewById<Button>(R.id.opusButton).setOnClickListener {
             claudeModelInput.setText("claude-opus-5-5")
         }
@@ -136,6 +157,16 @@ class MainActivity : AppCompatActivity() {
         // list was last drawn.
         refreshModelsButton.isEnabled = !GeminiRuntime.refreshingModels
         rebuildModelSpinner(selectedModelId())
+        // The count is known once the file has been loaded (in the background).
+        AnswerStore.runAfterLoad {
+            val n = AnswerStore.memory.size
+            runOnUiThread { if (!isDestroyed) updateMemoryButton(n) }
+        }
+    }
+
+    private fun updateMemoryButton(count: Int) {
+        clearMemoryButton.text = "مسح الذاكرة ($count سؤال)"
+        clearMemoryButton.isEnabled = count > 0
     }
 
     override fun onPause() {
@@ -200,6 +231,7 @@ class MainActivity : AppCompatActivity() {
             if (panelPositionGroup.checkedRadioButtonId == R.id.panelPosBubble) PanelPlacement.Mode.NEXT_TO_BUBBLE
             else PanelPlacement.Mode.TOP
         )
+        Prefs.saveReading(this, smartReadingCheck.isChecked, highlightCheck.isChecked)
     }
 
     private fun updateOverlayButton() {

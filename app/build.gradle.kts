@@ -19,6 +19,11 @@ android {
         // Must grow with every CI build or Android refuses to install it as an update.
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionName = "1.0.$versionCode"
+        // The OCR model runs on onnxruntime-android; only 64-bit ARM phones are supported, which
+        // keeps the APK free of the other three ABIs' native libraries.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     signingConfigs {
@@ -55,6 +60,24 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    testOptions {
+        unitTests.all {
+            it.maxHeapSize = "1g"
+            // The OCR tests print per-item output and timing; show it in the Gradle log.
+            it.testLogging {
+                events("passed", "failed", "skipped")
+                showStandardStreams = true
+            }
+        }
+    }
+}
+
+// onnxruntime-android and the desktop onnxruntime jar contain the same ai.onnxruntime classes, but
+// the Android build loads its native library differently and cannot run on a JVM. The app compiles
+// and ships against the Android artifact; local unit tests get the desktop jar instead, so the
+// Android artifact is kept off every unit-test classpath.
+configurations.matching { it.name.contains("UnitTest") }.configureEach {
+    exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
 }
 
 dependencies {
@@ -63,8 +86,12 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.anthropic:anthropic-java:2.34.0")
+    // Arabic OCR (PP-OCRv5 recogniser). Pinned to 1.30.0; the desktop jar used by unit tests must match.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
 
     testImplementation("junit:junit:4.13.2")
     // Android's org.json is a stub in local unit tests, so bring the real one.
     testImplementation("org.json:json:20240303")
+    // Desktop onnxruntime so the OCR pipeline can run in local unit tests (see the exclude above).
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.30.0")
 }

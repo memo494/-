@@ -37,80 +37,110 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
                 ?: return ScreenImage.BLACK_SCREEN
             lastSent = prepared.kept
             val b64 = prepared.base64
-            // Free-tier models are often overloaded (503) or out of quota (429), and quota is
-            // per model. The first model goes alone, so a healthy call costs exactly one request
-            // (free-tier quota is counted per request). Fallbacks start only if it fails fast or
-            // is still silent after PRIMARY_WAIT_MS; then a few models run at once and the first
-            // answer wins. Models the quota tracker knows are out of quota are skipped, and if the
-            // user's own model is one of them the first free fallback starts straight away.
-            val plan = GeminiModels.plan(model) { quota.isBlocked(it) }
-            val done = ExecutorCompletionService<Pair<String, HttpResult>>(POOL)
-            val fallbacks = plan.fallbacks.toMutableList()
-            var outstanding = 0
-            var primaryInFlight = true
-            var fannedOut = false
-            fun extrasInFlight() = outstanding - if (primaryInFlight) 1 else 0
-            fun launchNext(): Boolean {
-                while (fallbacks.isNotEmpty()) {
-                    val m = fallbacks.removeAt(0)
-                    // A 429 seen since the plan was made may have blocked this one.
-                    if (quota.isBlocked(m)) continue
-                    done.submit { m to ask(m, b64) }
-                    outstanding++
-                    return true
-                }
-                return false
-            }
-            fun fanOut() {
-                fannedOut = true
-                while (extrasInFlight() < MAX_EXTRA_IN_FLIGHT && launchNext()) { /* keep launching */ }
-            }
-            done.submit { plan.first to ask(plan.first, b64) }
-            outstanding++
-            val errors = mutableListOf<Pair<String, HttpResult>>()
-            while (true) {
-                if (outstanding == 0) {
-                    fanOut()
-                    if (outstanding == 0) break
-                    continue
-                }
-                val future = if (!fannedOut) {
-                    done.poll(PRIMARY_WAIT_MS, TimeUnit.MILLISECONDS)
-                } else {
-                    done.take()
-                }
-                if (future == null) {
-                    fanOut()
-                    continue
-                }
-                outstanding--
-                val (m, res) = try {
-                    future.get()
-                } catch (e: ExecutionException) {
-                    throw e.cause ?: e
-                }
-                if (m == plan.first) primaryInFlight = false
-                if (res.code in 200..299) {
-                    val text = handle(res)
-                    if (text != EMPTY) return text
-                }
-                errors += m to res
-                if (isKeyOrRegionError(res)) return "$m: ${handle(res)}"
-                // After the first failure keep up to MAX_EXTRA_IN_FLIGHT fallbacks running.
-                fanOut()
-            }
-            // Every model that was asked is out of free quota (404s only mean "no such model").
-            val real = errors.filter { it.second.code != 404 }
-            if (real.isNotEmpty() && real.all { it.second.code == 429 }) return ALL_QUOTA
-            // Report the most telling error: the user's own model first, never a missing model (404).
-            val (m, res) = errors.sortedBy { (em, er) -> (if (er.code == 404) 2 else 0) + (if (em == model) 0 else 1) }
-                .first()
-            "$m: ${handle(res)}"
+            race { m, mode -> imageBody(m, b64, mode) }.text
         } catch (e: IOException) {
-            "لا يوجد اتصال"
+            NO_CONNECTION
         } catch (e: Exception) {
             "خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim()
         }
+    }
+
+    /** A question already read on the device: text only, no image (fewer tokens, faster). */
+    override fun answerText(prompt: String): Reply {
+        return try {
+            val outcome = race { m, mode -> textBody(m, prompt, mode) }
+            when {
+                outcome.ok -> Reply.answer(outcome.text)
+                outcome.final -> Reply.error(outcome.text)
+                else -> Reply.empty(outcome.text)
+            }
+        } catch (e: IOException) {
+            Reply.error(NO_CONNECTION)
+        } catch (e: Exception) {
+            Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
+        }
+    }
+
+    /**
+     * What [race] ended with: the answer ([ok]), or a short Arabic error. [final] marks errors that
+     * would hit any other request too (quota, key, region), so trying the image instead is pointless.
+     */
+    private class Outcome(val text: String, val ok: Boolean, val final: Boolean)
+
+    /**
+     * Asks the models for one request whose body [body] builds per model and thinking mode.
+     *
+     * Free-tier models are often overloaded (503) or out of quota (429), and quota is per model. The
+     * first model goes alone, so a healthy call costs exactly one request (free-tier quota is counted
+     * per request). Fallbacks start only if it fails fast or is still silent after PRIMARY_WAIT_MS;
+     * then a few models run at once and the first answer wins. Models the quota tracker knows are out
+     * of quota are skipped, and if the user's own model is one of them the first free fallback starts
+     * straight away.
+     */
+    private fun race(body: (String, ThinkingMode) -> String): Outcome {
+        val plan = GeminiModels.plan(model) { quota.isBlocked(it) }
+        val done = ExecutorCompletionService<Pair<String, HttpResult>>(POOL)
+        val fallbacks = plan.fallbacks.toMutableList()
+        var outstanding = 0
+        var primaryInFlight = true
+        var fannedOut = false
+        fun extrasInFlight() = outstanding - if (primaryInFlight) 1 else 0
+        fun launchNext(): Boolean {
+            while (fallbacks.isNotEmpty()) {
+                val m = fallbacks.removeAt(0)
+                // A 429 seen since the plan was made may have blocked this one.
+                if (quota.isBlocked(m)) continue
+                done.submit { m to ask(m) { mode -> body(m, mode) } }
+                outstanding++
+                return true
+            }
+            return false
+        }
+        fun fanOut() {
+            fannedOut = true
+            while (extrasInFlight() < MAX_EXTRA_IN_FLIGHT && launchNext()) { /* keep launching */ }
+        }
+        done.submit { plan.first to ask(plan.first) { mode -> body(plan.first, mode) } }
+        outstanding++
+        val errors = mutableListOf<Pair<String, HttpResult>>()
+        while (true) {
+            if (outstanding == 0) {
+                fanOut()
+                if (outstanding == 0) break
+                continue
+            }
+            val future = if (!fannedOut) {
+                done.poll(PRIMARY_WAIT_MS, TimeUnit.MILLISECONDS)
+            } else {
+                done.take()
+            }
+            if (future == null) {
+                fanOut()
+                continue
+            }
+            outstanding--
+            val (m, res) = try {
+                future.get()
+            } catch (e: ExecutionException) {
+                throw e.cause ?: e
+            }
+            if (m == plan.first) primaryInFlight = false
+            if (res.code in 200..299) {
+                val text = handle(res)
+                if (text != EMPTY) return Outcome(text, ok = true, final = false)
+            }
+            errors += m to res
+            if (isKeyOrRegionError(res)) return Outcome("$m: ${handle(res)}", ok = false, final = true)
+            // After the first failure keep up to MAX_EXTRA_IN_FLIGHT fallbacks running.
+            fanOut()
+        }
+        // Every model that was asked is out of free quota (404s only mean "no such model").
+        val real = errors.filter { it.second.code != 404 }
+        if (real.isNotEmpty() && real.all { it.second.code == 429 }) return Outcome(ALL_QUOTA, ok = false, final = true)
+        // Report the most telling error: the user's own model first, never a missing model (404).
+        val (m, res) = errors.sortedBy { (em, er) -> (if (er.code == 404) 2 else 0) + (if (em == model) 0 else 1) }
+            .first()
+        return Outcome("$m: ${handle(res)}", ok = false, final = false)
     }
 
     /**
@@ -141,7 +171,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
         }
     }
 
-    private fun buildBody(m: String, b64: String, mode: ThinkingMode): String {
+    private fun imageBody(m: String, b64: String, mode: ThinkingMode): String {
         val parts = JSONArray()
             .put(JSONObject().put("text", ScreenImage.PROMPT))
             .put(
@@ -150,13 +180,20 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
                     JSONObject().put("mime_type", "image/jpeg").put("data", b64)
                 )
             )
-        // Thinking tokens count toward maxOutputTokens, so leave room beyond the short answer.
         // Low media resolution cuts the image from ~1080 to ~250 tokens without hurting accuracy on
         // screenshots; it belongs in generationConfig, not on the image part.
+        return requestBody(m, parts, mode, mediaLow = true)
+    }
+
+    private fun textBody(m: String, prompt: String, mode: ThinkingMode): String =
+        requestBody(m, JSONArray().put(JSONObject().put("text", prompt)), mode, mediaLow = false)
+
+    private fun requestBody(m: String, parts: JSONArray, mode: ThinkingMode, mediaLow: Boolean): String {
+        // Thinking tokens count toward maxOutputTokens, so leave room beyond the short answer.
         val gen = JSONObject()
             .put("temperature", 0)
             .put("maxOutputTokens", 1024)
-            .put("mediaResolution", "MEDIA_RESOLUTION_LOW")
+        if (mediaLow) gen.put("mediaResolution", "MEDIA_RESOLUTION_LOW")
         // Least thinking = fastest answer. The option differs per model, see GeminiModels.
         GeminiModels.thinkingConfig(m, mode)?.let { gen.put("thinkingConfig", it) }
         return JSONObject()
@@ -173,16 +210,16 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
      * timeout); a vaguer "invalid argument" is only remembered once a retry succeeds. A 429 blocks the
      * model (and its quota group) for the retryDelay Google gave.
      */
-    private fun ask(m: String, b64: String): HttpResult {
+    private fun ask(m: String, body: (ThinkingMode) -> String): HttpResult {
         val known = GeminiModels.thinkingModeFor(m, thinking.snapshot())
         val first = if (known == ThinkingMode.UNKNOWN) ThinkingMode.MINIMAL else known
         var mode = first
-        var res = post(m, buildBody(m, b64, mode))
+        var res = post(m, body(mode))
         while (isThinkingError(res)) {
             val named = GeminiModels.namesThinkingOption(errorMessage(res.body))
             mode = GeminiModels.nextThinkingMode(m, mode) ?: break
             if (named) thinking.learn(m, mode)
-            res = post(m, buildBody(m, b64, mode))
+            res = post(m, body(mode))
         }
         if (res.code in 200..299) {
             quota.clear(m)
@@ -247,6 +284,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
         }
 
         private const val EMPTY = "لم يتم الحصول على إجابة"
+        private const val NO_CONNECTION = "لا يوجد اتصال"
         private const val ALL_QUOTA = "انتهى الحد المجاني لكل النماذج حاليًا — جرّب لاحقًا أو استخدم Claude"
 
         /**
@@ -326,7 +364,8 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
 
         /** Errors no other model can fix, so falling back would only waste time. */
         private fun isKeyOrRegionError(code: Int, body: String): Boolean {
-            if (code == 403) return true
+            // Google answers a bad or deleted key with 401 (older responses used 400 "API key not valid").
+            if (code == 401 || code == 403) return true
             val msg = errorMessage(body)
             return code == 400 &&
                 (msg.contains("API key", ignoreCase = true) || msg.contains("location", ignoreCase = true))
@@ -340,6 +379,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
                 code == 429 -> "تم تجاوز الحد المجاني، انتظر قليلاً"
                 code == 503 || code == 500 || code == 504 ->
                     "خوادم Gemini مشغولة الآن، جرّب بعد قليل"
+                code == 401 -> "مفتاح API غير صالح"
                 (code == 400 || code == 403) &&
                     (msg.contains("API key", ignoreCase = true) ||
                         msg.contains("permission", ignoreCase = true) ||

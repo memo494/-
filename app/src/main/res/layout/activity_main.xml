@@ -198,6 +198,26 @@
                 android:textSize="14sp" />
         </RadioGroup>
 
+        <CheckBox
+            android:id="@+id/smartReadingCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="قراءة السؤال على الجهاز + ذاكرة الأجوبة (أسرع، والسؤال المكرر فوري)" />
+
+        <CheckBox
+            android:id="@+id/highlightCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="تحديد الجواب الصحيح بمربع أخضر" />
+
+        <Button
+            android:id="@+id/clearMemoryButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="مسح الذاكرة" />
+
         <Button
             android:id="@+id/overlayButton"
             android:layout_width="match_parent"
