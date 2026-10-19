@@ -809,6 +809,7 @@ class OverlayService : Service() {
         val bypass = if (!fromAuto && SystemClock.uptimeMillis() - lastHitAt < CORRECTION_WINDOW_MS) lastHitKey else null
         val capturedW = bmp.width
         val capturedH = bmp.height
+        val started = SystemClock.uptimeMillis()
         val masks = captureMasks.remove(bmp).orEmpty().map { PxRect(it.left, it.top, it.right, it.bottom) }
         scope.launch {
             val solved = withContext(Dispatchers.IO) {
@@ -826,7 +827,10 @@ class OverlayService : Service() {
             lastHitKey = solved.memoryKey
             lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
             shownImage = solved.image ?: shownImage
-            showPanel(solved.text)
+            // Seconds and the model that answered, to see what makes an answer slow.
+            val secs = (SystemClock.uptimeMillis() - started) / 100 / 10.0
+            val via = if (solved.memoryKey != null) "" else client?.lastModel?.removePrefix("gemini-")?.let { " · $it" } ?: ""
+            showPanel(if (solved.isAnswer) "${solved.text}   ($secs ث$via)" else solved.text)
             if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
             // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
             val rect = solved.rect

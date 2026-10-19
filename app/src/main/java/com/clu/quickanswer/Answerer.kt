@@ -45,6 +45,9 @@ interface Answerer {
     /** The image last sent (after cropping/scaling), so the user can check it. */
     val lastSent: Bitmap?
 
+    /** The model that gave the last answer (shown next to it, to see when a slower fallback answered). */
+    val lastModel: String? get() = null
+
     /**
      * Opens a connection ahead of the first question so the answer does not pay for the TLS
      * handshake. May block on the network, so call it off the main thread. Default: nothing to do.

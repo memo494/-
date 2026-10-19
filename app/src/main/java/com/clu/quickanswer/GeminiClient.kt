@@ -24,6 +24,9 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
     private val model = Prefs.cleanModel(model).ifEmpty { Prefs.DEFAULT_MODEL }
 
     private val quota = GeminiRuntime.quota
+
+    @Volatile override var lastModel: String? = null
+        private set
     private val thinking = GeminiRuntime.thinking
 
     /** The image last sent to Gemini (after cropping/scaling), so the user can check it. */
@@ -128,7 +131,10 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
             if (m == plan.first) primaryInFlight = false
             if (res.code in 200..299) {
                 val text = handle(res)
-                if (text != EMPTY) return Outcome(text, ok = true, final = false)
+                if (text != EMPTY) {
+                    lastModel = m
+                    return Outcome(text, ok = true, final = false)
+                }
             }
             errors += m to res
             if (isKeyOrRegionError(res)) return Outcome("$m: ${handle(res)}", ok = false, final = true)
@@ -263,8 +269,8 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
     companion object {
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
         // Full detail for small question text (same as Claude); 1024/72 lost readability on busy screens.
-        private const val IMAGE_MAX_SIDE = 1600
-        private const val IMAGE_QUALITY = 85
+        private const val IMAGE_MAX_SIDE = 1280
+        private const val IMAGE_QUALITY = 80
 
         // At most this many fallback models run next to (or instead of) the first one.
         private const val MAX_EXTRA_IN_FLIGHT = 2
