@@ -218,6 +218,41 @@
             android:layout_height="wrap_content"
             android:text="مسح الذاكرة" />
 
+        <CheckBox
+            android:id="@+id/volumeKeyCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="زر خفض الصوت = جواب (بدل لمس الفقاعة)" />
+
+        <TextView
+            android:id="@+id/volumeKeyStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAlignment="viewStart"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/accessibilityButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="تفعيل زر الصوت (إمكانية الوصول)" />
+
+        <TextView
+            android:id="@+id/volumeKeyHelp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAlignment="viewStart"
+            android:textSize="12sp"
+            android:text="اضغط الزر أعلاه، ثم اختر «Clu: زر الصوت للإجابة» وفعّله. إذا كان المفتاح رماديًا ويقول «إعداد مقيّد»: اضغط زر «معلومات التطبيق» أدناه ← النقاط الثلاث (⋮) أعلى الشاشة ← «السماح بالإعدادات المقيّدة»، ثم ارجع وفعّله. على هواتف شاومي: من معلومات التطبيق اجعل «توفير البطارية» على «بلا قيود» وفعّل «التشغيل التلقائي» حتى لا يتوقف." />
+
+        <Button
+            android:id="@+id/appInfoButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="معلومات التطبيق" />
+
         <Button
             android:id="@+id/overlayButton"
             android:layout_width="match_parent"

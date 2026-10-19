@@ -51,6 +51,13 @@ object Prefs {
     /** Draw a green box around the right option on screen. Read at each answer. */
     fun highlightAnswer(c: Context): Boolean = sp(c).getBoolean("highlight_answer", true)
 
+    /** Volume down asks for an answer (needs the accessibility service on). Read at each key press. */
+    fun volumeKey(c: Context): Boolean = sp(c).getBoolean("volume_key", true)
+
+    fun saveVolumeKey(c: Context, on: Boolean) {
+        sp(c).edit().putBoolean("volume_key", on).apply()
+    }
+
     fun saveReading(c: Context, smart: Boolean, highlight: Boolean) {
         sp(c).edit().putBoolean("smart_reading", smart).putBoolean("highlight_answer", highlight).apply()
     }

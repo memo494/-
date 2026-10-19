@@ -56,6 +56,12 @@ class OverlayService : Service() {
     companion object {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
+
+        /**
+         * Set while the bubble runs: asks for an answer, as a bubble tap does. [VolumeKeyService]
+         * calls it on the main thread when volume down is pressed; null means the key is left alone.
+         */
+        @Volatile var volumeTrigger: (() -> Unit)? = null
         private const val CHANNEL_ID = "clu_overlay"
         private const val NOTIF_ID = 1
         private const val ACTION_STOP = "com.clu.quickanswer.STOP"
@@ -197,6 +203,7 @@ class OverlayService : Service() {
 
         setupCapture(proj)
         createBubble()
+        volumeTrigger = { answerNow() }
         return START_NOT_STICKY
     }
 
@@ -993,6 +1000,7 @@ class OverlayService : Service() {
     // ---------------------------------------------------------------- lifecycle
 
     override fun onDestroy() {
+        volumeTrigger = null
         autoJob?.cancel()
         scope.cancel()
         handler.removeCallbacksAndMessages(null)

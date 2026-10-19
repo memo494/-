@@ -38,6 +38,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var smartReadingCheck: CheckBox
     private lateinit var highlightCheck: CheckBox
     private lateinit var clearMemoryButton: Button
+    private lateinit var volumeKeyCheck: CheckBox
+    private lateinit var volumeKeyStatus: TextView
 
     // Model ids in the same order as the spinner entries.
     private var modelIds: List<String> = emptyList()
@@ -100,6 +102,19 @@ class MainActivity : AppCompatActivity() {
         smartReadingCheck.isChecked = Prefs.smartReading(this)
         highlightCheck.isChecked = Prefs.highlightAnswer(this)
         AnswerStore.init(this)
+        volumeKeyCheck = findViewById(R.id.volumeKeyCheck)
+        volumeKeyStatus = findViewById(R.id.volumeKeyStatus)
+        volumeKeyCheck.isChecked = Prefs.volumeKey(this)
+        findViewById<Button>(R.id.accessibilityButton).setOnClickListener {
+            try {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            } catch (_: Exception) {
+                Toast.makeText(this, "افتح الإعدادات ← إمكانية الوصول", Toast.LENGTH_LONG).show()
+            }
+        }
+        findViewById<Button>(R.id.appInfoButton).setOnClickListener {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        }
         clearMemoryButton.setOnClickListener {
             AnswerStore.runAfterLoad {
                 AnswerStore.memory.clear()
@@ -157,10 +172,19 @@ class MainActivity : AppCompatActivity() {
         // list was last drawn.
         refreshModelsButton.isEnabled = !GeminiRuntime.refreshingModels
         rebuildModelSpinner(selectedModelId())
+        updateVolumeKeyStatus()
         // The count is known once the file has been loaded (in the background).
         AnswerStore.runAfterLoad {
             val n = AnswerStore.memory.size
             runOnUiThread { if (!isDestroyed) updateMemoryButton(n) }
+        }
+    }
+
+    private fun updateVolumeKeyStatus() {
+        volumeKeyStatus.text = if (VolumeKeyService.isEnabled(this)) {
+            "✓ زر الصوت مفعّل: اضغط خفض الصوت أثناء عمل الفقاعة"
+        } else {
+            "زر الصوت غير مفعّل بعد في إمكانية الوصول"
         }
     }
 
@@ -232,6 +256,7 @@ class MainActivity : AppCompatActivity() {
             else PanelPlacement.Mode.TOP
         )
         Prefs.saveReading(this, smartReadingCheck.isChecked, highlightCheck.isChecked)
+        Prefs.saveVolumeKey(this, volumeKeyCheck.isChecked)
     }
 
     private fun updateOverlayButton() {
