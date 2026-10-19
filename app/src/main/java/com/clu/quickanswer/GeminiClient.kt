@@ -181,9 +181,10 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
                     JSONObject().put("mime_type", "image/jpeg").put("data", b64)
                 )
             )
-        // Low media resolution cuts the image from ~1080 to ~250 tokens without hurting accuracy on
-        // screenshots; it belongs in generationConfig, not on the image part.
-        return requestBody(m, parts, mode, mediaLow = true)
+        // Default media resolution on purpose. LOW (~250 tokens) saved only ~0.3 s and was fine for big
+        // banner text, but on games with small question text on a busy screen the model could no longer
+        // read it and answered "no question".
+        return requestBody(m, parts, mode, mediaLow = false)
     }
 
     private fun textBody(m: String, prompt: String, mode: ThinkingMode): String =
@@ -261,8 +262,9 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
 
     companion object {
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-        private const val IMAGE_MAX_SIDE = 1024
-        private const val IMAGE_QUALITY = 72
+        // Full detail for small question text (same as Claude); 1024/72 lost readability on busy screens.
+        private const val IMAGE_MAX_SIDE = 1600
+        private const val IMAGE_QUALITY = 85
 
         // At most this many fallback models run next to (or instead of) the first one.
         private const val MAX_EXTRA_IN_FLIGHT = 2
