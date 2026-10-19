@@ -59,6 +59,50 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    // Question bank: the answer memory saved to / merged from a file the user picks (e.g. to share
+    // with friends who play the same games, or to move to a new phone).
+    private val exportLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            if (uri == null) return@registerForActivityResult
+            val app = applicationContext
+            AnswerStore.runAfterLoad {
+                val ok = try {
+                    app.contentResolver.openOutputStream(uri, "wt")?.use {
+                        it.write(AnswerStore.exportJson().toByteArray(Charsets.UTF_8))
+                    } != null
+                } catch (_: Exception) {
+                    false
+                }
+                val n = AnswerStore.memory.size
+                runOnUiThread {
+                    Toast.makeText(app, if (ok) "تم تصدير $n سؤال" else "تعذّر حفظ الملف", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+    private val importLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri == null) return@registerForActivityResult
+            val app = applicationContext
+            AnswerStore.runAfterLoad {
+                val added = try {
+                    val text = app.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+                    if (text == null) -1 else AnswerStore.memory.merge(text)
+                } catch (_: Exception) {
+                    -1
+                }
+                val n = AnswerStore.memory.size
+                runOnUiThread {
+                    Toast.makeText(
+                        app,
+                        if (added < 0) "الملف ليس بنك أسئلة من Clu" else "أُضيف $added سؤال (المجموع $n)",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    if (!isDestroyed) updateMemoryButton(n)
+                }
+            }
+        }
+
     private val notificationLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -114,6 +158,12 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.appInfoButton).setOnClickListener {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        }
+        findViewById<Button>(R.id.exportMemoryButton).setOnClickListener {
+            exportLauncher.launch("clu-question-bank.json")
+        }
+        findViewById<Button>(R.id.importMemoryButton).setOnClickListener {
+            importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
         }
         clearMemoryButton.setOnClickListener {
             AnswerStore.runAfterLoad {

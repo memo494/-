@@ -153,6 +153,27 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
         }
     }
 
+    /**
+     * Adds the entries of [json] (what [encode] produced, e.g. a friend's exported memory) without
+     * removing anything. An entry for a question already remembered is skipped: your own answer
+     * wins. Returns how many entries were added, or -1 when [json] is not readable.
+     */
+    fun merge(json: String): Int {
+        val incoming = AnswerMemory(Int.MAX_VALUE)
+        if (!incoming.restore(json)) return -1
+        var added = 0
+        synchronized(this) {
+            for (e in incoming.entries.values) {
+                if (entries.containsKey(e.key)) continue
+                entries[e.key] = e
+                added++
+            }
+            while (entries.size > capacity) entries.remove(entries.keys.first())
+        }
+        if (added > 0) onChange?.invoke()
+        return added
+    }
+
     companion object {
         const val DEFAULT_CAPACITY = 5000
 

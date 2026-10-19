@@ -139,3 +139,20 @@ class AnswerMemoryTest {
         assertEquals(2, changes)
     }
 }
+
+class AnswerMemoryMergeTest {
+    @org.junit.Test
+    fun merge_addsNewQuestions_keepsYourOwnAnswers() {
+        val opts = listOf("أ", "ب", "ج")
+        val mine = AnswerMemory()
+        mine.put("سؤال مشترك طويل بما يكفي", opts, false, "أ")
+        val friend = AnswerMemory()
+        friend.put("سؤال مشترك طويل بما يكفي", opts, false, "ب")
+        friend.put("سؤال جديد عند الصديق", opts, false, "ج")
+        org.junit.Assert.assertEquals(1, mine.merge(friend.encode()))
+        org.junit.Assert.assertEquals("أ", mine.lookup("سؤال مشترك طويل بما يكفي", opts, false)?.answer)
+        org.junit.Assert.assertEquals("ج", mine.lookup("سؤال جديد عند الصديق", opts, false)?.answer)
+        org.junit.Assert.assertEquals(-1, mine.merge("{broken"))
+        org.junit.Assert.assertEquals(2, mine.size)
+    }
+}

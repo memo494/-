@@ -40,6 +40,9 @@ object AnswerStore {
         io.execute(block)
     }
 
+    /** The whole memory as JSON, for exporting to a file. Call on [runAfterLoad]'s thread. */
+    fun exportJson(): String = memory.encode()
+
     private fun scheduleSave() {
         if (!saveQueued.compareAndSet(false, true)) return
         io.execute {
