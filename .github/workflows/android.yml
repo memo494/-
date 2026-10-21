@@ -1,7 +1,7 @@
 name: Android CI
 
+# Manual only (Actions tab -> Run workflow), to keep account activity low.
 on:
-  push:
   workflow_dispatch:
 
 permissions:
