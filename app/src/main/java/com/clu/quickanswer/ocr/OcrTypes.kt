@@ -52,4 +52,5 @@ data class Question(
     val digitKeys: Map<Char, PxRect> = emptyMap(),
     val bannerRect: PxRect? = null,
     val numericSubmit: PxRect? = null,
+    val optionTextRects: List<PxRect> = emptyList(),
 )
