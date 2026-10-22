@@ -37,6 +37,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.clu.quickanswer.ocr.ArabicOcr
+import com.clu.quickanswer.ocr.LatinOcr
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
 import kotlinx.coroutines.CoroutineScope
@@ -153,7 +154,9 @@ class OverlayService : Service() {
     // or if it cannot load on this phone). Every use holds ocrLock, so it is never closed mid-read.
     private val ocrLock = Any()
     private var ocr: ArabicOcr? = null
-    private var destroyed = false
+    private val latinOcrLock = Any()
+    private var latinOcr: LatinOcr? = null
+    @Volatile private var destroyed = false
 
     // The green box around the right option (its own touch-through window), shown and hidden with the panel.
     private var highlight: View? = null
@@ -199,6 +202,7 @@ class OverlayService : Service() {
         warmUp()
         AnswerStore.init(this)
         loadOcr()
+        loadLatinOcr()
 
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val proj = try {
@@ -991,11 +995,33 @@ class OverlayService : Service() {
         return Solved(text, null, c.lastSent, null, imageReply.isAnswer)
     }
 
-    /** The question on [bmp], or null when it cannot be read (or the reader is not loaded). */
-    private fun readQuestion(bmp: Bitmap, masks: List<PxRect>): Question? = try {
-        synchronized(ocrLock) { ocr?.read(bmp, masks) }
-    } catch (t: Throwable) {
-        null
+    /**
+     * Use the existing offline Arabic reader first. If it cannot read this screen,
+     * try the separately bundled offline Latin recognizer before sending a full
+     * screenshot to the cloud. Each reader must fail closed, never guess text.
+     */
+    private fun readQuestion(bmp: Bitmap, masks: List<PxRect>): Question? {
+        val arabic = try {
+            synchronized(ocrLock) { ocr?.read(bmp, masks) }
+        } catch (_: Exception) {
+            null
+        }
+        if (arabic != null) return arabic
+        return try {
+            synchronized(latinOcrLock) { latinOcr?.read(bmp, masks) }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Load the bundled English OCR alongside Arabic without blocking service startup. */
+    private fun loadLatinOcr() {
+        scope.launch(Dispatchers.IO) {
+            val loaded = try { LatinOcr() } catch (_: Exception) { null }
+            synchronized(latinOcrLock) {
+                if (destroyed) loaded?.close() else latinOcr = loaded
+            }
+        }
     }
 
     /** A smaller copy of [bmp] for "آخر صورة" (the caller recycles [bmp]). */
@@ -1210,6 +1236,7 @@ class OverlayService : Service() {
     override fun onDestroy() {
         // projection.stop() below calls onStop(): that is our own stop, not one to offer a restart for.
         stoppingByUs = true
+        destroyed = true
         volumeTrigger = null
         autoJob?.cancel()
         scope.cancel()
@@ -1222,11 +1249,10 @@ class OverlayService : Service() {
         // and closes the reader (native) once nothing uses it; a reader that finishes loading
         // meanwhile finds [destroyed] set and closes itself.
         Thread {
-            val reader = synchronized(ocrLock) {
-                destroyed = true
-                ocr.also { ocr = null }
-            }
+            val reader = synchronized(ocrLock) { ocr.also { ocr = null } }
+            val latinReader = synchronized(latinOcrLock) { latinOcr.also { latinOcr = null } }
             reader?.close()
+            latinReader?.close()
         }.start()
         bubble?.let {
             if (it.isAttachedToWindow) {
