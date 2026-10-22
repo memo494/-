@@ -1021,10 +1021,11 @@ class OverlayService : Service() {
         }
         // Screen words are localized from the screenshot, not guessed from
         // option indices or normalized coordinates returned by the model.
-        val autoTouchRequested = q == null && autoMode && Prefs.autoTouch(this)
+        val detectQuizImage = q == null
+        val autoTouchRequested = detectQuizImage && autoMode && Prefs.autoTouch(this)
         var choiceWords: List<PxRect>? = null
         var visual: GameVisualLayout.Detected? = null
-        if (autoTouchRequested) {
+        if (detectQuizImage) {
             try {
                 val pixels = IntArray(bmp.width * bmp.height)
                 bmp.getPixels(pixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
@@ -1037,7 +1038,7 @@ class OverlayService : Service() {
         // A large animated HUD can fool the image model into missing an obvious
         // central question. When real answer text/keypad is *visible*, retry on
         // a tightly focused image with the overlay and HUD removed.
-        val imageReply = if (autoTouchRequested &&
+        val imageReply = if (detectQuizImage &&
             (choiceWords != null || visual != null) &&
             firstImageReply.kind == Reply.Kind.ANSWER &&
             ScreenImage.isNoQuestion(firstImageReply.text)
