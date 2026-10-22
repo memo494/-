@@ -96,6 +96,9 @@ class ScreenReader(
             optionRects = found.buttons,
             numeric = found.numeric,
             meanConfidence = confidence,
+            digitKeys = found.digitKeys,
+            bannerRect = found.banner,
+            numericSubmit = found.numericSubmit,
         )
         return Reading(question, null, found, qLines, oLines, layoutMs, (System.nanoTime() - t1) / 1e6)
     }
