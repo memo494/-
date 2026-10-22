@@ -27,13 +27,12 @@ object ScreenImage {
             "If the central question asks for a number, give ONLY the numeric answer " +
             "using ASCII digits 0-9, preferably 1 to 4 digits when possible; " +
             "do not include a sentence, units, or the key number you tapped. " +
-            "If four choices are arranged in TWO COLUMNS and TWO ROWS, answer ONLY " +
-            "the position: 1 = upper RIGHT, 2 = upper LEFT, " +
-            "3 = lower RIGHT, 4 = lower LEFT. " +
-            "For a single vertical column of choices, answer ONLY the position " +
-            "from top to bottom, starting at 1. " +
-            "The numbers are positions, not labels; do not confuse a numeric keypad " +
-            "with multiple choice answers. If the question is clearly visible, " +
+            "For multiple-choice questions, return ONLY the exact printed " +
+            "Arabic words of the correct answer as they appear inside its " +
+            "answer button (for example: 'سبونج بوب' or 'القلب'). " +
+            "Do NOT return the option position, index, letter, coordinates or " +
+            "an explanation. For a numeric keypad question return ONLY digits. " +
+            "If the question is clearly visible, " +
             "never reply that there is no question. If the answer cannot be determined " +
             "from the image, reply exactly 'غير متأكد'. " +
             "Only if there is genuinely no central quiz question, reply exactly: " + NO_QUESTION
@@ -45,6 +44,24 @@ object ScreenImage {
     fun prepare(bitmap: Bitmap, maxSide: Int = 1600, quality: Int = 85): Prepared? {
         if (isMostlyDark(bitmap)) return null
         return encode(cropToContent(bitmap), maxSide, quality)
+    }
+
+    /**
+     * Fallback image for a visible quiz that was misclassified as "no question".
+     * Zoom in on the parchment and answer controls, excluding the scoreboard,
+     * avatars, side cards, and our notification across the top.
+     *
+     * This crop is ONLY for model recognition. Screen coordinates and safety
+     * fingerprints always use the uncropped original capture.
+     */
+    fun focusQuiz(bitmap: Bitmap, whiteKeypad: Boolean): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        val left = (width * 0.19f).toInt().coerceIn(0, width - 2)
+        val right = (width * 0.78f).toInt().coerceIn(left + 1, width)
+        val top = if (whiteKeypad) 0 else (height * 0.23f).toInt()
+        val bottom = (height * 0.94f).toInt().coerceIn(top + 1, height)
+        return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
     }
 
     /** Rows/columns sampled from a small copy; "dark" = luminance below 40. */
