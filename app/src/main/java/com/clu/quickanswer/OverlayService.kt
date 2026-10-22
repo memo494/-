@@ -37,6 +37,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.clu.quickanswer.ocr.ArabicOcr
+import com.clu.quickanswer.ocr.GameVisualLayout
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
 import kotlinx.coroutines.CoroutineScope
@@ -1021,6 +1022,48 @@ class OverlayService : Service() {
                     memory.put(q.questionText, q.options, q.numeric, r.answer)
                 }
                 return resolved(r, c.lastSent)
+            }
+        }
+        // The strict OCR recognizes only the original vertical-button skin.
+        // When disabled or unable to read a different game UI, use visual geometry
+        // independently. The cloud model chooses an index/digits; it NEVER supplies
+        // arbitrary screen coordinates.
+        if (q == null && imageReply.kind == Reply.Kind.ANSWER &&
+            Prefs.autoTouch(this) && autoMode
+        ) {
+            val geometry = try {
+                val w = bmp.width
+                val h = bmp.height
+                val pixels = IntArray(w * h)
+                bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+                GameVisualLayout.detect(pixels, w, h)
+            } catch (_: Exception) {
+                null
+            }
+            if (geometry != null) {
+                val option = if (geometry.kind == GameVisualLayout.Kind.CHOICE_GRID) {
+                    val index = AnswerParser.optionNumber(text, geometry.options.size)
+                    index?.let { geometry.options.getOrNull(it - 1) }
+                } else null
+                val number = if (geometry.kind != GameVisualLayout.Kind.CHOICE_GRID) {
+                    AnswerParser.numberOnly(text)
+                } else null
+                val actions = if (option != null || number != null) {
+                    TouchPlanner.plan(
+                        number ?: text, option, geometry.digits, geometry.submit,
+                        bmp.width, bmp.height
+                    )
+                } else null
+                // A numeric answer should be confirmed, not just typed, except for
+                // the dark skin which submits automatically after the last digit.
+                val complete = geometry.kind != GameVisualLayout.Kind.NUMERIC_WHITE ||
+                    geometry.submit != null
+                if (actions != null && complete) {
+                    val guard = geometry.questionArea
+                    return Solved(text, option, c.lastSent, null, isAnswer = true,
+                        touches = actions, guardRect = guard,
+                        guardStamp = fingerprint(bmp, guard))
+                }
             }
         }
         return Solved(text, null, c.lastSent, null, imageReply.isAnswer)
