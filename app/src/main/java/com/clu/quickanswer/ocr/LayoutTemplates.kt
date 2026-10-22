@@ -157,6 +157,19 @@ class LayoutTemplates(private val capacity: Int = 60) {
         }
     }
 
+    /** What [merge] did: [added] templates are new; [skipped] were already known, invalid, or did not fit. */
+    class MergeResult(val added: Int, val skipped: Int)
+
+    /**
+     * Adds the templates of [json] (what [encode] produced, e.g. on another phone) without removing
+     * or changing any of yours. An incoming template is skipped when you have one with its id or
+     * the same layout (the rule [add] uses), when it is not valid, or when the store is full (your
+     * own templates always stay). Added templates keep their state and hits, with misses reset to 0.
+     * Returns null when [json] is not readable (not JSON, another version, no "templates" array).
+     * Calls [onChange] once when something was added. Never throws.
+     */
+    fun merge(json: String): MergeResult? = TODO("issue: bank file with templates")
+
     /** The least recently used CANDIDATE, else the least recently used TRUSTED one (never [except]). */
     private fun evictionCandidate(except: String?): LayoutTemplate? {
         val others = templates.values.filter { it.id != except }
