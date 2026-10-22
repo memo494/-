@@ -3,13 +3,14 @@ package com.clu.quickanswer.ocr
 import kotlin.math.max
 import kotlin.math.min
 
-/** Arabic text normalisation and string similarity for comparing OCR output and building cache keys. */
+/** Arabic and Latin text normalisation and string similarity for comparing OCR output and building cache keys. */
 object ArabicText {
 
     /**
      * Comparison form of [s]: diacritics (harakat, Quranic marks, dagger alef) and tatweel are
      * dropped; alef variants become ا, ى becomes ي, ة becomes ه (and Persian ی/ک become ي/ك);
-     * punctuation turns into a space; runs of spaces collapse to one and the ends are trimmed.
+     * ASCII Latin capitals become lowercase for English quiz questions; punctuation turns into a space;
+     * runs of spaces collapse to one and the ends are trimmed.
      */
     fun normalize(s: String): String {
         val sb = StringBuilder(s.length)
@@ -28,6 +29,7 @@ object ArabicText {
                     '\u0649', '\u06CC' -> '\u064A' // alef maqsura, Persian yeh -> yeh
                     '\u0629' -> '\u0647' // teh marbuta -> heh
                     '\u06A9' -> '\u0643' // Persian keheh -> kaf
+                    in 'A'..'Z' -> ch.lowercaseChar() // case-insensitive English OCR/cache matching
                     else -> ch
                 }
             )
