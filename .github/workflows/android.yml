@@ -29,6 +29,10 @@ jobs:
           else
             echo "CLU_KEYSTORE_B64 is not set; signing with the default debug key."
           fi
+      # The unit tests (answer parsing, memory, OCR on real screenshots, Gemini/Claude replies) run
+      # first: a failing test stops the build before a broken APK is published.
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest
       - name: Build debug APK
         run: ./gradlew assembleDebug
       - name: Rename APK

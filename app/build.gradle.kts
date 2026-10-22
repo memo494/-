@@ -16,8 +16,10 @@ android {
         applicationId = "com.clu.quickanswer"
         minSdk = 26
         targetSdk = 35
-        // Must grow with every CI build or Android refuses to install it as an update.
-        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        // Must grow with every CI build or Android refuses to install it as an update. The 1000 keeps
+        // builds of this repository above every build of the old repository (whose runs counted from 1),
+        // so the first build here still installs over an older install signed with the same key.
+        versionCode = 1000 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
         versionName = "1.0.$versionCode"
         // The OCR model runs on onnxruntime-android; only 64-bit ARM phones are supported, which
         // keeps the APK free of the other three ABIs' native libraries.
@@ -85,7 +87,8 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    implementation("com.anthropic:anthropic-java:2.34.0")
+    // Claude is called with plain HttpURLConnection + org.json (see ClaudeApi), like Gemini: the
+    // Anthropic SDK brought Jackson, OkHttp, Apache HttpClient and more for a single request.
     // Arabic OCR (PP-OCRv5 recogniser). Pinned to 1.30.0; the desktop jar used by unit tests must match.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
 
