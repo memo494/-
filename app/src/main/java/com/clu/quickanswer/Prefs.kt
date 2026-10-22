@@ -58,6 +58,13 @@ object Prefs {
         sp(c).edit().putBoolean("vibrate_on_answer", on).apply()
     }
 
+    /** Explicit opt-in: only taps while the floating bubble's automatic (A) mode is on. */
+    fun autoTouch(c: Context): Boolean = sp(c).getBoolean("auto_touch", false)
+
+    fun saveAutoTouch(c: Context, enabled: Boolean) {
+        sp(c).edit().putBoolean("auto_touch", enabled).apply()
+    }
+
     /** Volume down asks for an answer (needs the accessibility service on). Read at each key press. */
     fun volumeKey(c: Context): Boolean = sp(c).getBoolean("volume_key", true)
 
