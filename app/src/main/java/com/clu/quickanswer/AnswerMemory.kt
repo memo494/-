@@ -281,7 +281,12 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
         /** [text] without diacritics, punctuation, spaces and letter variants, with 0-9 digits: the form compared. */
         fun keyOf(text: String): String = ArabicText.key(AnswerParser.asciiDigits(text))
 
-        private val NEGATIONS = setOf("ليس", "ليست", "ليسوا", "لا", "لم", "لن", "غير", "عدا", "الا", "بدون", "دون")
+        private val NEGATIONS = setOf(
+            "ليس", "ليست", "ليسوا", "لا", "لم", "لن", "غير", "عدا", "الا", "بدون", "دون",
+            "not", "no", "never", "except", "without", "neither", "nor"
+        )
+        private val CONTRACTION_NT = Regex("(?i)n['\u2019]t\\b")
+        private val CANNOT = Regex("(?i)\\bcannot\\b")
         private val DIGIT_RUN = Regex("\\d+(?:[.,]\\d+)*")
 
         // An arithmetic sign between two numbers: "12 - 4", "3 × 4", "8 / 2" (x, X and × are one sign).
@@ -302,7 +307,9 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
                     else -> c.toString()
                 }
             }
-            val negations = ArabicText.normalize(ascii).split(' ').filter { it in NEGATIONS }.joinToString(",")
+            // Punctuation turns "isn't" into "isn t", so contractions are expanded first (signature only).
+            val expanded = ascii.replace(CONTRACTION_NT, " not").replace(CANNOT, "can not")
+            val negations = ArabicText.normalize(expanded).split(' ').filter { it in NEGATIONS }.joinToString(",")
             return "$numbers|$negations|$signs"
         }
     }

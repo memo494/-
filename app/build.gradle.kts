@@ -45,6 +45,13 @@ android {
     buildTypes {
         debug {
             if (cluKeystore != null) signingConfig = signingConfigs.getByName("clu")
+            // PR validation is signed by the normal debug key, not the user's
+            // release keystore. Give it its own app id so it can be tested
+            // alongside a signed production install without uninstalling it.
+            if (System.getenv("CI_BETA_BUILD") == "true") {
+                applicationIdSuffix = ".beta"
+                versionNameSuffix = "-beta"
+            }
         }
         release {
             isMinifyEnabled = false
@@ -91,6 +98,8 @@ dependencies {
     // Anthropic SDK brought Jackson, OkHttp, Apache HttpClient and more for a single request.
     // Arabic OCR (PP-OCRv5 recogniser). Pinned to 1.30.0; the desktop jar used by unit tests must match.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
+    // Bundled Latin OCR is ready offline on first launch (no Google Play download).
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 
     testImplementation("junit:junit:4.13.2")
     // Android's org.json is a stub in local unit tests, so bring the real one.

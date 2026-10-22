@@ -1,8 +1,10 @@
 name: Android CI
 
-# Manual only (Actions tab -> Run workflow), to keep account activity low.
+# Manual APK releases; pull requests only build/test (no release publishing).
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -10,6 +12,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      CI_BETA_BUILD: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -20,6 +24,7 @@ jobs:
       # Fixed signing key from the CLU_KEYSTORE_B64 secret (base64 of a PKCS12 keystore), so updates
       # install over the previous version. Without the secret the default debug key is used.
       - name: Restore signing key
+        if: github.event_name == 'workflow_dispatch'
         env:
           CLU_KEYSTORE_B64: ${{ secrets.CLU_KEYSTORE_B64 }}
         run: |

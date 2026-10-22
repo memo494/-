@@ -13,6 +13,26 @@ class AnswerMemoryTest {
     private val opts = listOf("سورة البقرة", "سورة طه", "سورة الإخلاص", "سورة النور")
 
     @Test
+    fun englishQuestion_isFoundOfflineDespiteCaseAndOrderChanges() {
+        val memory = AnswerMemory()
+        val options = listOf("Amman", "Cairo", "DOHA", "Beirut")
+        memory.put("What is the capital of Jordan?", options, false, "Amman")
+        val hit = memory.lookup("WHAT IS THE CAPITAL OF JORDAN?", listOf("beirut", "doha", "AMMAN", "cairo"), false)
+        assertNotNull(hit)
+        assertTrue(hit!!.exact)
+        assertEquals("Amman", hit.answer)
+    }
+
+    @Test
+    fun englishNegationAndNumbersPreventWrongOfflineAnswers() {
+        val memory = AnswerMemory()
+        val options = listOf("Earth", "Mars", "Pluto", "Venus")
+        memory.put("Which of these is NOT a planet in 2026?", options, false, "Pluto")
+        assertNull(memory.lookup("Which of these is a planet in 2026?", options, false))
+        assertNull(memory.lookup("Which of these is not a planet in 2025?", options, false))
+    }
+
+    @Test
     fun exactHit_returnsTheStoredOptionText() {
         val m = AnswerMemory()
         m.put(q, opts, false, "سورة طه")
@@ -266,6 +286,40 @@ class AnswerMemoryNearDuplicateTest {
         val m = AnswerMemory()
         m.put(a, options, false, answer)
         assertNull("'$b' must not hit the answer of '$a'", m.lookup(b, options, false))
+    }
+
+    private val animals = listOf("Dog", "Cat", "Whale", "Bat")
+    private val ringPlanets = listOf("Saturn", "Mars", "Jupiter", "Uranus")
+    private val birds = listOf("Penguin", "Eagle", "Sparrow", "Owl")
+
+    @Test
+    fun contraction_isnt_isNegation() =
+        assertDifferent("Which of these isn't a mammal?", "Which of these is a mammal?", animals, "Bat")
+
+    @Test
+    fun contraction_isnt_withCurlyApostrophe_isNegation() =
+        assertDifferent("Which of these isn\u2019t a mammal?", "Which of these is a mammal?", animals, "Bat")
+
+    @Test
+    fun contraction_doesnt_isNegation() =
+        assertDifferent("Which planet doesn't have rings?", "Which planet does have rings?", ringPlanets, "Mars")
+
+    @Test
+    fun contraction_cant_isNegation() =
+        assertDifferent("Which bird can't fly?", "Which bird can fly?", birds, "Penguin")
+
+    @Test
+    fun cannot_isNegation() =
+        assertDifferent("Which bird cannot fly?", "Which bird can fly?", birds, "Penguin")
+
+    @Test
+    fun englishContraction_identicalQuestionStillHitsExactly() {
+        val m = AnswerMemory()
+        m.put("Which bird can't fly?", birds, false, "Penguin")
+        val hit = m.lookup("Which bird can't fly?", birds, false)
+        assertNotNull(hit)
+        assertTrue(hit!!.exact)
+        assertEquals("Penguin", hit.answer)
     }
 
     @Test

@@ -37,8 +37,13 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.clu.quickanswer.ocr.ArabicOcr
+import com.clu.quickanswer.ocr.ColorLayout
+import com.clu.quickanswer.ocr.LatinOcr
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
+import com.clu.quickanswer.ocr.ScreenFingerprint
+import com.clu.quickanswer.ocr.ScreenLayout
+import com.clu.quickanswer.ocr.TemplateReader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -153,7 +158,10 @@ class OverlayService : Service() {
     // or if it cannot load on this phone). Every use holds ocrLock, so it is never closed mid-read.
     private val ocrLock = Any()
     private var ocr: ArabicOcr? = null
-    private var destroyed = false
+    private val latinOcrLock = Any()
+    private val colorLayout = ColorLayout()
+    private var latinOcr: LatinOcr? = null
+    @Volatile private var destroyed = false
 
     // The green box around the right option (its own touch-through window), shown and hidden with the panel.
     private var highlight: View? = null
@@ -198,7 +206,9 @@ class OverlayService : Service() {
         currentClient()
         warmUp()
         AnswerStore.init(this)
+        TemplateStore.init(this)
         loadOcr()
+        loadLatinOcr()
 
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val proj = try {
@@ -991,11 +1001,112 @@ class OverlayService : Service() {
         return Solved(text, null, c.lastSent, null, imageReply.isAnswer)
     }
 
-    /** The question on [bmp], or null when it cannot be read (or the reader is not loaded). */
-    private fun readQuestion(bmp: Bitmap, masks: List<PxRect>): Question? = try {
-        synchronized(ocrLock) { ocr?.read(bmp, masks) }
-    } catch (t: Throwable) {
-        null
+    /**
+     * Use the existing offline Arabic reader first. If it cannot read this screen,
+     * try the separately bundled offline Latin recognizer before sending a full
+     * screenshot to the cloud. Each reader must fail closed, never guess text.
+     *
+     * The screenshot is copied to pixels and analysed ([ColorLayout]) once; both readers share that
+     * layout, and a screen that is not the quiz is declined without running either of them. Native
+     * failures (missing library, out of memory) are Errors, not Exceptions: they must lead to the
+     * screenshot path, never crash the service, hence Throwable.
+     */
+    private fun readQuestion(bmp: Bitmap, masks: List<PxRect>): Question? {
+        // Hardware bitmaps cannot be read pixel by pixel.
+        var copy: Bitmap? = null
+        try {
+            val src = if (bmp.config == Bitmap.Config.HARDWARE) {
+                bmp.copy(Bitmap.Config.ARGB_8888, false).also { copy = it }
+            } else bmp
+            if (src == null) return null
+            val w = src.width
+            val h = src.height
+            val pixels = IntArray(w * h)
+            src.getPixels(pixels, 0, w, 0, 0, w, h)
+            val inspected = colorLayout.inspect(pixels, w, h)
+            val layout = inspected.layout ?: return readWithTemplates(src, pixels, w, h, masks)
+            return readWith(src, pixels, w, h, inspected, layout, masks, null)
+        } catch (t: Throwable) {
+            return null
+        } finally {
+            copy?.recycle()
+        }
+    }
+
+    /**
+     * Reads [language] ("ar": the Arabic reader only, "en": the Latin one only, null: Arabic and
+     * then Latin) on a layout that [ColorLayout] or a template gave. Each reader runs in its own
+     * try/catch under its own lock and a failure counts as "could not read".
+     */
+    private fun readWith(
+        src: Bitmap,
+        pixels: IntArray,
+        w: Int,
+        h: Int,
+        inspected: ColorLayout.Result,
+        layout: ScreenLayout,
+        masks: List<PxRect>,
+        language: String?,
+    ): Question? {
+        // Anything but "ar"/"en" (an old or damaged file) reads with both.
+        val lang = language?.takeIf { it == "ar" || it == "en" }
+        if (lang == null || lang == "ar") {
+            val arabic = try {
+                synchronized(ocrLock) { ocr?.read(pixels, w, h, inspected, masks) }
+            } catch (t: Throwable) {
+                null
+            }
+            if (arabic != null || lang == "ar") return arabic
+        }
+        return try {
+            synchronized(latinOcrLock) { latinOcr?.read(src, layout, masks) }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Reads a screen that [ColorLayout] declined with a learned layout. Only TRUSTED templates are
+     * used to read: candidates are confirmed in step 2, when the cloud reply is compared with what
+     * was read. A template that does not fit the screen is not a failure (another mode or screen of
+     * the game), but a fitting template whose reading is declined is, and counts against it.
+     */
+    private fun readWithTemplates(src: Bitmap, pixels: IntArray, w: Int, h: Int, masks: List<PxRect>): Question? {
+        val fp = ScreenFingerprint.of(pixels, w, h, masks)
+        val templates = TemplateStore.templates
+        for (t in templates.find(fp, null, trustedOnly = true)) {
+            if (!TemplateReader.fits(t, pixels, w, h)) continue
+            val now = System.currentTimeMillis()
+            val tl = TemplateReader.layoutFor(t, pixels, w, h)
+            if (tl == null) {
+                templates.recordFailure(t.id, now)
+                continue
+            }
+            val q = readWith(src, pixels, w, h, ColorLayout.Result(tl, null), tl, masks, t.language)
+            if (q != null) {
+                templates.recordSuccess(t.id, now)
+                return q
+            }
+            templates.recordFailure(t.id, now)
+        }
+        return null
+    }
+
+    /**
+     * Load the bundled English OCR alongside Arabic without blocking service startup. It is warmed up
+     * on the IO thread before it is published, so the first real question does not pay for model loading.
+     */
+    private fun loadLatinOcr() {
+        scope.launch(Dispatchers.IO) {
+            val loaded = try {
+                LatinOcr().also { it.warmUp() }
+            } catch (t: Throwable) {
+                null
+            }
+            synchronized(latinOcrLock) {
+                if (destroyed) loaded?.close() else latinOcr = loaded
+            }
+        }
     }
 
     /** A smaller copy of [bmp] for "آخر صورة" (the caller recycles [bmp]). */
@@ -1210,6 +1321,7 @@ class OverlayService : Service() {
     override fun onDestroy() {
         // projection.stop() below calls onStop(): that is our own stop, not one to offer a restart for.
         stoppingByUs = true
+        destroyed = true
         volumeTrigger = null
         autoJob?.cancel()
         scope.cancel()
@@ -1222,11 +1334,10 @@ class OverlayService : Service() {
         // and closes the reader (native) once nothing uses it; a reader that finishes loading
         // meanwhile finds [destroyed] set and closes itself.
         Thread {
-            val reader = synchronized(ocrLock) {
-                destroyed = true
-                ocr.also { ocr = null }
-            }
+            val reader = synchronized(ocrLock) { ocr.also { ocr = null } }
+            val latinReader = synchronized(latinOcrLock) { latinOcr.also { latinOcr = null } }
             reader?.close()
+            latinReader?.close()
         }.start()
         bubble?.let {
             if (it.isAttachedToWindow) {

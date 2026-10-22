@@ -45,7 +45,10 @@ object QuestionPrompt {
     }
 
     // The words (normalised) with which a question points at a picture on the screen.
-    private val PICTURE_WORDS = setOf("الصوره", "صوره", "بالصوره", "الصور", "الشكل", "الشعار")
+    private val PICTURE_WORDS = setOf(
+        "الصوره", "صوره", "بالصوره", "الصور", "الشكل", "الشعار",
+        "picture", "pictured", "photo", "photograph", "image", "diagram", "figure", "logo"
+    )
 
     /**
      * True when the question refers to a picture ("ما اسم صاحب الصورة؟"): its words alone do not

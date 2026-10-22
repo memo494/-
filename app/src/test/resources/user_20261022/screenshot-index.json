@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "source": "User-supplied screenshots",
+  "capturedDate": "2026-10-22",
+  "purpose": "OCR/layout regression corpus; no online inference answers stored in production",
+  "cases": [
+    {
+      "id": "1000277246",
+      "filename": "1000277246.jpg",
+      "type": "dark_numeric_with_confirm",
+      "question": "في أي عام تم الانتهاء من هدم جدار برلين؟",
+      "expectedAnswer": null,
+      "notes": "Do not treat filled answer shown after input as initial answer",
+      "sha256": "9f967d7ec13ad5fe2950ceb1650ff01612b71967d0ac459c479b6464195baa58"
+    },
+    {
+      "id": "1000277245",
+      "filename": "1000277245.jpg",
+      "type": "dark_numeric_with_confirm",
+      "question": "في أي عام ميلادي بدأت الحرب العالمية الأولى؟",
+      "expectedAnswer": "1914",
+      "sha256": "21d0c8f554cb8aad9265fd1ec85a0f7a505c7b4b4b9c0a6ea4597a6d6e7d327e"
+    },
+    {
+      "id": "1000277244",
+      "filename": "1000277244.jpg",
+      "type": "dark_grid_2x2",
+      "question": "من هو قائد جيش المسلمين في معركة حطين؟",
+      "optionsRtl": [
+        "صلاح الدين الأيوبي",
+        "عمرو بن العاص",
+        "طارق بن زياد",
+        "نور الدين زنكي"
+      ],
+      "expectedAnswer": "صلاح الدين الأيوبي",
+      "sha256": "9675c2d7cf7b2673eccb257bbac391011d4810faa1b4ee4335a8df3da84a7d22"
+    },
+    {
+      "id": "1000277243",
+      "filename": "1000277243.jpg",
+      "type": "dark_grid_2x2_with_image",
+      "question": "أين يقع المعلم السياحي الموجود في الصورة؟",
+      "optionsRtl": [
+        "الكويت",
+        "تركيا",
+        "المانيا",
+        "إيطاليا"
+      ],
+      "expectedAnswer": "إيطاليا",
+      "sha256": "f8878687d2b2f29d972decedb98802938c04191f26aac3f579120a2a264edef3"
+    },
+    {
+      "id": "1000277242",
+      "filename": "1000277242.jpg",
+      "type": "dark_grid_2x2",
+      "question": "ما هو اسم الشهر الأول من السنة في التقويم الهجري؟",
+      "optionsRtl": [
+        "المحرم",
+        "شوال",
+        "جمادى الآخرة",
+        "رمضان"
+      ],
+      "expectedAnswer": "المحرم",
+      "sha256": "e90da177102ab89e9f8521329b8213c241538de388fb287221a5dc4884e919d7"
+    },
+    {
+      "id": "1000277019",
+      "filename": "1000277019.jpg",
+      "type": "white_numeric_with_green_submit",
+      "question": "كم عدد الحكام الموجودين على ارض الملعب في رياضة كرة السلة؟",
+      "expectedAnswer": null,
+      "notes": "Variable by competition: do not hard-code an ambiguous answer",
+      "sha256": "37954629c5be587144d5d8475237556f4ebbee972eeded18d8fd49725b817ae0"
+    },
+    {
+      "id": "1000276493",
+      "filename": "1000276493.jpg",
+      "type": "white_numeric_with_green_submit",
+      "question": "في أي عام ميلادي تم بناء الجامع الأموي في دمشق؟",
+      "expectedAnswer": null,
+      "notes": "Building chronology question; verify accepted year with a source",
+      "sha256": "d2259c497cc494a4fa1a9d9018206c1c42f1c86563dbc1fc98dd68de9864e5ea"
+    },
+    {
+      "id": "1000276181",
+      "filename": "1000276181.jpg",
+      "type": "gallery_screenshot_negative",
+      "question": null,
+      "expectedAnswer": null,
+      "notes": "Screenshot of image viewer containing a smaller game photograph: must not count as active in-game UI",
+      "sha256": "7fa6c3df9b5dc6e9bcaff82b06f2adbd314335b27f490181e2d5234586037e00"
+    },
+    {
+      "id": "1000276172",
+      "filename": "1000276172.webp",
+      "type": "white_vertical_options",
+      "question": "ما هي السورة التي بفضلها أسلم الصحابي الجليل عمر بن الخطاب؟",
+      "optionsTopDown": [
+        "سورة البقرة",
+        "سورة طه",
+        "سورة الإخلاص",
+        "سورة النور"
+      ],
+      "expectedAnswer": "سورة طه",
+      "sha256": "49e6cf8eb0c4d3ac40c36d27506691e0aaba07992b57fa55c96a5769e3baed47"
+    }
+  ]
+}
