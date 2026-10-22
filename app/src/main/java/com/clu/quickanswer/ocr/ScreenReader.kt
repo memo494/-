@@ -99,6 +99,13 @@ class ScreenReader(
             digitKeys = found.digitKeys,
             bannerRect = found.banner,
             numericSubmit = found.numericSubmit,
+            optionTextRects = found.optionLines.mapIndexed { index, regions ->
+                val button = found.buttons[index]
+                if (regions.isEmpty()) button else PxRect(
+                    regions.minOf { it.left }, regions.minOf { it.top },
+                    regions.maxOf { it.right }, regions.maxOf { it.bottom },
+                )
+            },
         )
         return Reading(question, null, found, qLines, oLines, layoutMs, (System.nanoTime() - t1) / 1e6)
     }
