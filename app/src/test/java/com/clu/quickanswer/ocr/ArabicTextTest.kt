@@ -31,6 +31,13 @@ class ArabicTextTest {
     }
 
     @Test
+    fun normalize_isCaseInsensitiveForEnglishAndMixedLanguage() {
+        assertEquals("what is the capital of jordan", ArabicText.normalize("WHAT is the Capital of JORDAN?"))
+        assertEquals("ما هي capital of jordan", ArabicText.normalize("ما هي CAPITAL of Jordan?"))
+        assertEquals(1.0, ArabicText.similarity("BLUE WHALE", "blue whale"), 1e-9)
+    }
+
+    @Test
     fun key_dropsSpacesToo() {
         assertEquals("سورهطه", ArabicText.key("سورة  طه؟"))
         assertEquals(ArabicText.key("سورة ا خلا"), ArabicText.key("سورة اخلا"))
