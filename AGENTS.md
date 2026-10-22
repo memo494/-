@@ -5,7 +5,11 @@ shows the answer in an overlay. It reads on the device first (Arabic ONNX recogn
 English), answers from a local memory of past questions, and only then asks a cloud model (Gemini or
 Claude) with text or the screenshot.
 
-Two agents work on this repository, and the owner passes links between them:
+Before starting a task, read `docs/ARCHITECTURE.md` for the application map,
+`docs/ROADMAP.md` for status, and `docs/DECISIONS.md` for settled decisions. Read only the code
+needed for the task. Update these documents when the task changes architecture, status or decisions.
+
+Two agents work on this repository, using GitHub issues and pull requests for handoffs:
 
 - **Planner (Claude)** writes each task as a GitHub issue: what and why, the files to touch, the
   classes and functions with their signatures, and acceptance criteria. It usually pushes the tests
@@ -35,6 +39,26 @@ Two agents work on this repository, and the owner passes links between them:
    screenshot path rather than guess). Never block the main thread; never let a reader failure
    (including `Error`s such as `OutOfMemoryError`) crash the service.
 9. User-facing strings are Arabic, as in the existing code.
+
+## Claude Code / Codex handoff
+
+- The owner authorizes Claude Code to request Codex reviews and scoped fixes on this repository's
+  PRs through GitHub comments. This does not authorize merging or unrelated changes.
+- Use `@codex review` for a review. For implementation or fixes, include the issue, named branch,
+  exact allowed files, contract tests and acceptance commands in one `@codex` PR comment.
+- Read existing comments and reactions before sending a request; do not duplicate an active request.
+  A posted comment or an eyes reaction is not proof of completion. Check the resulting review,
+  commit and CI before reporting success. Report a setup error once instead of retrying in a loop.
+- See `docs/CODEX_HANDOFF.md` for setup and `.claude/commands/codex-review.md` for Claude Code's
+  `/codex-review <PR-number>` command. GitHub tasks are separate from the owner's ChatGPT chat.
+
+## Code Review Rules
+
+- Flag readings that silently drop question text or options, accept obscured/clipped text, or
+  reuse a cached answer after negation, numbers or the option set change. Uncertain reads must
+  fall back; shuffled choices must resolve by answer text to the current option.
+- Flag UI-thread OCR/network work and reader failures that can crash the overlay service.
+- Keep real user screenshots, API keys and signing keys out of this public repository.
 
 ## Layout (main parts)
 
