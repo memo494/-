@@ -13,6 +13,26 @@ class AnswerMemoryTest {
     private val opts = listOf("سورة البقرة", "سورة طه", "سورة الإخلاص", "سورة النور")
 
     @Test
+    fun englishQuestion_isFoundOfflineDespiteCaseAndOrderChanges() {
+        val memory = AnswerMemory()
+        val options = listOf("Amman", "Cairo", "DOHA", "Beirut")
+        memory.put("What is the capital of Jordan?", options, false, "Amman")
+        val hit = memory.lookup("WHAT IS THE CAPITAL OF JORDAN?", listOf("beirut", "doha", "AMMAN", "cairo"), false)
+        assertNotNull(hit)
+        assertTrue(hit!!.exact)
+        assertEquals("Amman", hit.answer)
+    }
+
+    @Test
+    fun englishNegationAndNumbersPreventWrongOfflineAnswers() {
+        val memory = AnswerMemory()
+        val options = listOf("Earth", "Mars", "Pluto", "Venus")
+        memory.put("Which of these is NOT a planet in 2026?", options, false, "Pluto")
+        assertNull(memory.lookup("Which of these is a planet in 2026?", options, false))
+        assertNull(memory.lookup("Which of these is not a planet in 2025?", options, false))
+    }
+
+    @Test
     fun exactHit_returnsTheStoredOptionText() {
         val m = AnswerMemory()
         m.put(q, opts, false, "سورة طه")
