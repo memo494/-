@@ -902,7 +902,10 @@ class OverlayService : Service() {
                 }
                 grabFrame()
                 val frame = lastFrame
-                if (frame == null || FrameSignature.diff(signature(frame, ignoreRects()), oldSig) > 3.0 ||
+                // Timers, scores, and character animations change every frame.
+                // Comparing the entire game was rejecting correct answers even
+                // while the central question had not changed.
+                if (frame == null ||
                     fingerprint(frame, region)?.let { FrameSignature.diff(it, stamp) > 5.0 } != false
                 ) {
                     touchPending = false
