@@ -19,18 +19,24 @@ object ScreenImage {
     fun isNoQuestion(reply: String): Boolean = reply.trim().trimEnd('.', '!', '،', ' ') == NO_QUESTION
 
     const val PROMPT =
-        "You see a phone screenshot. Read the question(s) on it, including any images, " +
-            "diagrams or answer options. Reply with ONLY the final answer, in the same " +
-            "language as the question: for multiple choice give the option letter/number " +
-            "and its text; otherwise the short answer (number, word or phrase). No " +
-            "explanation, no reasoning, no preamble. For a question asking for a number or " +
-            "quantity, answer with digits only: your best single number estimate (the " +
-            "typical or most recent real value), even if the exact number varies. " +
-            "Ignore scores, player names, " +
-            "timers, buttons and number keypads; they are not part of the question. If " +
-            "there are several questions, put " +
-            "each answer on its own line, numbered. If no question is visible, reply " +
-            "exactly: " + NO_QUESTION
+        "You are reading a landscape Arabic trivia game screenshot. The game question is " +
+            "printed prominently in the central parchment/card, sometimes with an image, " +
+            "and may use dark buttons, translucent gray buttons, or a number keypad. " +
+            "Ignore any floating AI bubble, black notification saying 'لا يوجد سؤال', " +
+            "scoreboard, chat, timer, and the text on side panels. " +
+            "If the central question asks for a number, give ONLY the numeric answer " +
+            "using ASCII digits 0-9, preferably 1 to 4 digits when possible; " +
+            "do not include a sentence, units, or the key number you tapped. " +
+            "If four choices are arranged in TWO COLUMNS and TWO ROWS, answer ONLY " +
+            "the position: 1 = upper RIGHT, 2 = upper LEFT, " +
+            "3 = lower RIGHT, 4 = lower LEFT. " +
+            "For a single vertical column of choices, answer ONLY the position " +
+            "from top to bottom, starting at 1. " +
+            "The numbers are positions, not labels; do not confuse a numeric keypad " +
+            "with multiple choice answers. If the question is clearly visible, " +
+            "never reply that there is no question. If the answer cannot be determined " +
+            "from the image, reply exactly 'غير متأكد'. " +
+            "Only if there is genuinely no central quiz question, reply exactly: " + NO_QUESTION
 
     /**
      * Null if the capture is black; otherwise the JPEG (base64) to send and the bitmap to show. The
