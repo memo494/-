@@ -133,6 +133,10 @@ class OverlayService : Service() {
 
     private var autoMode = false
     private var autoJob: Job? = null
+    private var touchPending = false
+    private var touchEpoch = 0L
+    private var lastTouchTime = 0L
+    private var lastTouchAnswer: String? = null
     @Volatile private var busy = false
     private var lastSentSig: IntArray? = null
     private var prevTickSig: IntArray? = null
@@ -775,7 +779,7 @@ class OverlayService : Service() {
     }
 
     private fun answerNow() {
-        if (busy) return
+        if (busy || touchPending) return
         hiddenAnswer.clear()
         if (panelAdded || preview != null) {
             // Remove the old answer (and the sent-image preview) first so they don't hide part of the question.
@@ -811,6 +815,9 @@ class OverlayService : Service() {
         val capturedH = bmp.height
         val started = SystemClock.uptimeMillis()
         val masks = captureMasks.remove(bmp).orEmpty().map { PxRect(it.left, it.top, it.right, it.bottom) }
+        val initialSignature = if (fromAuto && Prefs.autoTouch(this)) signature(bmp, masks.map {
+            Rect(it.left, it.top, it.right, it.bottom)
+        }) else null
         scope.launch {
             val solved = withContext(Dispatchers.IO) {
                 try {
@@ -837,7 +844,96 @@ class OverlayService : Service() {
             if (rect != null && capturedW == screenW && capturedH == screenH && Prefs.highlightAnswer(this@OverlayService)) {
                 showHighlight(rect)
             }
+            if (fromAuto && autoMode && Prefs.autoTouch(this@OverlayService) &&
+                solved.touches != null && initialSignature != null &&
+                capturedW == screenW && capturedH == screenH
+            ) performAnswerTouches(solved, initialSignature, capturedW, capturedH)
         }
+    }
+
+
+    /** Fingerprint only the banner contents, ignoring the input field and our bubble. */
+    private fun fingerprint(bitmap: Bitmap, area: PxRect): IntArray? {
+        val left = (area.left + area.width * 0.16).toInt().coerceIn(0, bitmap.width)
+        val top = (area.top + area.height * 0.06).toInt().coerceIn(0, bitmap.height)
+        val right = (area.right - area.width * 0.16).toInt().coerceIn(0, bitmap.width)
+        val bottom = (area.bottom - area.height * 0.3).toInt().coerceIn(0, bitmap.height)
+        if (right <= left || bottom <= top) return null
+        val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        val small = Bitmap.createScaledBitmap(crop, 64, 16, true)
+        if (crop !== small) crop.recycle()
+        val pixels = IntArray(64 * 16)
+        small.getPixels(pixels, 0, 64, 0, 0, 64, 16)
+        small.recycle()
+        return IntArray(pixels.size) { i ->
+            val c = pixels[i]
+            (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000
+        }
+    }
+
+    private fun performAnswerTouches(solved: Solved, oldSig: IntArray, w: Int, h: Int) {
+        val boxes = solved.touches ?: return
+        val stamp = solved.guardStamp ?: return
+        val region = solved.guardRect ?: return
+        val now = SystemClock.uptimeMillis()
+        if (lastTouchAnswer == solved.text && now - lastTouchTime < 2_500L) return
+        if (touchPending || !VolumeKeyService.isEnabled(this)) {
+            if (!VolumeKeyService.isEnabled(this)) showPanel("فعّل خدمة إمكانية الوصول لتشغيل اللمس التلقائي")
+            return
+        }
+        touchPending = true
+        val epoch = touchEpoch
+        handler.postDelayed({
+            if (destroyed || epoch != touchEpoch || !autoMode || !Prefs.autoTouch(this) ||
+                w != screenW || h != screenH || preview != null
+            ) {
+                touchPending = false
+                return@postDelayed
+            }
+            hidePanel()
+            hideHighlight()
+            handler.postDelayed({
+                if (destroyed || epoch != touchEpoch || !autoMode || !Prefs.autoTouch(this) ||
+                    w != screenW || h != screenH
+                ) {
+                    touchPending = false
+                    return@postDelayed
+                }
+                grabFrame()
+                val frame = lastFrame
+                if (frame == null || FrameSignature.diff(signature(frame, ignoreRects()), oldSig) > 3.0 ||
+                    fingerprint(frame, region)?.let { FrameSignature.diff(it, stamp) > 5.0 } != false
+                ) {
+                    touchPending = false
+                    showPanel("تغيّر السؤال قبل اللمس؛ تم تجاهل الإجابة القديمة")
+                    return@postDelayed
+                }
+                val bubbleOnScreen = viewRect(bubble)
+                if (bubbleOnScreen != null && boxes.any { r ->
+                    r.centerX >= bubbleOnScreen.left && r.centerX < bubbleOnScreen.right &&
+                        r.centerY >= bubbleOnScreen.top && r.centerY < bubbleOnScreen.bottom
+                }) {
+                    touchPending = false
+                    showPanel("حرك الفقاعة بعيداً عن أزرار الإجابة ثم أعد المحاولة")
+                    return@postDelayed
+                }
+                setBusy(true)
+                val ok = VolumeKeyService.tapAnswer(boxes) { finished ->
+                    if (destroyed) return@tapAnswer
+                    touchPending = false
+                    setBusy(false)
+                    if (!finished) showPanel("تعذّر اللمس؛ أعد تفعيل إمكانية الوصول")
+                }
+                if (!ok) {
+                    touchPending = false
+                    setBusy(false)
+                    showPanel("خدمة اللمس غير جاهزة أو مشغولة")
+                } else {
+                    lastTouchTime = SystemClock.uptimeMillis()
+                    lastTouchAnswer = solved.text
+                }
+            }, 170L)
+        }, 150L)
     }
 
     /**
@@ -851,7 +947,10 @@ class OverlayService : Service() {
         val rect: PxRect?,
         val image: Bitmap?,
         val memoryKey: String?,
-        val isAnswer: Boolean
+        val isAnswer: Boolean,
+        val touches: List<PxRect>? = null,
+        val guardRect: PxRect? = null,
+        val guardStamp: IntArray? = null,
     )
 
     /**
@@ -869,6 +968,18 @@ class OverlayService : Service() {
         val memory = AnswerStore.memory
         val q = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else null
         val wordsDecide = q != null && !QuestionPrompt.refersToPicture(q.questionText)
+        fun resolved(r: AnswerParser.Resolved, image: Bitmap?, key: String? = null, memory: Boolean = false): Solved {
+            val touches = q?.let {
+                TouchPlanner.plan(r.answer, r.rect, it.digitKeys, it.numericSubmit, bmp.width, bmp.height)
+            }
+            val region = if (touches != null) q?.bannerRect else null
+            return Solved(
+                if (memory) "⚡ ${r.answer}" else r.answer,
+                r.rect, image, key, isAnswer = true,
+                touches = touches, guardRect = region,
+                guardStamp = region?.let { fingerprint(bmp, it) },
+            )
+        }
         var corrected: AnswerMemory.Hit? = null
         if (q != null && wordsDecide) {
             val hit = memory.lookup(q.questionText, q.options, q.numeric)
@@ -877,14 +988,14 @@ class OverlayService : Service() {
             } else {
                 if (hit != null) {
                     AnswerParser.resolveStored(q, hit.answer)?.let { r ->
-                        return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key, isAnswer = true)
+                        return resolved(r, shownCopy(bmp), hit.key, memory = true)
                     }
                 }
                 val reply = c.answerText(QuestionPrompt.build(q))
                 when (reply.kind) {
                     Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
                         memory.put(q.questionText, q.options, q.numeric, r.answer)
-                        return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true)
+                        return resolved(r, shownCopy(bmp))
                     }
                     // Quota, key, region, no connection: the image request would fail the same way.
                     Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false)
@@ -909,7 +1020,7 @@ class OverlayService : Service() {
                     if (corrected != null && corrected.exact) memory.remove(corrected.key)
                     memory.put(q.questionText, q.options, q.numeric, r.answer)
                 }
-                return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true)
+                return resolved(r, c.lastSent)
             }
         }
         return Solved(text, null, c.lastSent, null, imageReply.isAnswer)
@@ -1056,6 +1167,9 @@ class OverlayService : Service() {
 
     private fun toggleAuto() {
         autoMode = !autoMode
+        touchEpoch++
+        touchPending = false
+        if (autoMode) { lastTouchTime = 0L; lastTouchAnswer = null }
         updateBubbleStyle()
         Toast.makeText(this, if (autoMode) "الوضع التلقائي: مفعّل" else "الوضع التلقائي: متوقف", Toast.LENGTH_SHORT).show()
         autoJob?.cancel()
@@ -1091,7 +1205,7 @@ class OverlayService : Service() {
     private fun autoTick() {
         // While the sent-image preview covers the middle of the screen, the capture is mostly black:
         // not worth sending, and it would overwrite client.lastSent.
-        if (busy || preview != null) return
+        if (busy || touchPending || preview != null) return
         // Is the panel part of the frame being judged?
         val panelShown = panelAdded
         val gotNewFrame = grabFrame()
@@ -1133,6 +1247,9 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         volumeTrigger = null
+        destroyed = true
+        touchEpoch++
+        touchPending = false
         autoJob?.cancel()
         scope.cancel()
         handler.removeCallbacksAndMessages(null)
