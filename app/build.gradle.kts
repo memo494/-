@@ -45,6 +45,13 @@ android {
     buildTypes {
         debug {
             if (cluKeystore != null) signingConfig = signingConfigs.getByName("clu")
+            // PR validation is signed by the normal debug key, not the user's
+            // release keystore. Give it its own app id so it can be tested
+            // alongside a signed production install without uninstalling it.
+            if (System.getenv("CI_BETA_BUILD") == "true") {
+                applicationIdSuffix = ".beta"
+                versionNameSuffix = "-beta"
+            }
         }
         release {
             isMinifyEnabled = false
