@@ -41,6 +41,27 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
     override fun answerText(prompt: String): Reply = send(ClaudeApi.requestBody(model, prompt))
 
     /**
+     * The screen's layout, for learning a template (see [Answerer.layout]): ONE request, without
+     * [send]'s retry, so learning in the background never takes time from the answers. [lastSent]
+     * and [lastModel] stay as they are. Null on any failure: a black screen, a status other than 2xx,
+     * a dropped connection, a refusal or an empty reply.
+     */
+    override fun layout(bitmap: Bitmap): LayoutAnswer? {
+        return try {
+            if (apiKey.isEmpty()) return null
+            val prepared = ScreenImage.prepare(bitmap) ?: return null
+            val res = call("${ClaudeApi.BASE_URL}/messages", ClaudeApi.layoutRequestBody(model, prepared.base64))
+            if (res.code !in 200..299) return null
+            val (reply, _) = ClaudeApi.parseSuccess(res.body)
+            if (reply.isAnswer) LayoutAnswer(reply.text, prepared.geometry) else null
+        } catch (e: Throwable) {
+            // Background work: whatever went wrong (even an OutOfMemoryError on a big capture) only
+            // means there is no layout this time.
+            null
+        }
+    }
+
+    /**
      * Opens the TLS connection ahead of the first question with a free List Models call. Only warms a
      * cold pool, at most once per [WARM_UP_INTERVAL_MS] (same reasoning as [GeminiClient.warmUp]).
      * Blocks, so call it off the main thread.

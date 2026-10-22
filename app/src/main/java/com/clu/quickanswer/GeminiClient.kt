@@ -60,6 +60,29 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
     }
 
     /**
+     * The screen's layout, for learning a template (see [Answerer.layout]): ONE request to the user's
+     * own model, with no fallbacks and no retries (only [ask]'s thinking-mode detour), so learning in
+     * the background never takes free quota or time from the answers. [lastSent] and [lastModel] stay
+     * as they are. Null on any failure.
+     */
+    override fun layout(bitmap: Bitmap): LayoutAnswer? {
+        return try {
+            // Cheap checks first: no JPEG is encoded for a request that cannot be sent.
+            if (apiKey.isEmpty() || quota.isBlocked(model)) return null
+            val prepared = ScreenImage.prepare(bitmap, IMAGE_MAX_SIDE, IMAGE_QUALITY) ?: return null
+            val b64 = prepared.base64
+            val res = ask(model) { mode -> GeminiRequests.layoutBody(model, b64, mode) }
+            if (res.code !in 200..299) return null
+            val text = replyText(res.body) ?: return null
+            LayoutAnswer(text, prepared.geometry)
+        } catch (e: Throwable) {
+            // Background work: whatever went wrong (even an OutOfMemoryError on a big capture) only
+            // means there is no layout this time.
+            null
+        }
+    }
+
+    /**
      * What [race] ended with: the answer ([ok]), or a short Arabic error. [final] marks errors that
      * would hit any other request too (quota, key, region), so trying the image instead is pointless.
      */
@@ -248,19 +271,25 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
 
     private fun handle(res: HttpResult): String {
         if (res.code !in 200..299) return errorText(res.code, res.body)
-        val json = JSONObject(res.body)
-        val candidates = json.optJSONArray("candidates")
-        if (candidates == null || candidates.length() == 0) return EMPTY
+        return replyText(res.body) ?: EMPTY
+    }
+
+    /**
+     * The text of a 2xx reply [body]: the parts of the first candidate that are not the model's
+     * thoughts, joined and trimmed. Null when there is none.
+     */
+    private fun replyText(body: String): String? {
+        val candidates = JSONObject(body).optJSONArray("candidates")
+        if (candidates == null || candidates.length() == 0) return null
         val partsArr = candidates.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts")
-            ?: return EMPTY
+            ?: return null
         val sb = StringBuilder()
         for (i in 0 until partsArr.length()) {
             val part = partsArr.getJSONObject(i)
             if (part.optBoolean("thought", false)) continue
             sb.append(part.optString("text", ""))
         }
-        val text = sb.toString().trim()
-        return if (text.isEmpty()) EMPTY else text
+        return sb.toString().trim().ifEmpty { null }
     }
 
     /** Result of [fetchModelIds]: the ids on success, otherwise a short Arabic error. */
