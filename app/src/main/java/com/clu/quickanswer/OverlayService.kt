@@ -38,6 +38,8 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.clu.quickanswer.ocr.ArabicOcr
 import com.clu.quickanswer.ocr.GameVisualLayout
+import com.clu.quickanswer.ocr.OptionWordDetector
+import com.clu.quickanswer.ocr.WordAnswerMatcher
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
 import kotlinx.coroutines.CoroutineScope
@@ -973,8 +975,18 @@ class OverlayService : Service() {
         val q = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else null
         val wordsDecide = q != null && !QuestionPrompt.refersToPicture(q.questionText)
         fun resolved(r: AnswerParser.Resolved, image: Bitmap?, key: String? = null, memory: Boolean = false): Solved {
-            val touches = q?.let {
-                TouchPlanner.plan(r.answer, r.rect, it.digitKeys, it.numericSubmit, bmp.width, bmp.height)
+            val touches = q?.let { read ->
+                // Prefer the OCR's actual word box over the whole button.
+                // The entire button remains the visible green highlight.
+                val textRect = r.rect?.let { button ->
+                    val i = read.optionRects.indexOf(button)
+                    if (i >= 0) read.optionTextRects.getOrNull(i) else null
+                }
+                val target = if (textRect != null && r.rect != null &&
+                    textRect.left >= r.rect.left && textRect.top >= r.rect.top &&
+                    textRect.right <= r.rect.right && textRect.bottom <= r.rect.bottom
+                ) textRect else r.rect
+                TouchPlanner.plan(r.answer, target, read.digitKeys, read.numericSubmit, bmp.width, bmp.height)
             }
             val region = if (touches != null) q?.bannerRect else null
             return Solved(
@@ -1007,7 +1019,39 @@ class OverlayService : Service() {
                 }
             }
         }
-        val imageReply = c.answer(bmp)
+        // Screen words are localized from the screenshot, not guessed from
+        // option indices or normalized coordinates returned by the model.
+        val autoTouchRequested = q == null && autoMode && Prefs.autoTouch(this)
+        var choiceWords: List<PxRect>? = null
+        var visual: GameVisualLayout.Detected? = null
+        if (autoTouchRequested) {
+            try {
+                val pixels = IntArray(bmp.width * bmp.height)
+                bmp.getPixels(pixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                choiceWords = OptionWordDetector.detect(pixels, bmp.width, bmp.height)
+                if (choiceWords == null) visual = GameVisualLayout.detect(pixels, bmp.width, bmp.height)
+            } catch (_: Exception) { /* no geometry means no automatic tap */ }
+        }
+
+        val firstImageReply = c.answer(bmp)
+        // A large animated HUD can fool the image model into missing an obvious
+        // central question. When real answer text/keypad is *visible*, retry on
+        // a tightly focused image with the overlay and HUD removed.
+        val imageReply = if (autoTouchRequested &&
+            (choiceWords != null || visual != null) &&
+            firstImageReply.kind == Reply.Kind.ANSWER &&
+            ScreenImage.isNoQuestion(firstImageReply.text)
+        ) {
+            val zoom = ScreenImage.focusQuiz(bmp,
+                visual?.kind == GameVisualLayout.Kind.NUMERIC_WHITE)
+            try {
+                val retry = c.answer(zoom)
+                if (retry.kind == Reply.Kind.ANSWER &&
+                    !ScreenImage.isNoQuestion(retry.text)) retry else firstImageReply
+            } finally {
+                zoom.recycle()
+            }
+        } else firstImageReply
         val text = imageReply.text
         // An error message is never matched against the options (or taken for a number).
         if (q != null && imageReply.kind == Reply.Kind.ANSWER) {
@@ -1027,46 +1071,46 @@ class OverlayService : Service() {
                 return resolved(r, c.lastSent)
             }
         }
-        // The strict OCR recognizes only the original vertical-button skin.
-        // When disabled or unable to read a different game UI, use visual geometry
-        // independently. The cloud model chooses an index/digits; it NEVER supplies
-        // arbitrary screen coordinates.
-        if (q == null && imageReply.kind == Reply.Kind.ANSWER &&
-            Prefs.autoTouch(this) && autoMode
+        // For 2-column questions an option NUMBER is not sufficient.
+        // Read the actual four Arabic word regions and match the model's
+        // literal answer against them. No unique OCR agreement -> no tap.
+        if (autoTouchRequested && choiceWords != null &&
+            imageReply.kind == Reply.Kind.ANSWER
         ) {
-            val geometry = try {
-                val w = bmp.width
-                val h = bmp.height
-                val pixels = IntArray(w * h)
-                bmp.getPixels(pixels, 0, w, 0, 0, w, h)
-                GameVisualLayout.detect(pixels, w, h)
-            } catch (_: Exception) {
-                null
+            val printed = synchronized(ocrLock) {
+                try { ocr?.readWords(bmp, choiceWords) } catch (_: Exception) { null }
             }
-            if (geometry != null) {
-                val option = if (geometry.kind == GameVisualLayout.Kind.CHOICE_GRID) {
-                    val index = AnswerParser.optionNumber(text, geometry.options.size)
-                    index?.let { geometry.options.getOrNull(it - 1) }
-                } else null
-                val number = if (geometry.kind != GameVisualLayout.Kind.CHOICE_GRID) {
-                    AnswerParser.numberOnly(text)
-                } else null
-                val actions = if (option != null || number != null) {
-                    TouchPlanner.plan(
-                        number ?: text, option, geometry.digits, geometry.submit,
-                        bmp.width, bmp.height
+            val word = printed?.let { WordAnswerMatcher.match(text, it) }
+            if (word != null) {
+                val actions = TouchPlanner.plan(text, word, emptyMap(), null,
+                    bmp.width, bmp.height)
+                if (actions != null) {
+                    val guard = PxRect(
+                        (bmp.width * 0.29f).toInt(), (bmp.height * 0.32f).toInt(),
+                        (bmp.width * 0.75f).toInt(), (bmp.height * 0.51f).toInt()
                     )
-                } else null
-                // A numeric answer should be confirmed, not just typed, except for
-                // the dark skin which submits automatically after the last digit.
-                val complete = geometry.kind != GameVisualLayout.Kind.NUMERIC_WHITE ||
-                    geometry.submit != null
-                if (actions != null && complete) {
-                    val guard = geometry.questionArea
-                    return Solved(text, option, c.lastSent, null, isAnswer = true,
+                    return Solved(text, word, c.lastSent, null, isAnswer = true,
                         touches = actions, guardRect = guard,
                         guardStamp = fingerprint(bmp, guard))
                 }
+            }
+        }
+        // Numeric questions keep the dedicated verified keypad path.
+        // Never infer 2-column choice taps from model-supplied indices.
+        if (autoTouchRequested && visual != null &&
+            visual.kind != GameVisualLayout.Kind.CHOICE_GRID &&
+            imageReply.kind == Reply.Kind.ANSWER
+        ) {
+            val number = AnswerParser.numberOnly(text)
+            val actions = number?.let {
+                TouchPlanner.plan(it, null, visual.digits, visual.submit,
+                    bmp.width, bmp.height)
+            }
+            if (actions != null) {
+                val guard = visual.questionArea
+                return Solved(text, null, c.lastSent, null, isAnswer = true,
+                    touches = actions, guardRect = guard,
+                    guardStamp = fingerprint(bmp, guard))
             }
         }
         return Solved(text, null, c.lastSent, null, imageReply.isAnswer)
