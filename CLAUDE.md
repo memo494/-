@@ -11,3 +11,7 @@
 
 - Read `docs/ARCHITECTURE.md` (one-page map) before exploring code; `docs/ROADMAP.md` for status; `docs/DECISIONS.md` before re-opening a design question. Rules for both agents: `AGENTS.md`.
 - Each task: an issue with the spec and contract tests on its branch → Codex implements → review in one complete PR comment → owner merges → update `docs/ROADMAP.md`.
+- The owner authorizes you to post `@codex review` and scoped `@codex` implementation/fix requests
+  on this repository's PRs. Follow `AGENTS.md` and `docs/CODEX_HANDOFF.md`; use
+  `/codex-review <PR-number>` for a review. Check existing requests first, report setup blockers
+  without repeated requests, and never describe a posted request as a completed task. Do not merge.
