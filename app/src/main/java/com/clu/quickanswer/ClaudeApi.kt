@@ -1,5 +1,6 @@
 package com.clu.quickanswer
 
+import com.clu.quickanswer.ocr.LayoutPrompt
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -18,6 +19,10 @@ object ClaudeApi {
     // Room for the model's (adaptive) thinking as well as the short answer.
     private const val MAX_TOKENS = 1024
 
+    // The layout reply is a JSON object of about 300 tokens (the boxes and texts of the question and
+    // its options), and thinking counts toward max_tokens too.
+    private const val LAYOUT_MAX_TOKENS = 2048
+
     /** Models with server-side refusal fallback. Claude Haiku 5.5 has none (a fallback list is a 400 there). */
     private val FALLBACK_MODELS = setOf("claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5")
 
@@ -26,8 +31,9 @@ object ClaudeApi {
     /**
      * The JSON body of one request: the JPEG [imageBase64] first when there is one, then [text].
      * Lowest effort = fastest answer. No thinking parameter: disabled thinking is a 400 on Opus 5.5.
+     * [maxTokens] is only raised by [layoutRequestBody].
      */
-    fun requestBody(model: String, text: String, imageBase64: String? = null): String {
+    fun requestBody(model: String, text: String, imageBase64: String? = null, maxTokens: Int = MAX_TOKENS): String {
         val content = JSONArray()
         if (imageBase64 != null) {
             content.put(
@@ -40,12 +46,19 @@ object ClaudeApi {
         content.put(JSONObject().put("type", "text").put("text", text))
         val body = JSONObject()
             .put("model", model)
-            .put("max_tokens", MAX_TOKENS)
+            .put("max_tokens", maxTokens)
             .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", content)))
             .put("output_config", JSONObject().put("effort", "low"))
         if (usesFallback(model)) body.put("fallbacks", "default")
         return body.toString()
     }
+
+    /**
+     * The request that asks for the screen's layout: the JPEG [imageBase64], then [LayoutPrompt.TEXT].
+     * The same shape as [requestBody] with a larger token limit, see [LAYOUT_MAX_TOKENS].
+     */
+    fun layoutRequestBody(model: String, imageBase64: String): String =
+        requestBody(model, LayoutPrompt.TEXT, imageBase64, LAYOUT_MAX_TOKENS)
 
     /**
      * The reply of a successful (2xx) request as a [Reply] for the app, plus the model that answered.

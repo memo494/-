@@ -2,12 +2,18 @@ package com.clu.quickanswer
 
 import android.graphics.Bitmap
 import android.util.Base64
+import com.clu.quickanswer.ocr.SentGeometry
 import java.io.ByteArrayOutputStream
 
 /** Image preparation and prompt shared by every answer provider. */
 object ScreenImage {
 
-    class Prepared(val base64: String, val kept: Bitmap)
+    /**
+     * [base64] is the JPEG to send and [kept] the bitmap to show. [geometry] says which part of the
+     * capture they show (the cropped rows, full width). Scaling the JPEG down does not change it:
+     * boxes in the sent image are fractions of it.
+     */
+    class Prepared(val base64: String, val kept: Bitmap, val geometry: SentGeometry)
 
     const val BLACK_SCREEN =
         "الصورة سوداء: أوقف التطبيق وشغّله، واختر \"الشاشة بالكامل\" وليس تطبيقًا واحدًا"
@@ -33,12 +39,16 @@ object ScreenImage {
             "exactly: " + NO_QUESTION
 
     /**
-     * Null if the capture is black; otherwise the JPEG (base64) to send and the bitmap to show. The
-     * long side is scaled down to [maxSide] pixels and the JPEG is saved at [quality] (0-100).
+     * Null if the capture is black; otherwise the JPEG (base64) to send and the bitmap to show, with
+     * [Prepared.geometry] saying which rows of [bitmap] they are (the whole image: 0 until its
+     * height). The long side is scaled down to [maxSide] pixels and the JPEG is saved at [quality]
+     * (0-100).
      */
     fun prepare(bitmap: Bitmap, maxSide: Int = 1600, quality: Int = 85): Prepared? {
         if (isMostlyDark(bitmap)) return null
-        return encode(cropToContent(bitmap), maxSide, quality)
+        val cropped = cropToContent(bitmap)
+        val geometry = SentGeometry(bitmap.width, bitmap.height, cropped.top, cropped.bottom)
+        return encode(cropped.bitmap, maxSide, quality, geometry)
     }
 
     /** Rows/columns sampled from a small copy; "dark" = luminance below 40. */
@@ -62,12 +72,31 @@ object ScreenImage {
         return lit.count { it } < lit.size / 50
     }
 
+    /** What [cropToContent] kept: [bitmap] shows rows [top] (inclusive) until [bottom] of the source. */
+    private class Cropped(val bitmap: Bitmap, val top: Int, val bottom: Int)
+
     /**
      * Games and videos often sit letterboxed in a black screen; sending the whole screen wastes
-     * resolution on the bars, so keep only the tallest band of mostly-lit rows when there is one.
+     * resolution on the bars, so keep only the tallest band of mostly-lit rows when there is one
+     * (see [contentRows]).
      */
-    private fun cropToContent(src: Bitmap): Bitmap {
+    private fun cropToContent(src: Bitmap): Cropped {
         val (w, h, lit) = darkMap(src)
+        val (top, bottom) = contentRows(lit, w, h, src.height) ?: return Cropped(src, 0, src.height)
+        return Cropped(Bitmap.createBitmap(src, 0, top, src.width, bottom - top), top, bottom)
+    }
+
+    /**
+     * The pure part of [cropToContent]: which rows of the source image to keep, as (top inclusive,
+     * bottom exclusive), or null to keep the whole image. [lit] is the [w] x [h] map of [darkMap]
+     * (row by row) and [srcHeight] the height of the image it was sampled from.
+     *
+     * A row is content when more than half of its cells are lit; the band is the tallest run of
+     * content rows. It is scaled to the source (srcHeight / h), widened by a margin of srcHeight / 50
+     * on each side and clamped to 0..[srcHeight]. Null when there is no band, or when it is under a
+     * fifth of the map (a banner, not a letterboxed screen) or over nine tenths (nothing to cut).
+     */
+    internal fun contentRows(lit: BooleanArray, w: Int, h: Int, srcHeight: Int): Pair<Int, Int>? {
         var bestStart = 0
         var bestEnd = 0
         var start = -1
@@ -80,15 +109,15 @@ object ScreenImage {
             }
         }
         val band = bestEnd - bestStart
-        if (band < h / 5 || band > h * 9 / 10) return src
-        val scale = src.height.toFloat() / h
-        val margin = src.height / 50
+        if (band <= 0 || band < h / 5 || band > h * 9 / 10) return null
+        val scale = srcHeight.toFloat() / h
+        val margin = srcHeight / 50
         val top = maxOf(0, (bestStart * scale).toInt() - margin)
-        val bottom = minOf(src.height, (bestEnd * scale).toInt() + margin)
-        return Bitmap.createBitmap(src, 0, top, src.width, bottom - top)
+        val bottom = minOf(srcHeight, (bestEnd * scale).toInt() + margin)
+        return top to bottom
     }
 
-    private fun encode(src: Bitmap, maxSide: Int, quality: Int): Prepared {
+    private fun encode(src: Bitmap, maxSide: Int, quality: Int, geometry: SentGeometry): Prepared {
         val longest = maxOf(src.width, src.height)
         val bmp = if (longest > maxSide) {
             val s = maxSide.toFloat() / longest
@@ -103,6 +132,6 @@ object ScreenImage {
         bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
         // The caller recycles the original capture, so never keep a reference to it.
         val kept = if (bmp === src) bmp.copy(Bitmap.Config.ARGB_8888, false) else bmp
-        return Prepared(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP), kept)
+        return Prepared(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP), kept, geometry)
     }
 }
