@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">Clu</string>
-    <string name="accessibility_label">Clu: زر الصوت للإجابة</string>
-    <string name="accessibility_description">يتيح الضغط على زر خفض الصوت للحصول على الإجابة بينما فقاعة Clu تعمل، بدل لمس الفقاعة. عندما تكون الفقاعة متوقفة يعمل زر الصوت كالعادة. هذه الخدمة لا تقرأ أي محتوى من الشاشة.</string>
+    <string name="accessibility_label">Clu: زر الصوت واللمس الاختياري</string>
+    <string name="accessibility_description">يتيح الضغط على زر خفض الصوت للحصول على الإجابة بينما فقاعة Clu تعمل، بدل لمس الفقاعة. عندما تكون الفقاعة متوقفة يعمل زر الصوت كالعادة. وعند تفعيل اللمس التلقائي في الإعدادات تتيح النقر على إجابات اللعبة وإدخال الأرقام. هذه الخدمة لا تقرأ محتوى عناصر إمكانية الوصول.</string>
 </resources>
