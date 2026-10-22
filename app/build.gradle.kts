@@ -91,6 +91,8 @@ dependencies {
     // Anthropic SDK brought Jackson, OkHttp, Apache HttpClient and more for a single request.
     // Arabic OCR (PP-OCRv5 recogniser). Pinned to 1.30.0; the desktop jar used by unit tests must match.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
+    // Bundled Latin OCR is ready offline on first launch (no Google Play download).
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 
     testImplementation("junit:junit:4.13.2")
     // Android's org.json is a stub in local unit tests, so bring the real one.
