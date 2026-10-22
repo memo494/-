@@ -99,7 +99,17 @@ object GameVisualLayout {
                 val (x, y) = darkRows[i++]
                 digits[digit] = rect(x + dx, y + dy, 18, 16)
             }
+            // Some rounds show a large gold «تأكيد» button below the input;
+            // other rounds have no submit control. Never tap where it is absent.
+            val submitSamples = listOf(600 to 480, 740 to 480, 605 to 495)
+                .map { (x, y) -> patch(x + dx, y + dy,
+                    intArrayOf(-5, 5), intArrayOf(-3, 3)) }
+            val visibleSubmit = submitSamples.count { color ->
+                color.r > 110 && color.g > 65 &&
+                    color.r - color.g > 25 && color.g - color.b > 34
+            } >= 2
             return Detected(Kind.NUMERIC_DARK, digits = digits,
+                submit = if (visibleSubmit) rect(650 + dx, 480 + dy, 60, 17) else null,
                 questionArea = rect(664, 291, 250, 63))
         }
 
