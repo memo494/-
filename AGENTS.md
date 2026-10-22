@@ -14,9 +14,12 @@ Two agents work on this repository, using GitHub issues and pull requests for ha
 - **Planner (Claude)** writes each task as a GitHub issue: what and why, the files to touch, the
   classes and functions with their signatures, and acceptance criteria. It usually pushes the tests
   (and sometimes skeleton files with `TODO()` bodies) to the task's branch before you start.
+  For a GitHub handoff, the planner may open a **draft PR** with these tests/skeletons before
+  implementation, even while contract tests fail, so the Codex request has a PR conversation.
 - **Implementer (you)** implements the issue on the branch the issue names, until every test passes,
-  then opens a pull request to `main` that says `Closes #<issue>`. The planner reviews the PR on
-  GitHub; fix the review comments on the same branch.
+  then marks the existing draft PR ready, or opens a ready PR if none exists. Target `main` and
+  include `Closes #<issue>`. The planner reviews the PR on GitHub; fix the review comments on the
+  same branch.
 
 ## Rules
 
@@ -30,7 +33,8 @@ Two agents work on this repository, using GitHub issues and pull requests for ha
    the network or API keys. Images in tests are synthetic (see `ocr/SyntheticScreens.kt`).
 5. Never commit screenshots or photos of real users or players (the repository is public). Never
    commit API keys or keystores.
-6. Before opening the PR, run and pass:
+6. Before opening a ready PR or marking an existing draft ready, run and pass (planner-created
+   bootstrap drafts described above are exempt until implementation is complete):
    - `./gradlew testDebugUnitTest`
    - `./gradlew assembleDebug`
 7. No new dependencies unless the issue allows them.
