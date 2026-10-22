@@ -33,6 +33,13 @@ class ArabicOcr private constructor(
         }
     }
 
+    /**
+     * Like [read], for a caller that already holds the screenshot's pixels ([argb], row-major, [width] x
+     * [height]) and ran [ColorLayout.inspect] on them ([inspected]): nothing is copied or analysed again.
+     */
+    fun read(argb: IntArray, width: Int, height: Int, inspected: ColorLayout.Result, masks: List<PxRect>): Question? =
+        reader.read(argb, width, height, masks, inspected)
+
     override fun close() = model.close()
 
     companion object {

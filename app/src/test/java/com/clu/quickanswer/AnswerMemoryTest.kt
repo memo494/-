@@ -288,6 +288,40 @@ class AnswerMemoryNearDuplicateTest {
         assertNull("'$b' must not hit the answer of '$a'", m.lookup(b, options, false))
     }
 
+    private val animals = listOf("Dog", "Cat", "Whale", "Bat")
+    private val ringPlanets = listOf("Saturn", "Mars", "Jupiter", "Uranus")
+    private val birds = listOf("Penguin", "Eagle", "Sparrow", "Owl")
+
+    @Test
+    fun contraction_isnt_isNegation() =
+        assertDifferent("Which of these isn't a mammal?", "Which of these is a mammal?", animals, "Bat")
+
+    @Test
+    fun contraction_isnt_withCurlyApostrophe_isNegation() =
+        assertDifferent("Which of these isn\u2019t a mammal?", "Which of these is a mammal?", animals, "Bat")
+
+    @Test
+    fun contraction_doesnt_isNegation() =
+        assertDifferent("Which planet doesn't have rings?", "Which planet does have rings?", ringPlanets, "Mars")
+
+    @Test
+    fun contraction_cant_isNegation() =
+        assertDifferent("Which bird can't fly?", "Which bird can fly?", birds, "Penguin")
+
+    @Test
+    fun cannot_isNegation() =
+        assertDifferent("Which bird cannot fly?", "Which bird can fly?", birds, "Penguin")
+
+    @Test
+    fun englishContraction_identicalQuestionStillHitsExactly() {
+        val m = AnswerMemory()
+        m.put("Which bird can't fly?", birds, false, "Penguin")
+        val hit = m.lookup("Which bird can't fly?", birds, false)
+        assertNotNull(hit)
+        assertTrue(hit!!.exact)
+        assertEquals("Penguin", hit.answer)
+    }
+
     @Test
     fun oneSwappedWord_isNotTheSameQuestion() {
         assertDifferent("ما هو أكبر كوكب في المجموعة الشمسية؟", "ما هو أصغر كوكب في المجموعة الشمسية؟", planets, "المشتري")

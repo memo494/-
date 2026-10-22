@@ -36,16 +36,24 @@ class ScreenReader(
     /**
      * [argb] is row-major ARGB ints of size [width] x [height] (android.graphics.Bitmap.getPixels
      * layout). [masks] are the rectangles that were painted over the capture (our own windows).
+     * [precomputed] is a [ColorLayout.inspect] result of the same pixels, when the caller already ran
+     * it (it is then not run again); null inspects here.
      */
-    fun read(argb: IntArray, width: Int, height: Int, masks: List<PxRect> = emptyList()): Question? =
-        analyze(argb, width, height, masks).question
+    fun read(
+        argb: IntArray, width: Int, height: Int, masks: List<PxRect> = emptyList(),
+        precomputed: ColorLayout.Result? = null,
+    ): Question? = analyze(argb, width, height, masks, precomputed).question
 
-    fun analyze(argb: IntArray, width: Int, height: Int, masks: List<PxRect> = emptyList()): Reading {
+    /** Like [read], with everything found along the way. [Reading.layoutMs] is 0 for a [precomputed] layout. */
+    fun analyze(
+        argb: IntArray, width: Int, height: Int, masks: List<PxRect> = emptyList(),
+        precomputed: ColorLayout.Result? = null,
+    ): Reading {
         val t0 = System.nanoTime()
-        val inspected = layout.inspect(argb, width, height)
+        val inspected = precomputed ?: layout.inspect(argb, width, height)
         val found = inspected.layout
         val t1 = System.nanoTime()
-        val layoutMs = (t1 - t0) / 1e6
+        val layoutMs = if (precomputed != null) 0.0 else (t1 - t0) / 1e6
         fun fail(why: String, lq: List<RecognizedLine> = emptyList(), lo: List<List<RecognizedLine>> = emptyList()): Reading =
             Reading(null, why, found, lq, lo, layoutMs, (System.nanoTime() - t1) / 1e6)
 
@@ -130,27 +138,8 @@ class ScreenReader(
         return lines.subList(0, end)
     }
 
-    /**
-     * True when one of [masks] (painted black over the capture) hides part of what is read: a
-     * question line, the number field, an answer button, or where one more button of the stack
-     * would be (below the last).
-     */
-    private fun coveredByOverlay(found: ScreenLayout, masks: List<PxRect>): Boolean {
-        if (masks.isEmpty()) return false
-        val needed = ArrayList<PxRect>(found.questionLines)
-        found.numericField?.let { needed.add(it) }
-        needed.addAll(found.buttons)
-        val last = found.buttons.lastOrNull()
-        if (last != null) {
-            val before = found.buttons.getOrNull(found.buttons.size - 2)
-            val pitch = if (before != null) last.top - before.top else (last.height * 1.4).toInt()
-            needed.add(PxRect(last.left, last.bottom, last.right, last.bottom + pitch))
-        }
-        return masks.any { m -> needed.any { overlaps(m, it) } }
-    }
-
-    private fun overlaps(a: PxRect, b: PxRect): Boolean =
-        a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+    /** See [OverlayCheck.covers]; the English reader applies the same rule. */
+    private fun coveredByOverlay(found: ScreenLayout, masks: List<PxRect>): Boolean = OverlayCheck.covers(found, masks)
 
     companion object {
         /**

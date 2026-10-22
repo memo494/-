@@ -37,6 +37,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.clu.quickanswer.ocr.ArabicOcr
+import com.clu.quickanswer.ocr.ColorLayout
 import com.clu.quickanswer.ocr.LatinOcr
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
@@ -155,6 +156,7 @@ class OverlayService : Service() {
     private val ocrLock = Any()
     private var ocr: ArabicOcr? = null
     private val latinOcrLock = Any()
+    private val colorLayout = ColorLayout()
     private var latinOcr: LatinOcr? = null
     @Volatile private var destroyed = false
 
@@ -999,25 +1001,55 @@ class OverlayService : Service() {
      * Use the existing offline Arabic reader first. If it cannot read this screen,
      * try the separately bundled offline Latin recognizer before sending a full
      * screenshot to the cloud. Each reader must fail closed, never guess text.
+     *
+     * The screenshot is copied to pixels and analysed ([ColorLayout]) once; both readers share that
+     * layout, and a screen that is not the quiz is declined without running either of them. Native
+     * failures (missing library, out of memory) are Errors, not Exceptions: they must lead to the
+     * screenshot path, never crash the service, hence Throwable.
      */
     private fun readQuestion(bmp: Bitmap, masks: List<PxRect>): Question? {
-        val arabic = try {
-            synchronized(ocrLock) { ocr?.read(bmp, masks) }
-        } catch (_: Exception) {
-            null
-        }
-        if (arabic != null) return arabic
-        return try {
-            synchronized(latinOcrLock) { latinOcr?.read(bmp, masks) }
-        } catch (_: Exception) {
-            null
+        // Hardware bitmaps cannot be read pixel by pixel.
+        var copy: Bitmap? = null
+        try {
+            val src = if (bmp.config == Bitmap.Config.HARDWARE) {
+                bmp.copy(Bitmap.Config.ARGB_8888, false).also { copy = it }
+            } else bmp
+            if (src == null) return null
+            val w = src.width
+            val h = src.height
+            val pixels = IntArray(w * h)
+            src.getPixels(pixels, 0, w, 0, 0, w, h)
+            val inspected = colorLayout.inspect(pixels, w, h)
+            val layout = inspected.layout ?: return null
+            val arabic = try {
+                synchronized(ocrLock) { ocr?.read(pixels, w, h, inspected, masks) }
+            } catch (t: Throwable) {
+                null
+            }
+            if (arabic != null) return arabic
+            return try {
+                synchronized(latinOcrLock) { latinOcr?.read(src, layout, masks) }
+            } catch (t: Throwable) {
+                null
+            }
+        } catch (t: Throwable) {
+            return null
+        } finally {
+            copy?.recycle()
         }
     }
 
-    /** Load the bundled English OCR alongside Arabic without blocking service startup. */
+    /**
+     * Load the bundled English OCR alongside Arabic without blocking service startup. It is warmed up
+     * on the IO thread before it is published, so the first real question does not pay for model loading.
+     */
     private fun loadLatinOcr() {
         scope.launch(Dispatchers.IO) {
-            val loaded = try { LatinOcr() } catch (_: Exception) { null }
+            val loaded = try {
+                LatinOcr().also { it.warmUp() }
+            } catch (t: Throwable) {
+                null
+            }
             synchronized(latinOcrLock) {
                 if (destroyed) loaded?.close() else latinOcr = loaded
             }
