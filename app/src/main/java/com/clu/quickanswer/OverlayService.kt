@@ -64,6 +64,9 @@ class OverlayService : Service() {
         @Volatile var volumeTrigger: (() -> Unit)? = null
         private const val CHANNEL_ID = "clu_overlay"
         private const val NOTIF_ID = 1
+        // "The bubble stopped, tap to start again": its own channel, so it is not silent like the running one.
+        private const val RESTART_CHANNEL_ID = "clu_restart"
+        private const val RESTART_NOTIF_ID = 2
         private const val ACTION_STOP = "com.clu.quickanswer.STOP"
         private const val ACTION_LAST_IMAGE = "com.clu.quickanswer.LAST_IMAGE"
         // How often auto mode looks at the screen; FrameSignature.judge and its tests count in these ticks.
@@ -136,7 +139,13 @@ class OverlayService : Service() {
     @Volatile private var busy = false
     private var lastSentSig: IntArray? = null
     private var prevTickSig: IntArray? = null
-    private var client: Answerer? = null
+    // The answer provider for the settings it was made from (clientKey); see currentClient().
+    @Volatile private var client: Answerer? = null
+    private var clientKey: String? = null
+    private val clientLock = Any()
+    // Set when the service stops on purpose (the user's stop, or onDestroy), so only a projection the
+    // system stopped (screen locked, status-bar chip) offers the "start again" notification.
+    @Volatile private var stoppingByUs = false
     // The virtual display only emits frames when the screen changes, so keep the last one.
     private var lastFrame: Bitmap? = null
 
@@ -161,6 +170,7 @@ class OverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            stoppingByUs = true
             stopSelf()
             return START_NOT_STICKY
         }
@@ -184,8 +194,8 @@ class OverlayService : Service() {
 
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         GeminiRuntime.init(this)
-        client = if (Prefs.provider(this) == "claude") ClaudeClient(Prefs.claudeKey(this), Prefs.claudeModel(this))
-        else GeminiClient(Prefs.apiKey(this), Prefs.model(this))
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(RESTART_NOTIF_ID)
+        currentClient()
         warmUp()
         AnswerStore.init(this)
         loadOcr()
@@ -203,8 +213,13 @@ class OverlayService : Service() {
         }
         projection = proj
         proj.registerCallback(object : MediaProjection.Callback() {
+            // Runs on [handler] (the main thread). Android 15 QPR1+ stops the projection when the screen
+            // locks; Android asks for consent again for every session, so offer a one-tap way back.
             override fun onStop() {
-                handler.post { stopSelf() }
+                if (stoppingByUs) return
+                stoppingByUs = true
+                showRestartNotification()
+                stopSelf()
             }
         }, handler)
 
@@ -243,6 +258,65 @@ class OverlayService : Service() {
             startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
             startForeground(NOTIF_ID, notification)
+        }
+    }
+
+    /**
+     * Tells the user the bubble stopped because the system ended the screen capture, with a tap that
+     * opens Clu and asks for the capture again (see [MainActivity.EXTRA_RESTART]).
+     */
+    private fun showRestartNotification() {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(
+                NotificationChannel(RESTART_CHANNEL_ID, "Clu: إعادة التشغيل", NotificationManager.IMPORTANCE_DEFAULT)
+            )
+            val open = PendingIntent.getActivity(
+                this, 2,
+                Intent(this, MainActivity::class.java)
+                    .putExtra(MainActivity.EXTRA_RESTART, true)
+                    .addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    ),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val notification = NotificationCompat.Builder(this, RESTART_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_menu_camera)
+                .setContentTitle("توقفت فقاعة Clu")
+                .setContentText("أوقف أندرويد التقاط الشاشة (مثلاً بعد قفلها). اضغط للتشغيل من جديد")
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(RESTART_NOTIF_ID, notification)
+        } catch (_: Exception) {
+            // No notification permission: the user starts it from the app as before.
+        }
+    }
+
+    /**
+     * The answer provider for the current settings. Rebuilt when the provider, key or model was
+     * changed in the settings screen (saved when it is left), so the change applies to the running
+     * bubble without a restart. Any thread.
+     */
+    private fun currentClient(): Answerer {
+        val claude = Prefs.provider(this) == "claude"
+        val key = if (claude) {
+            "claude|${Prefs.claudeKey(this)}|${Prefs.claudeModel(this)}"
+        } else {
+            "gemini|${Prefs.apiKey(this)}|${Prefs.model(this)}"
+        }
+        synchronized(clientLock) {
+            val existing = client
+            if (existing != null && key == clientKey) return existing
+            val fresh: Answerer = if (claude) {
+                ClaudeClient(Prefs.claudeKey(this), Prefs.claudeModel(this))
+            } else {
+                GeminiClient(Prefs.apiKey(this), Prefs.model(this))
+            }
+            client = fresh
+            clientKey = key
+            return fresh
         }
     }
 
@@ -426,10 +500,10 @@ class OverlayService : Service() {
 
     /** Lets the answer provider open its connection early. Never touches the network on the main thread. */
     private fun warmUp() {
-        val c = client ?: return
+        if (projection == null && client == null) return
         scope.launch(Dispatchers.IO) {
             try {
-                c.warmUp()
+                currentClient().warmUp()
             } catch (_: Exception) {
             }
         }
@@ -829,7 +903,9 @@ class OverlayService : Service() {
             shownImage = solved.image ?: shownImage
             // Seconds and the model that answered, to see what makes an answer slow.
             val secs = (SystemClock.uptimeMillis() - started) / 100 / 10.0
-            val via = if (solved.memoryKey != null) "" else client?.lastModel?.removePrefix("gemini-")?.let { " · $it" } ?: ""
+            val via = if (solved.memoryKey != null) "" else {
+                client?.lastModel?.removePrefix("gemini-")?.removePrefix("claude-")?.let { " · $it" } ?: ""
+            }
             showPanel(if (solved.isAnswer) "${solved.text}   ($secs ث$via)" else solved.text)
             if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
             // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
@@ -865,7 +941,7 @@ class OverlayService : Service() {
      *    remembered. A correction goes straight here: the text request would get the same reply again.
      */
     private fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?): Solved {
-        val c = client ?: return Solved("خطأ", null, null, null, isAnswer = false)
+        val c = currentClient()
         val memory = AnswerStore.memory
         val q = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else null
         val wordsDecide = q != null && !QuestionPrompt.refersToPicture(q.questionText)
@@ -1132,6 +1208,8 @@ class OverlayService : Service() {
     // ---------------------------------------------------------------- lifecycle
 
     override fun onDestroy() {
+        // projection.stop() below calls onStop(): that is our own stop, not one to offer a restart for.
+        stoppingByUs = true
         volumeTrigger = null
         autoJob?.cancel()
         scope.cancel()

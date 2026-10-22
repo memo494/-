@@ -1,39 +1,29 @@
 package com.clu.quickanswer
 
 import android.graphics.Bitmap
-import com.anthropic.client.AnthropicClient
-import com.anthropic.client.okhttp.AnthropicOkHttpClient
-import com.anthropic.core.JsonValue
-import com.anthropic.errors.AnthropicIoException
-import com.anthropic.errors.AnthropicServiceException
-import com.anthropic.errors.BadRequestException
-import com.anthropic.errors.InternalServerException
-import com.anthropic.errors.NotFoundException
-import com.anthropic.errors.PermissionDeniedException
-import com.anthropic.errors.RateLimitException
-import com.anthropic.errors.UnauthorizedException
-import com.anthropic.models.messages.Base64ImageSource
-import com.anthropic.models.messages.ContentBlockParam
-import com.anthropic.models.messages.ImageBlockParam
-import com.anthropic.models.messages.MessageCreateParams
-import com.anthropic.models.messages.OutputConfig
-import com.anthropic.models.messages.StopReason
-import com.anthropic.models.messages.TextBlockParam
+import android.os.SystemClock
 import java.io.IOException
-import java.time.Duration
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
+/**
+ * Claude through the Messages API with plain HttpURLConnection (the request and reply themselves are
+ * in [ClaudeApi]). Like [GeminiClient], the platform keeps the TLS connection in its pool, and
+ * [warmUp] opens it before the first question.
+ */
 class ClaudeClient(apiKey: String, model: String) : Answerer {
 
+    private val apiKey = Prefs.cleanKey(apiKey)
     private val model = Prefs.cleanModel(model).ifEmpty { Prefs.DEFAULT_CLAUDE_MODEL }
-
-    private val client: AnthropicClient = AnthropicOkHttpClient.builder()
-        .apiKey(Prefs.cleanKey(apiKey))
-        .maxRetries(1)
-        .timeout(Duration.ofSeconds(30))
-        .build()
 
     /** The image last sent to Claude (after cropping/scaling), so the user can check it. */
     @Volatile override var lastSent: Bitmap? = null
+        private set
+
+    /** The model that served the last answer (a server-side fallback may have answered instead). */
+    @Volatile override var lastModel: String? = null
         private set
 
     /** The model's answer for the screenshot, or a short Arabic error message. Never throws. */
@@ -44,79 +34,107 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
             return Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
         }
         lastSent = prepared.kept
-        val image = ImageBlockParam.builder()
-            .source(
-                Base64ImageSource.builder()
-                    .data(prepared.base64)
-                    .mediaType(Base64ImageSource.MediaType.IMAGE_JPEG)
-                    .build()
-            )
-            .build()
-        return send(
-            listOf(
-                ContentBlockParam.ofImage(image),
-                ContentBlockParam.ofText(TextBlockParam.builder().text(ScreenImage.PROMPT).build())
-            )
-        )
+        return send(ClaudeApi.requestBody(model, ScreenImage.PROMPT, prepared.base64))
     }
 
     /** A question already read on the device: text only, no image. */
-    override fun answerText(prompt: String): Reply =
-        send(listOf(ContentBlockParam.ofText(TextBlockParam.builder().text(prompt).build())))
+    override fun answerText(prompt: String): Reply = send(ClaudeApi.requestBody(model, prompt))
 
-    /** One request with [blocks] as the user turn. Never throws. */
-    private fun send(blocks: List<ContentBlockParam>): Reply {
-        return try {
-            val builder = MessageCreateParams.builder()
-                .model(model)
-                .maxTokens(1024L)
-                .addUserMessageOfBlockParams(blocks)
-                // Lowest effort = fastest answer. No thinking param (disabled thinking is a 400 on Opus 5.5).
-                .outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.LOW).build())
-            if (model in FALLBACK_MODELS) {
-                builder.putAdditionalHeader("anthropic-beta", "server-side-fallback-2026-07-01")
-                builder.putAdditionalBodyProperty("fallbacks", JsonValue.from("default"))
-            }
-            val message = client.messages().create(builder.build())
-
-            if (message.stopReason().orElse(null) == StopReason.REFUSAL) return Reply.empty(REFUSED)
-            val text = message.content()
-                .mapNotNull { it.text().orElse(null)?.text() }
-                .joinToString("")
-                .trim()
-            if (text.isEmpty()) Reply.empty(EMPTY) else Reply.answer(text)
-        } catch (e: UnauthorizedException) {
-            Reply.error("مفتاح Claude غير صالح")
-        } catch (e: PermissionDeniedException) {
-            Reply.error("مفتاح Claude لا يملك صلاحية لهذا النموذج")
-        } catch (e: RateLimitException) {
-            Reply.error("تم تجاوز حد Claude، انتظر قليلاً")
-        } catch (e: NotFoundException) {
-            Reply.error("اسم نموذج Claude غير صحيح")
-        } catch (e: BadRequestException) {
-            val msg = e.message ?: ""
-            if (msg.contains("credit", ignoreCase = true) || msg.contains("billing", ignoreCase = true)) {
-                Reply.error("رصيد Claude غير كافٍ، اشحن حسابك")
-            } else {
-                Reply.empty("Claude: ${msg.take(160)}")
-            }
-        } catch (e: InternalServerException) {
-            Reply.error("خوادم Claude مشغولة، جرّب بعد قليل")
-        } catch (e: AnthropicServiceException) {
-            if (e.statusCode() == 529) Reply.error("خوادم Claude مشغولة، جرّب بعد قليل")
-            else Reply.empty("خطأ Claude ${e.statusCode()}: ${e.message?.take(120) ?: ""}".trim())
-        } catch (e: AnthropicIoException) {
-            Reply.error("لا يوجد اتصال")
-        } catch (e: IOException) {
-            Reply.error("لا يوجد اتصال")
+    /**
+     * Opens the TLS connection ahead of the first question with a free List Models call. Only warms a
+     * cold pool, at most once per [WARM_UP_INTERVAL_MS] (same reasoning as [GeminiClient.warmUp]).
+     * Blocks, so call it off the main thread.
+     */
+    override fun warmUp() {
+        if (apiKey.isEmpty()) return
+        val now = SystemClock.elapsedRealtime()
+        if (inFlight.get() > 0) return
+        val done = lastDone.get()
+        if (done != NEVER && now - done < POOL_WARM_MS) return
+        while (true) {
+            val last = lastWarmUp.get()
+            if (last != NEVER && now - last < WARM_UP_INTERVAL_MS) return
+            if (lastWarmUp.compareAndSet(last, now)) break
+        }
+        try {
+            call("${ClaudeApi.BASE_URL}/models?limit=1", null)
         } catch (e: Exception) {
-            Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
+            // Only a warm-up; the real request reports any problem.
+        }
+    }
+
+    /** One request, retried once after a short pause on a dropped connection or a transient status. Never throws. */
+    private fun send(body: String): Reply {
+        if (apiKey.isEmpty()) return Reply.error("مفتاح Claude غير صالح")
+        for (attempt in 0..1) {
+            val last = attempt == 1
+            try {
+                val res = call("${ClaudeApi.BASE_URL}/messages", body)
+                if (res.code in 200..299) {
+                    val (reply, served) = ClaudeApi.parseSuccess(res.body)
+                    if (reply.isAnswer) lastModel = served ?: model
+                    return reply
+                }
+                if (last || !ClaudeApi.isRetryable(res.code)) return ClaudeApi.replyForError(res.code, res.body)
+            } catch (e: IOException) {
+                if (last) return Reply.error(NO_CONNECTION)
+            } catch (e: Exception) {
+                return Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
+            }
+            try {
+                Thread.sleep(RETRY_DELAY_MS)
+            } catch (e: InterruptedException) {
+                return Reply.error(NO_CONNECTION)
+            }
+        }
+        return Reply.error(NO_CONNECTION)
+    }
+
+    private class Response(val code: Int, val body: String)
+
+    /**
+     * GET when [body] is null, else POST. The body is read to the end on every path and the connection
+     * is not disconnect()ed on success, so the platform can reuse it for the next call.
+     */
+    private fun call(url: String, body: String?): Response {
+        inFlight.incrementAndGet()
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 30_000
+            conn.setRequestProperty("x-api-key", apiKey)
+            conn.setRequestProperty("anthropic-version", ClaudeApi.API_VERSION)
+            if (body != null) {
+                if (ClaudeApi.usesFallback(model)) conn.setRequestProperty("anthropic-beta", ClaudeApi.FALLBACK_BETA)
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.setRequestProperty("content-type", "application/json")
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            } else {
+                conn.requestMethod = "GET"
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            lastDone.set(SystemClock.elapsedRealtime())
+            return Response(code, text)
+        } catch (e: Exception) {
+            // A broken connection must not go back to the pool.
+            conn.disconnect()
+            throw e
+        } finally {
+            inFlight.decrementAndGet()
         }
     }
 
     companion object {
-        private const val EMPTY = "لم يتم الحصول على إجابة"
-        private const val REFUSED = "رفض النموذج الإجابة"
-        private val FALLBACK_MODELS = setOf("claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5")
+        private const val NO_CONNECTION = "لا يوجد اتصال"
+        private const val RETRY_DELAY_MS = 600L
+        private const val WARM_UP_INTERVAL_MS = 60_000L
+        private const val POOL_WARM_MS = 4 * 60_000L
+        private const val NEVER = -1L
+        private val lastWarmUp = AtomicLong(NEVER)
+        private val lastDone = AtomicLong(NEVER)
+        private val inFlight = AtomicInteger(0)
     }
 }
