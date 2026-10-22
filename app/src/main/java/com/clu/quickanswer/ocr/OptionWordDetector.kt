@@ -27,8 +27,8 @@ object OptionWordDetector {
         fun x(v: Int) = (v * width / REF_WIDTH).toInt().coerceIn(0, width)
         fun y(v: Int) = (v * height / REF_HEIGHT).toInt().coerceIn(0, height)
 
-        val left = column(argb, width, x(515), x(795), y(345), y(537), height) ?: return null
-        val right = column(argb, width, x(813), x(1084), y(345), y(537), height) ?: return null
+        val left = column(argb, width, x(515), x(795), y(345), y(514), height) ?: return null
+        val right = column(argb, width, x(813), x(1084), y(345), y(514), height) ?: return null
         val maxMisalignment = max(5, y(17))
         if (abs(left[0].centerY - right[0].centerY) > maxMisalignment ||
             abs(left[1].centerY - right[1].centerY) > maxMisalignment
