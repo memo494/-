@@ -162,6 +162,9 @@ object GameVisualLayout {
                     patch(637 + dx, 285 + dy, intArrayOf(-25, 25), intArrayOf(-13, 13)).light,
                     patch(917 + dx, 285 + dy, intArrayOf(-25, 25), intArrayOf(-13, 13)).light,
                 ).average()
+                // The choice panels sit on a visibly bright parchment. Without
+                // this, a dark numeric-game background can imitate four choices.
+                if (backdrop < 150.0) continue
                 val darkest = levels.max()
                 if (backdrop - darkest < 18) continue
                 val score = backdrop - levels.average() - (levels.max() - levels.min()) * 0.5
