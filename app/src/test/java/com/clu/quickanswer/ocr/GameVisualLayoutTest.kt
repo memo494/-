@@ -41,6 +41,28 @@ class GameVisualLayoutTest {
         assertNull(detected.submit)
     }
 
+    @Test fun numericConfirmButtonMustReallyBeVisible() {
+        val px = screen()
+        val centers = listOf(
+            922 to 302, 992 to 302, 1062 to 302,
+            922 to 370, 992 to 370, 1062 to 370,
+            922 to 438, 992 to 438, 1062 to 438,
+            992 to 504
+        )
+        for ((x, y) in centers) {
+            paint(px, x, y, listOf(-20, 20), listOf(-12, 12),
+                0xff908678.toInt())
+        }
+        assertNull(GameVisualLayout.detect(px, w, h)!!.submit)
+        for ((x, y) in listOf(600 to 480, 740 to 480, 605 to 495)) {
+            paint(px, x, y, listOf(-5, 5), listOf(-3, 3),
+                0xffb78537.toInt())
+        }
+        val visible = GameVisualLayout.detect(px, w, h)!!
+        assertNotNull(visible.submit)
+        assertTrue(visible.submit!!.centerY in 450f..520f)
+    }
+
     @Test fun whitePadRequiresGreenSubmit() {
         val px = screen(0xff443333.toInt())
         val rows = listOf(
