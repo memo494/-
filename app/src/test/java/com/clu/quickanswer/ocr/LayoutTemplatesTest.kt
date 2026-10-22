@@ -32,7 +32,7 @@ class LayoutTemplatesTest {
         return LayoutTemplate(
             id = id, packageName = pkg, fingerprint = fp, arrangement = arrangement,
             question = RelRect(0.1f, 0.1f + shift, 0.9f, 0.25f + shift), options = opts, numericField = field,
-            signatures = List(1 + opts.size + (if (field != null) 1 else 0)) { RegionSignature(60, 220) },
+            signatures = List(1 + opts.size + (if (field != null) 1 else 0)) { RegionSignature(60, 0.9f) },
             language = "en", state = state, hits = hits, misses = 0, source = "model", createdAt = used, lastUsedAt = used,
         )
     }

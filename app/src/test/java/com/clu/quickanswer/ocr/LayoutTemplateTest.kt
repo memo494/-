@@ -21,14 +21,14 @@ class LayoutTemplateTest {
     private fun grid() = LayoutTemplate(
         id = "g1", packageName = "com.example.game", fingerprint = fp, arrangement = Arrangement.GRID,
         question = q, options = opt, numericField = null,
-        signatures = List(5) { RegionSignature(60 + it, 220 - it) }, language = "ar",
+        signatures = List(5) { RegionSignature(60 + it, 0.9f - it / 100f) }, language = "ar",
         state = TemplateState.TRUSTED, hits = 4, misses = 1, source = "manual", createdAt = 1_700_000_000_123L, lastUsedAt = 1_700_000_999_999L,
     )
 
     private fun numeric() = LayoutTemplate(
         id = "n1", packageName = null, fingerprint = fp.replace('3', '.'), arrangement = Arrangement.NUMERIC,
         question = q, options = emptyList(), numericField = RelRect(0.3f, 0.3f, 0.7f, 0.36f),
-        signatures = listOf(RegionSignature(250, 20), RegionSignature(30, 200)), language = null,
+        signatures = listOf(RegionSignature(250, 1f), RegionSignature(30, 0.35f)), language = null,
         state = TemplateState.CANDIDATE, hits = 0, misses = 0, source = "model", createdAt = 5L, lastUsedAt = 5L,
     )
 
@@ -54,13 +54,6 @@ class LayoutTemplateTest {
     }
 
     @Test
-    fun signaturePolarity() {
-        assertTrue(RegionSignature(40, 220).lightOnDark)
-        assertFalse(RegionSignature(240, 20).lightOnDark)
-        assertFalse(RegionSignature(100, 100).lightOnDark)
-    }
-
-    @Test
     fun jsonRoundtrip() {
         for (t in listOf(grid(), numeric())) {
             assertTrue(t.isValid)
@@ -75,7 +68,7 @@ class LayoutTemplateTest {
         assertTrue(grid().isValid)
         assertTrue(numeric().isValid)
         assertTrue(grid().copy(arrangement = Arrangement.VERTICAL).isValid)
-        assertTrue(grid().copy(options = opt.take(2), signatures = List(3) { RegionSignature(10, 200) }).isValid)
+        assertTrue(grid().copy(options = opt.take(2), signatures = List(3) { RegionSignature(10, 0.5f) }).isValid)
     }
 
     @Test
@@ -85,16 +78,19 @@ class LayoutTemplateTest {
         assertFalse(g.copy(fingerprint = fp.drop(1)).isValid)
         assertFalse(g.copy(fingerprint = "z".repeat(288)).isValid)
         assertFalse(g.copy(options = opt.take(1), signatures = g.signatures.take(2)).isValid)
-        assertFalse(g.copy(options = List(9) { opt[it % 4] }, signatures = List(10) { RegionSignature(1, 2) }).isValid)
-        assertFalse(g.copy(numericField = RelRect(0.3f, 0.6f, 0.7f, 0.7f), signatures = g.signatures + RegionSignature(1, 2)).isValid)
+        assertFalse(g.copy(options = List(9) { opt[it % 4] }, signatures = List(10) { RegionSignature(1, 0.5f) }).isValid)
+        assertFalse(g.copy(numericField = RelRect(0.3f, 0.6f, 0.7f, 0.7f), signatures = g.signatures + RegionSignature(1, 0.5f)).isValid)
         assertFalse(g.copy(signatures = g.signatures.drop(1)).isValid)
         assertFalse(g.copy(question = RelRect(0.5f, 0.1f, 0.4f, 0.2f)).isValid)
         assertFalse(g.copy(options = opt.take(3) + RelRect(0.5f, 0.5f, 1.5f, 0.6f), signatures = g.signatures).isValid)
-        assertFalse(g.copy(signatures = g.signatures.take(4) + RegionSignature(300, 0)).isValid)
+        assertFalse(g.copy(signatures = g.signatures.take(4) + RegionSignature(300, 0.5f)).isValid)
+        assertFalse(g.copy(signatures = g.signatures.take(4) + RegionSignature(100, 1.2f)).isValid)
+        assertFalse(g.copy(signatures = g.signatures.take(4) + RegionSignature(100, -0.1f)).isValid)
+        assertFalse(g.copy(signatures = g.signatures.take(4) + RegionSignature(100, Float.NaN)).isValid)
         assertFalse(g.copy(hits = -1).isValid)
         val n = numeric()
         assertFalse(n.copy(numericField = null, signatures = n.signatures.take(1)).isValid)
-        assertFalse(n.copy(options = opt.take(2), signatures = List(4) { RegionSignature(1, 2) }).isValid)
+        assertFalse(n.copy(options = opt.take(2), signatures = List(4) { RegionSignature(1, 0.5f) }).isValid)
     }
 
     @Test
@@ -112,6 +108,9 @@ class LayoutTemplateTest {
         assertNull(LayoutTemplate.fromJson(grid().toJson().put("q", "not a rect")))
         assertNull(LayoutTemplate.fromJson(grid().toJson().put("hits", "many")))
         assertNull(LayoutTemplate.fromJson(grid().toJson().put("sig", JSONArray().put(JSONArray().put(1)))))
+        // The old (background, ink) pairs with a luma where the uniformity belongs are not valid signatures.
+        val old = JSONArray().also { a -> repeat(5) { a.put(JSONArray().put(60).put(220)) } }
+        assertNull(LayoutTemplate.fromJson(grid().toJson().put("sig", old)))
         assertNull(LayoutTemplate.fromJson(grid().toJson().put("fp", "short")))
     }
 

@@ -125,6 +125,22 @@ class ScreenReaderTest {
     }
 
     @Test
+    fun aSingleUnreliableOptionLine_isDeclined_evenWhenTheMeanIsHigh() {
+        val c = SyntheticScreens.quiz(600, 1300)
+        // Calls 0-1 are the question lines, 2-5 the options; the third option reads at 0.5, the rest at 0.98:
+        // the overall (0.93) and question (0.98) means are fine.
+        for (bad in 2..5) {
+            val r = reader(probability = { if (it == bad) 0.5f else 0.98f })
+            val reading = read(c, r)
+            assertNull("option ${bad - 2}", reading.question)
+            assertEquals("an option line is unreliable", reading.failure)
+        }
+        // At the floor it passes; just under it does not.
+        assertNotNull(read(c, reader(probability = { if (it == 3) 0.62f else 0.98f })).question)
+        assertEquals("an option line is unreliable", read(c, reader(probability = { if (it == 3) 0.58f else 0.98f })).failure)
+    }
+
+    @Test
     fun aQuestionThatIsNotArabic_orTooShort_isDeclined() {
         val c = SyntheticScreens.quiz(600, 1300)
         assertEquals("question is not Arabic", read(c, reader(dictionary = listOf("a", "b"))).failure)

@@ -31,12 +31,13 @@ enum class Arrangement { VERTICAL, GRID, NUMERIC }
 enum class TemplateState { CANDIDATE, TRUSTED }
 
 /**
- * Typical colours of a region, luma 0..255: the [background] and the [ink] (the text). Tells light
- * text on dark from dark on light, and a region that holds text from one that does not.
+ * What the frame of a region looks like, to tell a screen that merely resembles the game from the
+ * game: the [background] (median luma 0..255 of the region's border ring) and the [uniformity]
+ * (0..1, the share of that ring close to the background; a ring that crosses a picture or a
+ * button's edge is less uniform). The inside is left out on purpose: the text, and what a player
+ * has typed, change from screen to screen.
  */
-data class RegionSignature(val background: Int, val ink: Int) {
-    val lightOnDark: Boolean get() = ink > background
-}
+data class RegionSignature(val background: Int, val uniformity: Float)
 
 /**
  * Where one game puts its question and answer boxes, learned from a screen that was read once.
@@ -80,7 +81,7 @@ data class LayoutTemplate(
             if (!shapeOk) return false
             val all = regions
             return all.all { it.isValid } && signatures.size == all.size &&
-                signatures.all { it.background in 0..255 && it.ink in 0..255 }
+                signatures.all { it.background in 0..255 && it.uniformity in 0f..1f }
         }
 
     fun toJson(): JSONObject = JSONObject()
@@ -91,7 +92,7 @@ data class LayoutTemplate(
         .put("q", rectJson(question))
         .put("opts", JSONArray().also { a -> options.forEach { a.put(rectJson(it)) } })
         .put("num", numericField?.let { rectJson(it) } ?: JSONObject.NULL)
-        .put("sig", JSONArray().also { a -> signatures.forEach { a.put(JSONArray().put(it.background).put(it.ink)) } })
+        .put("sig", JSONArray().also { a -> signatures.forEach { a.put(JSONArray().put(it.background).put(it.uniformity.toDouble())) } })
         .put("lang", language ?: JSONObject.NULL)
         .put("state", state.name)
         .put("hits", hits)
@@ -129,7 +130,7 @@ data class LayoutTemplate(
                     signatures = List(sigJson.length()) {
                         val s = sigJson.getJSONArray(it)
                         require(s.length() == 2)
-                        RegionSignature(s.getInt(0), s.getInt(1))
+                        RegionSignature(s.getInt(0), s.getDouble(1).toFloat())
                     },
                     language = o.stringOrNull("lang"),
                     state = TemplateState.valueOf(o.getString("state")),

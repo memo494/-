@@ -11,6 +11,7 @@ package com.clu.quickanswer.ocr
  *   read the same, or an option is not Arabic text or digits;
  * - one of our own overlay windows ([masks], painted black in the capture) covers the question or
  *   the answer buttons;
+ * - any question or option line that has characters is under [MIN_LINE_CONFIDENCE] on its own;
  * - the mean per-character confidence is under [minConfidence], over everything and over the
  *   question alone (clean options must not hide a garbled question).
  *
@@ -81,6 +82,11 @@ class ScreenReader(
             // A button without readable text is not skipped: the option that cannot be read could be
             // the right one, and the model would then only be able to pick a wrong answer.
             if (text.isEmpty()) return fail("a button has no readable text", qLines, oLines)
+            // Like a question line, an option line must be reliable on its own: a clean option
+            // must not hide a garbled one in the mean, and a garbled option could be the right answer.
+            if (lines.any { it.charCount > 0 && it.confidence < MIN_LINE_CONFIDENCE }) {
+                return fail("an option line is unreliable", qLines, oLines)
+            }
             options.add(text)
         }
         if (!found.numeric) {
@@ -153,8 +159,9 @@ class ScreenReader(
         const val MIN_OPTIONS = 2
 
         /**
-         * Every question line that has characters must reach this on its own. The worst real line
-         * is 0.78 (S1); a band merged by an overlay or a cut-off banner reads 0.30-0.56.
+         * Every question or option line that has characters must reach this on its own. The worst
+         * real question line is 0.78 (S1); a band merged by an overlay or a cut-off banner reads
+         * 0.30-0.56.
          */
         const val MIN_LINE_CONFIDENCE = 0.6f
 
