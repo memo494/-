@@ -13,6 +13,7 @@ import android.graphics.Bitmap
 class ArabicOcr private constructor(
     private val model: OrtCtcModel,
     private val reader: ScreenReader,
+    private val lineRecognizer: LineRecognizer,
 ) : AutoCloseable {
 
     /**
@@ -33,6 +34,28 @@ class ArabicOcr private constructor(
         }
     }
 
+    /**
+     * OCR the word rectangles found from actual bright text pixels. This is
+     * separate from the strict legacy question detector and works when it
+     * rejects a 2-column quiz. Do not auto-tap without a successful match.
+     */
+    fun readWords(bitmap: Bitmap, words: List<PxRect>): List<WordAnswerMatcher.Candidate> {
+        if (words.size != 4) return emptyList()
+        val src = if (bitmap.config == Bitmap.Config.HARDWARE) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
+        try {
+            val width = src.width
+            val height = src.height
+            val argb = IntArray(width * height)
+            src.getPixels(argb, 0, width, 0, 0, width, height)
+            return words.map { region ->
+                val line = lineRecognizer.recognize(argb, width, height, region)
+                WordAnswerMatcher.Candidate(line.text, region, line.confidence)
+            }
+        } finally {
+            if (src !== bitmap) src.recycle()
+        }
+    }
+
     override fun close() = model.close()
 
     companion object {
@@ -45,7 +68,7 @@ class ArabicOcr private constructor(
             val dictionary = assets.open(DICTIONARY_ASSET).bufferedReader(Charsets.UTF_8).use { it.readText() }
             val model = OrtCtcModel(modelBytes, threads)
             val recognizer = LineRecognizer(model, LineRecognizer.parseDictionary(dictionary))
-            return ArabicOcr(model, ScreenReader(recognizer))
+            return ArabicOcr(model, ScreenReader(recognizer), recognizer)
         }
     }
 }
