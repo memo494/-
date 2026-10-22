@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "source": "User-supplied screenshots",
+  "capturedDate": "2026-10-22",
+  "purpose": "OCR/layout regression corpus; no online inference answers stored in production",
+  "cases": [
+    {
+      "id": "1000277246",
+      "filename": "1000277246.jpg",
+      "type": "dark_numeric_with_confirm",
+      "question": "في أي عام تم الانتهاء من هدم جدار برلين؟",
+      "expectedAnswer": null,
+      "notes": "Do not treat filled answer shown after input as initial answer"
+    },
+    {
+      "id": "1000277245",
+      "filename": "1000277245.jpg",
+      "type": "dark_numeric_with_confirm",
+      "question": "في أي عام ميلادي بدأت الحرب العالمية الأولى؟",
+      "expectedAnswer": "1914"
+    },
+    {
+      "id": "1000277244",
+      "filename": "1000277244.jpg",
+      "type": "dark_grid_2x2",
+      "question": "من هو قائد جيش المسلمين في معركة حطين؟",
+      "optionsRtl": [
+        "صلاح الدين الأيوبي",
+        "عمرو بن العاص",
+        "طارق بن زياد",
+        "نور الدين زنكي"
+      ],
+      "expectedAnswer": "صلاح الدين الأيوبي"
+    },
+    {
+      "id": "1000277243",
+      "filename": "1000277243.jpg",
+      "type": "dark_grid_2x2_with_image",
+      "question": "أين يقع المعلم السياحي الموجود في الصورة؟",
+      "optionsRtl": [
+        "الكويت",
+        "تركيا",
+        "المانيا",
+        "إيطاليا"
+      ],
+      "expectedAnswer": "إيطاليا"
+    },
+    {
+      "id": "1000277242",
+      "filename": "1000277242.jpg",
+      "type": "dark_grid_2x2",
+      "question": "ما هو اسم الشهر الأول من السنة في التقويم الهجري؟",
+      "optionsRtl": [
+        "المحرم",
+        "شوال",
+        "جمادى الآخرة",
+        "رمضان"
+      ],
+      "expectedAnswer": "المحرم"
+    },
+    {
+      "id": "1000277019",
+      "filename": "1000277019.jpg",
+      "type": "white_numeric_with_green_submit",
+      "question": "كم عدد الحكام الموجودين على ارض الملعب في رياضة كرة السلة؟",
+      "expectedAnswer": null,
+      "notes": "Variable by competition: do not hard-code an ambiguous answer"
+    },
+    {
+      "id": "1000276493",
+      "filename": "1000276493.jpg",
+      "type": "white_numeric_with_green_submit",
+      "question": "في أي عام ميلادي تم بناء الجامع الأموي في دمشق؟",
+      "expectedAnswer": null,
+      "notes": "Building chronology question; verify accepted year with a source"
+    },
+    {
+      "id": "1000276181",
+      "filename": "1000276181.jpg",
+      "type": "gallery_screenshot_negative",
+      "question": null,
+      "expectedAnswer": null,
+      "notes": "Screenshot of image viewer containing a smaller game photograph: must not count as active in-game UI"
+    },
+    {
+      "id": "1000276172",
+      "filename": "1000276172.webp",
+      "type": "white_vertical_options",
+      "question": "ما هي السورة التي بفضلها أسلم الصحابي الجليل عمر بن الخطاب؟",
+      "optionsTopDown": [
+        "سورة البقرة",
+        "سورة طه",
+        "سورة الإخلاص",
+        "سورة النور"
+      ],
+      "expectedAnswer": "سورة طه"
+    }
+  ]
+}
