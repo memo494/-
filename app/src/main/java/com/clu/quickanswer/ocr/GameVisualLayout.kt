@@ -145,10 +145,10 @@ object GameVisualLayout {
         for (dx in -25..60 step 8) for (dy in -10..45 step 6) {
             for (pitch in intArrayOf(79, 84, 90)) {
                 val centers = listOf(
-                    637 + dx to 382 + dy,
                     917 + dx to 382 + dy,
-                    637 + dx to 382 + dy + pitch,
+                    637 + dx to 382 + dy,
                     917 + dx to 382 + dy + pitch,
+                    637 + dx to 382 + dy + pitch,
                 )
                 val swatches = centers.map { (x, y) ->
                     patch(x, y, intArrayOf(-25, 25), intArrayOf(-13, 13))
