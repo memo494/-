@@ -39,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var highlightCheck: CheckBox
     private lateinit var vibrateCheck: CheckBox
     private lateinit var clearMemoryButton: Button
+    private lateinit var autoTouchCheck: CheckBox
     private lateinit var volumeKeyCheck: CheckBox
     private lateinit var volumeKeyStatus: TextView
 
@@ -161,6 +162,9 @@ class MainActivity : AppCompatActivity() {
         highlightCheck.isChecked = Prefs.highlightAnswer(this)
         vibrateCheck.isChecked = Prefs.vibrateOnAnswer(this)
         AnswerStore.init(this)
+        autoTouchCheck = findViewById(R.id.autoTouchCheck)
+        autoTouchCheck.isChecked = Prefs.autoTouch(this)
+        autoTouchCheck.setOnCheckedChangeListener { _, checked -> Prefs.saveAutoTouch(this, checked) }
         volumeKeyCheck = findViewById(R.id.volumeKeyCheck)
         volumeKeyStatus = findViewById(R.id.volumeKeyStatus)
         volumeKeyCheck.isChecked = Prefs.volumeKey(this)
