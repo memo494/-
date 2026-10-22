@@ -247,6 +247,20 @@
         </LinearLayout>
 
         <CheckBox
+            android:id="@+id/autoTouchCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="لمس الإجابة تلقائياً في وضع A (خيارات أو رقم من 1–4 خانات)" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="يتطلب تفعيل خدمة إمكانية الوصول. اضغط مطولاً على الفقاعة لتشغيل A أو إيقافه. لن يلمس أي مكان إذا لم يتأكد من إحداثياته."
+            android:textAlignment="viewStart"
+            android:textSize="12sp" />
+
+        <CheckBox
             android:id="@+id/volumeKeyCheck"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
