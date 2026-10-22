@@ -1,0 +1,30 @@
+# Decisions (why things are the way they are)
+
+Short records so no agent re-opens a settled question. Add a new entry instead of editing an old
+one; mark an entry "superseded by N" when it changes.
+
+1. **On-device first, cloud last.** Reading and memory cost no tokens and answer in well under a
+   second; the screenshot request is the slowest and most expensive step, so it is the fallback.
+2. **Fail closed.** A reader that is not sure returns null and the next step answers. A wrong
+   question read with confidence (a missing word, a missing option) is worse than a slower answer.
+   Hence: confidence floors per line, overlay masks, the hidden-button slot check, clipped-text
+   detection in templates.
+3. **Templates, not on-device training.** A game's layout is learned as geometry (boxes as
+   fractions of the screen) plus region signatures; no model is trained on the phone. Cheap,
+   inspectable, and confirmed against real answers before it is trusted.
+4. **Fingerprint = game, signatures = screen type.** On real captures the 24x12 fingerprint
+   separates games (same game <= 1.59, other game >= 1.97) but not question types inside one game
+   (numeric vs 2x2 grid: 0.5), so every template also checks each region's background and
+   uniformity. Thresholds are calibrated on 7 real screens; recalibrate when games are added.
+5. **Real screenshots stay out of this public repository.** They show other players and the
+   owner. Tests use synthetic images; real-screen checks run locally or from a private fixtures repo.
+6. **Claude over REST, no SDK.** The Anthropic Java SDK added megabytes of dependencies for one
+   request; `ClaudeApi` is a small, tested request/response layer.
+7. **Gemini is the default (free tier), Claude optional (paid, accurate).** Text requests ask for
+   the option number only, with the least thinking, to keep them fast and short.
+8. **English OCR is ML Kit's bundled Latin model.** Works offline on first launch; Arabic stays on
+   the PP-OCRv5 ONNX recogniser, which reads the games' Arabic at 0.93-0.97 confidence.
+9. **Tests are the contract between agents.** The planner writes them before the code; the
+   implementer may not change them. This removes back-and-forth and makes review objective.
+10. **Learning never slows an answer.** Layout requests run in the background after the answer is
+    shown, rate-limited, only for screens with no fitting template.

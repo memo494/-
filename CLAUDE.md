@@ -6,3 +6,8 @@
   - `worker` (Haiku, `.claude/agents/worker.md`): mechanical steps — simple edits, searches, running tests or commands.
 - Opus reviews each report, fixes or re-delegates anything wrong, and does the final check before committing.
 - Keep tricky design decisions and final review on Opus.
+
+# Shared with the other coding agent (Codex)
+
+- Read `docs/ARCHITECTURE.md` (one-page map) before exploring code; `docs/ROADMAP.md` for status; `docs/DECISIONS.md` before re-opening a design question. Rules for both agents: `AGENTS.md`.
+- Each task: an issue with the spec and contract tests on its branch → Codex implements → review in one complete PR comment → owner merges → update `docs/ROADMAP.md`.
