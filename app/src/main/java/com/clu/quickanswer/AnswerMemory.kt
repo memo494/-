@@ -281,7 +281,10 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
         /** [text] without diacritics, punctuation, spaces and letter variants, with 0-9 digits: the form compared. */
         fun keyOf(text: String): String = ArabicText.key(AnswerParser.asciiDigits(text))
 
-        private val NEGATIONS = setOf("ليس", "ليست", "ليسوا", "لا", "لم", "لن", "غير", "عدا", "الا", "بدون", "دون")
+        private val NEGATIONS = setOf(
+            "ليس", "ليست", "ليسوا", "لا", "لم", "لن", "غير", "عدا", "الا", "بدون", "دون",
+            "not", "no", "never", "except", "without", "neither", "nor"
+        )
         private val DIGIT_RUN = Regex("\\d+(?:[.,]\\d+)*")
 
         // An arithmetic sign between two numbers: "12 - 4", "3 × 4", "8 / 2" (x, X and × are one sign).
