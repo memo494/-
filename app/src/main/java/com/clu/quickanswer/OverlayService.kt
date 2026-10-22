@@ -41,6 +41,9 @@ import com.clu.quickanswer.ocr.ColorLayout
 import com.clu.quickanswer.ocr.LatinOcr
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
+import com.clu.quickanswer.ocr.ScreenFingerprint
+import com.clu.quickanswer.ocr.ScreenLayout
+import com.clu.quickanswer.ocr.TemplateReader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -203,6 +206,7 @@ class OverlayService : Service() {
         currentClient()
         warmUp()
         AnswerStore.init(this)
+        TemplateStore.init(this)
         loadOcr()
         loadLatinOcr()
 
@@ -1020,23 +1024,72 @@ class OverlayService : Service() {
             val pixels = IntArray(w * h)
             src.getPixels(pixels, 0, w, 0, 0, w, h)
             val inspected = colorLayout.inspect(pixels, w, h)
-            val layout = inspected.layout ?: return null
-            val arabic = try {
-                synchronized(ocrLock) { ocr?.read(pixels, w, h, inspected, masks) }
-            } catch (t: Throwable) {
-                null
-            }
-            if (arabic != null) return arabic
-            return try {
-                synchronized(latinOcrLock) { latinOcr?.read(src, layout, masks) }
-            } catch (t: Throwable) {
-                null
-            }
+            val layout = inspected.layout ?: return readWithTemplates(src, pixels, w, h, masks)
+            return readWith(src, pixels, w, h, inspected, layout, masks, null)
         } catch (t: Throwable) {
             return null
         } finally {
             copy?.recycle()
         }
+    }
+
+    /**
+     * Reads [language] ("ar": the Arabic reader only, "en": the Latin one only, null: Arabic and
+     * then Latin) on a layout that [ColorLayout] or a template gave. Each reader runs in its own
+     * try/catch under its own lock and a failure counts as "could not read".
+     */
+    private fun readWith(
+        src: Bitmap,
+        pixels: IntArray,
+        w: Int,
+        h: Int,
+        inspected: ColorLayout.Result,
+        layout: ScreenLayout,
+        masks: List<PxRect>,
+        language: String?,
+    ): Question? {
+        // Anything but "ar"/"en" (an old or damaged file) reads with both.
+        val lang = language?.takeIf { it == "ar" || it == "en" }
+        if (lang == null || lang == "ar") {
+            val arabic = try {
+                synchronized(ocrLock) { ocr?.read(pixels, w, h, inspected, masks) }
+            } catch (t: Throwable) {
+                null
+            }
+            if (arabic != null || lang == "ar") return arabic
+        }
+        return try {
+            synchronized(latinOcrLock) { latinOcr?.read(src, layout, masks) }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Reads a screen that [ColorLayout] declined with a learned layout. Only TRUSTED templates are
+     * used to read: candidates are confirmed in step 2, when the cloud reply is compared with what
+     * was read. A template that does not fit the screen is not a failure (another mode or screen of
+     * the game), but a fitting template whose reading is declined is, and counts against it.
+     */
+    private fun readWithTemplates(src: Bitmap, pixels: IntArray, w: Int, h: Int, masks: List<PxRect>): Question? {
+        val fp = ScreenFingerprint.of(pixels, w, h, masks)
+        val templates = TemplateStore.templates
+        for (t in templates.find(fp, null, trustedOnly = true)) {
+            if (!TemplateReader.fits(t, pixels, w, h)) continue
+            val now = System.currentTimeMillis()
+            val tl = TemplateReader.layoutFor(t, pixels, w, h)
+            if (tl == null) {
+                templates.recordFailure(t.id, now)
+                continue
+            }
+            val q = readWith(src, pixels, w, h, ColorLayout.Result(tl, null), tl, masks, t.language)
+            if (q != null) {
+                templates.recordSuccess(t.id, now)
+                return q
+            }
+            templates.recordFailure(t.id, now)
+        }
+        return null
     }
 
     /**
