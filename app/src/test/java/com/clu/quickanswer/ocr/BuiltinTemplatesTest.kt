@@ -24,7 +24,7 @@ class BuiltinTemplatesTest {
     @Test fun everyTemplateIsValidTrustedAndAddedToAnEmptyStore() {
         val store = LayoutTemplates()
         val r = store.merge(json)!!
-        assertEquals("every built-in template is added", 4, r.added)
+        assertEquals("every built-in template is added", 5, r.added)
         assertEquals(0, r.skipped)
         for (t in store.all()) {
             assertTrue(t.id, t.id.startsWith("builtin-"))
@@ -52,7 +52,7 @@ class BuiltinTemplatesTest {
         store.merge(json)
         val again = store.merge(json)!!
         assertEquals("nothing is added twice", 0, again.added)
-        assertEquals(4, store.size)
+        assertEquals(5, store.size)
     }
 
     @Test fun theVersionIsReadFromTheFile() {

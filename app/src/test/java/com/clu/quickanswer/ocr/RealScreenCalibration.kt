@@ -45,16 +45,34 @@ class RealScreenCalibration {
             "builtin-parchment-grid", Arrangement.GRID,
             question = PxRect(895, 478, 2045, 598), options = gridButtons, field = null,
             shots = listOf(
+                Shot("6e0e9099", emptyList()),
+                Shot("d09bfafb", emptyList()),
                 Shot("833df123", listOf(PxRect(70, 560, 262, 750))),
                 Shot("f6ead0c0", listOf(panel, bubbleHigh, PxRect(1070, 660, 1290, 756))),
                 Shot("863254e8", listOf(panel, bubbleHigh, toast)),
                 Shot("5ec78b50", listOf(bubbleLow)),
+                Shot("e97f5c84", listOf(PxRect(795, 15, 2175, 228), PxRect(58, 362, 248, 553), PxRect(950, 665, 1410, 772))),
             ),
         ),
         Pattern(
+            // The tie-break round: no players' bar, everything sits higher.
+            "builtin-parchment-grid-tie", Arrangement.GRID,
+            question = PxRect(840, 425, 1995, 565),
+            options = listOf(
+                PxRect(1388, 609, 1854, 735), PxRect(890, 609, 1354, 735),
+                PxRect(1388, 757, 1854, 883), PxRect(889, 757, 1354, 883),
+            ),
+            field = null,
+            shots = listOf(Shot("112371d2", emptyList())),
+        ),
+        Pattern(
             "builtin-parchment-numeric", Arrangement.NUMERIC,
-            question = PxRect(820, 448, 1530, 600), options = emptyList(), field = PxRect(950, 645, 1435, 760),
-            shots = listOf(Shot("43b15cef", listOf(panel, bubbleHigh, PxRect(910, 612, 1465, 785), toast))),
+            question = PxRect(780, 445, 1540, 600), options = emptyList(), field = PxRect(950, 645, 1435, 760),
+            shots = listOf(
+                Shot("3af318bb", emptyList()),
+                Shot("182638db", emptyList()),
+                Shot("43b15cef", listOf(panel, bubbleHigh, PxRect(910, 612, 1465, 785), toast)),
+            ),
         ),
         Pattern(
             "builtin-parchment-numeric-tie", Arrangement.NUMERIC,
