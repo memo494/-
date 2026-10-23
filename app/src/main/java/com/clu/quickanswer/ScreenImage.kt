@@ -117,22 +117,39 @@ object ScreenImage {
         return top to bottom
     }
 
+    /**
+     * Longest side, in pixels, of the picture of a question when it is sent with the question (see
+     * [preparePicture]). A photo of a landmark or a character is recognised at this size, and the
+     * request stays a few tens of kilobytes (the whole screenshot is sent at 1280 or 1600).
+     */
     const val PICTURE_MAX_SIDE = 512
+
+    /** JPEG quality of the picture of a question: the same as the Gemini screenshot. */
     const val PICTURE_QUALITY = 80
 
-    internal fun scaledSize(width: Int, height: Int, maxSide: Int): Pair<Int, Int> = TODO()
+    /**
+     * The picture [picture] (a crop of the screen where the game shows a question's picture), as the
+     * JPEG to send and the bitmap to show, scaled to [PICTURE_MAX_SIDE] at [PICTURE_QUALITY]. Not
+     * [prepare]: that one takes a dark image for a black capture and cuts dark bars off, and a night
+     * scene is a picture too. [Prepared.geometry] is the whole crop.
+     */
+    fun preparePicture(picture: Bitmap): Prepared =
+        encode(picture, PICTURE_MAX_SIDE, PICTURE_QUALITY, SentGeometry.whole(picture.width, picture.height))
+
+    /**
+     * [width] x [height] scaled down, keeping its shape, until its longer side is at most [maxSide]
+     * (the longer side is exactly [maxSide] then); never enlarged, and no side under 1. Integer
+     * arithmetic, so the longer side is not a pixel short through float rounding.
+     */
+    internal fun scaledSize(width: Int, height: Int, maxSide: Int): Pair<Int, Int> {
+        val longest = maxOf(width, height)
+        if (longest <= maxSide) return width to height
+        return maxOf(1, (width.toLong() * maxSide / longest).toInt()) to maxOf(1, (height.toLong() * maxSide / longest).toInt())
+    }
 
     private fun encode(src: Bitmap, maxSide: Int, quality: Int, geometry: SentGeometry): Prepared {
-        val longest = maxOf(src.width, src.height)
-        val bmp = if (longest > maxSide) {
-            val s = maxSide.toFloat() / longest
-            Bitmap.createScaledBitmap(
-                src,
-                maxOf(1, (src.width * s).toInt()),
-                maxOf(1, (src.height * s).toInt()),
-                true
-            )
-        } else src
+        val (w, h) = scaledSize(src.width, src.height, maxSide)
+        val bmp = if (w != src.width || h != src.height) Bitmap.createScaledBitmap(src, w, h, true) else src
         val out = ByteArrayOutputStream()
         bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
         // The caller recycles the original capture, so never keep a reference to it.

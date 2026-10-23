@@ -52,6 +52,16 @@ interface Answerer {
     fun answerText(prompt: String): Reply
 
     /**
+     * Asks a question that was already read off the screen and shows a picture: [prompt] (see
+     * [QuestionPrompt.buildPicture]) and the [picture] (a crop of the screen, scaled and encoded here,
+     * see [ScreenImage.preparePicture]) in ONE request. Same models, quota handling, fallbacks and
+     * error mapping as [answerText]; [lastSent] becomes the picture as sent. Never throws.
+     *
+     * Default: not supported, an [Reply.Kind.EMPTY] reply, so the caller falls back to the screenshot.
+     */
+    fun answerPicture(prompt: String, picture: Bitmap): Reply = Reply.empty("")
+
+    /**
      * Asks for the screen's layout: the screenshot together with [LayoutPrompt.TEXT], so a template
      * can be learned from the reply. Background work only: ONE request to the user's own model, with
      * no fallbacks, no retries and no fan-out, so it never competes with the answers for quota or
