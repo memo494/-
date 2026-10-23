@@ -36,11 +36,11 @@ class ArabicOcr private constructor(
 
     /**
      * OCR the word rectangles found from actual bright text pixels. This is
-     * separate from the strict legacy question detector and works when it
-     * rejects a 2-column quiz. Do not auto-tap without a successful match.
+     * separate from the strict question detector, including a mixed-language
+     * question whose independently detected options remain readable.
      */
     fun readWords(bitmap: Bitmap, words: List<PxRect>): List<WordAnswerMatcher.Candidate> {
-        if (words.size != 4) return emptyList()
+        if (words.size !in 2..8) return emptyList()
         val src = if (bitmap.config == Bitmap.Config.HARDWARE) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
         try {
             val width = src.width

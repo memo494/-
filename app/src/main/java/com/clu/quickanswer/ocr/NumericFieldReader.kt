@@ -2,7 +2,7 @@ package com.clu.quickanswer.ocr
 
 /** Reads one complete field line; a hint/missing digit is checked separately against the expected value. */
 class NumericFieldReader(private val recognizer: LineRecognizer) {
-    enum class Ink { AUTO, GOLD }
+    enum class Ink { AUTO, GOLD, LIGHT }
 
     fun read(argb: IntArray, width: Int, height: Int, field: PxRect, ink: Ink = Ink.AUTO): RecognizedLine {
         fun empty() = RecognizedLine("", 0.0, 0)
@@ -11,6 +11,12 @@ class NumericFieldReader(private val recognizer: LineRecognizer) {
             field.width <= 0 || field.height <= 0) return empty()
         return try {
             if (ink == Ink.GOLD) return readGold(argb, width, field)
+            if (ink == Ink.LIGHT) {
+                val sample = NumericFieldInk.inspect(argb, width, height, field, ink)
+                if (sample.state != NumericFieldInk.State.FILLED) return empty()
+                return recognizer.recognize(sample.pixels, sample.width, sample.height,
+                    PxRect(0, 0, sample.width, sample.height))
+            }
             val lines = TextLines.findDetailed(argb, width, height, field, bounded = true)
             if (lines.clipped || lines.lines.size != 1) return empty()
             recognizer.recognize(argb, width, height, lines.lines.single())

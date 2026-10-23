@@ -50,3 +50,10 @@ one; mark an entry "superseded by N" when it changes.
     owner's phone. Picture questions therefore keep picture-specific lookup/hash/guards but send
     the screenshot on a memory miss. The cropped provider API remains available; it is not the
     active service path. Result watching also retains that update's option-only pixel buffer.
+14. **Do not clear numeric input automatically.** The owner requested removal of the pre-answer
+    clear/backspace presses because they delay entry. The service now proves the field empty from
+    pixels before planning and immediately before the first digit. Gray zero hints count as empty;
+    gold zeroes or other existing input do not. Only a verified empty field sets `fieldIsEmpty=true`;
+    the service sends digits and optional submit, with neither reset controls nor reset delays.
+    Occupied or unknown fields stop unchanged. Legacy reset planning/sequencing APIs remain for
+    compatibility with their original contract tests; the application no longer calls those modes.

@@ -31,7 +31,10 @@ On the automatic-touch feature branch, one preparation step after `solve` binds 
 to pure `interaction/AnswerInteraction` pattern planners. Reader/template geometry supplies choices;
 verified keypad adapters supply numeric controls. Live question/picture/option guards precede each
 stroke, and `TapSequence.beforeSubmit` waits for `NumericFieldReader`/`NumericEntryCheck` off the main
-thread before numeric confirmation. See `INTERACTIONS.md` for supported patterns and limits.
+thread before numeric confirmation. `NumericFieldInk` proves the field empty before direct typing:
+the service sends digits and optional confirmation only, never clear/backspace. Occupied/unknown
+fields stop without modification. An independent four-row white-button fallback reads options when
+whole-question OCR fails. See `INTERACTIONS.md` for supported patterns and limits.
 
 ## Learning (in progress, see ROADMAP)
 

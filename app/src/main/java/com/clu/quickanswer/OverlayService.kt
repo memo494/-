@@ -41,6 +41,8 @@ import com.clu.quickanswer.ocr.ChoiceTouchGuard
 import com.clu.quickanswer.ocr.GameVisualLayout
 import com.clu.quickanswer.ocr.OptionWordDetector
 import com.clu.quickanswer.ocr.NumericFieldReader
+import com.clu.quickanswer.ocr.NumericFieldInk
+import com.clu.quickanswer.interaction.PrintedChoiceTouch
 import com.clu.quickanswer.ocr.TextLines
 import com.clu.quickanswer.ocr.WordAnswerMatcher
 import com.clu.quickanswer.interaction.AnswerInteraction
@@ -1058,24 +1060,49 @@ class OverlayService : Service() {
                 if (visual == null) return solved.copy(touchFailure = "لوحة الأرقام غير معروفة بعد؛ لم أكتب شيئًا")
                 // The keypad adapter measures this skin's field; a learned box can include its bevel or wood.
                 val field = visual.field ?: q?.numericField ?: return solved
-                if (visual.submit == null && GameVisualLayout.inputHasText(pixels, w, h, visual, field)) {
-                    return solved.copy(touchFailure = "الرقم ظاهر ولا يوجد زر تأكيد؛ تحقق إن كانت الجولة تنتظر اللاعبين")
+                val ink = if (visual.kind == GameVisualLayout.Kind.NUMERIC_DARK)
+                    NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.LIGHT
+                when (NumericFieldInk.inspect(pixels, w, h, field, ink).state) {
+                    NumericFieldInk.State.FILLED -> return solved.copy(touchFailure =
+                        "الخانة فيها إدخال سابق؛ لم أمسحه ولم أضف عليه")
+                    NumericFieldInk.State.UNKNOWN -> return solved.copy(touchFailure =
+                        "لم أتحقق أن الخانة فارغة؛ لم أكتب أو أمسح شيئًا")
+                    NumericFieldInk.State.EMPTY -> Unit
                 }
                 val numericRequest = request ?: AnswerInteraction.Request(
                     Question("", emptyList(), emptyList(), true, 1f, numericField = field),
                     solved.rawReply, solved.rawReply)
                 val plan = AnswerInteraction.plan(numericRequest, AnswerInteraction.Controls(
-                    w, h, visual.digits, visual.clear, visual.backspace, visual.submit))
-                    ?: return solved.copy(touchFailure = "الإدخال يدعم رقمًا من 1–4 خانات مع زر مسح واضح")
+                    w, h, visual.digits, submit = visual.submit, fieldIsEmpty = true))
+                    ?: return solved.copy(touchFailure = "تعذّر تحديد مفاتيح إدخال رقم من 1–4 خانات")
                 val banner = q?.let { questionRegion(it, pixels, w, h) }?.takeUnless { overlaps(it, field) }
                     ?: visual.questionArea
                 return solved.copy(touches = plan.taps, guardRect = banner,
                     guardStamp = fingerprint(bmp, banner, masks), ignoredRects = masks,
-                    numericLayout = visual, submitLast = visual.submit != null,
+                    numericLayout = visual.copy(clear = null, backspace = null), submitLast = visual.submit != null,
                     expectedNumber = plan.number, fieldRect = field, fieldStamp = fingerprint(bmp, field, masks),
                     pictureStamp = picture?.let { fingerprint(bmp, it, masks) })
             }
             if (request != null) return solved // never replace a rejected trusted reading with guessed positions
+            // A mixed Arabic/Latin question may fail both question readers while every option is clear.
+            // Geometry is detected again from the visible banner/buttons; candidate/model boxes are not used.
+            // This fallback initially supports the four-row example. Two remaining white rows on
+            // a red/green result screen must not be mistaken for a fresh two-option question.
+            val stack = ColorLayout().inspect(pixels, w, h).layout?.takeIf { !it.numeric && it.buttons.size == 4 }
+            val stackWords = stack?.let { PrintedChoiceTouch.regions(it, pixels, w, h) }
+            if (stack != null && stack.questionLines.isNotEmpty() && stackWords != null) {
+                val words = stackWords
+                if (ChoiceTouchGuard.isReadyFromLayout(pixels, w, h, stack.banner, stack.buttons, words)) {
+                    val printed = synchronized(ocrLock) { ocr?.readWords(bmp, words) }.orEmpty()
+                    val independent = PrintedChoiceTouch.request(stack, printed, solved.rawReply)
+                    val plan = independent?.let { AnswerInteraction.plan(it, AnswerInteraction.Controls(w, h)) }
+                    val region = independent?.question?.let { questionRegion(it, pixels, w, h) }
+                    if (plan != null && region != null) return solved.copy(touches = plan.taps,
+                        guardRect = region, guardStamp = fingerprint(bmp, region, masks), ignoredRects = masks,
+                        choiceButtons = stack.buttons, choiceWords = words, choiceFromLayout = true,
+                        choiceStamps = words.mapNotNull { fingerprint(bmp, it, masks) })
+                }
+            }
             // Legacy fallback: independently read all four printed words; candidate/model boxes alone
             // never authorize a touch. The original reply is retained even when display matching was fuzzy.
             val choices = OptionWordDetector.detectChoices(pixels, w, h) ?: return solved
@@ -1138,7 +1165,7 @@ class OverlayService : Service() {
                         val matches = withContext(Dispatchers.IO) {
                             try {
                                 val ink = if (solved.numericLayout?.kind == GameVisualLayout.Kind.NUMERIC_DARK)
-                                    NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.AUTO
+                                    NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.LIGHT
                                 val read = synchronized(ocrLock) { ocr?.readField(snapshot, localField, ink) }
                                 read != null && NumericEntryCheck.matches(expected, read.text, read.confidence, changed = true)
                             } catch (_: Throwable) { false }
@@ -1188,12 +1215,6 @@ class OverlayService : Service() {
         var entryRejected = false
         var cancelReason = "توقف الإدخال؛ تحقق من الشاشة"
         fun blocked(reason: String): Boolean { cancelReason = reason; return false }
-        var entryBaseline = solved.fieldStamp
-        val resetCount = when {
-            solved.numericLayout?.clear != null -> 1
-            solved.numericLayout?.backspace != null -> TouchPlanner.MAX_DIGITS
-            else -> 0
-        }
         fun canContinue(): Boolean {
             if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
                 window != VolumeKeyService.contextVersion() ||
@@ -1223,9 +1244,12 @@ class OverlayService : Service() {
                         (!GameVisualLayout.stillVisible(pixels, w, h, numeric, boxes.getOrNull(nextTap - 1)) ||
                             numeric.submit != null && !GameVisualLayout.hasSubmitControl(pixels, w, h, numeric))
                     ) return blocked("لوحة الأرقام أو زر التأكيد لم يعد ظاهرًا؛ أوقفت الإدخال")
-                    // Compare typing with the cleared field, not with an old identical answer.
-                    if (numeric != null && nextTap == resetCount && resetCount > 0) {
-                        entryBaseline = solved.fieldRect?.let { fingerprint(frame, it, ignored) } ?: return false
+                    if (numeric != null && nextTap == 0) {
+                        val field = solved.fieldRect ?: return false
+                        val ink = if (numeric.kind == GameVisualLayout.Kind.NUMERIC_DARK)
+                            NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.LIGHT
+                        if (NumericFieldInk.inspect(pixels, w, h, field, ink).state != NumericFieldInk.State.EMPTY)
+                            return blocked("الخانة لم تعد فارغة؛ لم أمسح أو أضف أرقامًا")
                     }
                     if (solved.choiceButtons.isNotEmpty()) {
                         val ready = if (solved.choiceFromLayout) ChoiceTouchGuard.isReadyFromLayout(
@@ -1279,10 +1303,10 @@ class OverlayService : Service() {
                     setBusy(true)
                     val ok = VolumeKeyService.tapAnswer(boxes, solved.submitLast, canContinue = {
                         canContinue().also { if (it) nextTap++ }
-                    }, beforeSubmit = { complete -> verifyEntry(solved.copy(fieldStamp = entryBaseline), epoch) { allowed ->
+                    }, beforeSubmit = { complete -> verifyEntry(solved, epoch) { allowed ->
                         entryRejected = !allowed
                         complete(allowed)
-                    } }, resetCount = resetCount) { finished ->
+                    } }) { finished ->
                         if (destroyed || epoch != touchEpoch) return@tapAnswer
                         touchPending = false
                         setBusy(false)

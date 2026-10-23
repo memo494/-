@@ -26,6 +26,8 @@ object AnswerInteraction {
         val clear: PxRect? = null,
         val backspace: PxRect? = null,
         val submit: PxRect? = null,
+        /** Verified from pixels; bypasses legacy reset planning without appending to unknown input. */
+        val fieldIsEmpty: Boolean = false,
     )
 
     data class Plan(val kind: Kind, val taps: List<PxRect>, val number: String? = null)
@@ -107,7 +109,10 @@ object AnswerInteraction {
             val number = AnswerParser.numberOnly(request.answer) ?: return null
             if (AnswerParser.numberOnly(request.reply) != number) return null
             val taps = TouchPlanner.plan(number, null, controls.digits, controls.submit,
-                controls.width, controls.height, controls.clear, controls.backspace, requireReset = true) ?: return null
+                controls.width, controls.height,
+                clear = controls.clear.takeUnless { controls.fieldIsEmpty },
+                backspace = controls.backspace.takeUnless { controls.fieldIsEmpty },
+                requireReset = !controls.fieldIsEmpty) ?: return null
             return Plan(Kind.NUMBER, taps, number)
         }
     }
