@@ -217,6 +217,7 @@ class OverlayService : Service() {
         warmUp()
         AnswerStore.init(this)
         TemplateStore.init(this)
+        StatsStore.init(this)
         loadOcr()
         loadLatinOcr()
 
@@ -903,13 +904,18 @@ class OverlayService : Service() {
         val bypass = if (!fromAuto && SystemClock.uptimeMillis() - lastHitAt < CORRECTION_WINDOW_MS) lastHitKey else null
         val capturedW = bmp.width
         val capturedH = bmp.height
+        // Monotonic, so a clock change cannot give a negative time; includes reading, memory and the network.
+        val started = SystemClock.elapsedRealtime()
         val masks = captureMasks.remove(bmp).orEmpty().map { PxRect(it.left, it.top, it.right, it.bottom) }
         scope.launch {
             val solved = withContext(Dispatchers.IO) {
                 try {
                     solve(bmp, masks, bypass)
                 } catch (e: Exception) {
-                    Solved("خطأ: ${e.javaClass.simpleName}", null, null, null, isAnswer = false)
+                    Solved(
+                        "خطأ: ${e.javaClass.simpleName}", null, null, null,
+                        isAnswer = false, source = AnswerSource.FAILED,
+                    )
                 } finally {
                     bmp.recycle()
                 }
@@ -920,6 +926,8 @@ class OverlayService : Service() {
                 solved.learn?.let { dropLearning(it) }
                 return@launch
             }
+            // After the not-a-quiz return above: a screen auto mode skipped is not a failed question.
+            StatsStore.record(solved.source, SystemClock.elapsedRealtime() - started)
             lastHitKey = solved.memoryKey
             lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
             shownImage = solved.image ?: shownImage
@@ -941,6 +949,7 @@ class OverlayService : Service() {
      * the picture "آخر صورة" shows, and the memory entry it came from (null if not from memory).
      * [isAnswer]: the text is an answer (from memory or the model), not an error or "no question";
      * only an answer gets a haptic tick (see [Reply.isAnswer]).
+     * [source]: which step produced it, for the statistics; no default, so a new path cannot forget it.
      */
     private class Solved(
         val text: String,
@@ -948,6 +957,7 @@ class OverlayService : Service() {
         val image: Bitmap?,
         val memoryKey: String?,
         val isAnswer: Boolean,
+        val source: AnswerSource,
         /** A screen to learn the layout of once the answer is shown (see [learnLayout]), or null. */
         val learn: LearnFrame? = null,
     )
@@ -995,6 +1005,8 @@ class OverlayService : Service() {
         val memory = AnswerStore.memory
         val read = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else DeviceRead(null)
         val q = read.question
+        // The cheapest rung of the answer ladder: arithmetic is computed here, before the memory and the model.
+        if (q != null) Calculator.answer(q)?.let { r -> return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true, source = AnswerSource.CALCULATOR) }
         val picture = if (q != null) read.picture else null
         // A shown picture decides the question, whatever its words say: never the text-only request.
         val wordsDecide = q != null && picture == null && !QuestionPrompt.refersToPicture(q.questionText)
@@ -1006,7 +1018,7 @@ class OverlayService : Service() {
             } else {
                 if (hit != null) {
                     AnswerParser.resolveStored(q, hit.answer)?.let { r ->
-                        return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key, isAnswer = true)
+                        return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key, isAnswer = true, source = AnswerSource.MEMORY)
                     }
                 }
                 askWithPicture(c, memory, q, picture, bmp)?.let { return it }
@@ -1019,17 +1031,22 @@ class OverlayService : Service() {
             } else {
                 if (hit != null) {
                     AnswerParser.resolveStored(q, hit.answer)?.let { r ->
-                        return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key, isAnswer = true)
+                        return Solved(
+                            "⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key,
+                            isAnswer = true, source = AnswerSource.MEMORY,
+                        )
                     }
                 }
                 val reply = c.answerText(QuestionPrompt.build(q))
                 when (reply.kind) {
                     Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
                         memory.put(q.questionText, q.options, q.numeric, r.answer)
-                        return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true)
+                        return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true, source = AnswerSource.TEXT)
                     }
                     // Quota, key, region, no connection: the image request would fail the same way.
-                    Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false)
+                    Reply.Kind.ERROR -> return Solved(
+                        reply.text, null, null, null, isAnswer = false, source = AnswerSource.FAILED,
+                    )
                     Reply.Kind.EMPTY -> {}
                 }
             }
@@ -1051,7 +1068,7 @@ class OverlayService : Service() {
                     if (corrected != null && corrected.exact) memory.remove(corrected.key)
                     memory.put(q.questionText, q.options, q.numeric, r.answer, picture?.hash)
                 }
-                return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true)
+                return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true, source = AnswerSource.IMAGE)
             }
         }
         read.candidate?.let { (id, cq) ->
@@ -1063,9 +1080,15 @@ class OverlayService : Service() {
                 CandidateCheck.Verdict.UNKNOWN -> {}
             }
             // The answer came from the screenshot; the candidate only says where its button is.
-            check.resolved?.let { r -> return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true) }
+            check.resolved?.let { r ->
+                return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true, source = AnswerSource.IMAGE)
+            }
         }
-        return Solved(text, null, c.lastSent, null, imageReply.isAnswer, learnFrameFor(read, bmp, masks, c, imageReply, text))
+        val source = if (imageReply.isAnswer) AnswerSource.IMAGE else AnswerSource.FAILED
+        return Solved(
+            text, null, c.lastSent, null, imageReply.isAnswer, source,
+            learnFrameFor(read, bmp, masks, c, imageReply, text),
+        )
     }
 
     /**
@@ -1088,9 +1111,9 @@ class OverlayService : Service() {
                     } catch (t: Throwable) {
                         null
                     }
-                    return Solved(r.answer, r.rect, shown, null, isAnswer = true)
+                    return Solved(r.answer, r.rect, shown, null, isAnswer = true, source = AnswerSource.PICTURE)
                 }
-                Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false)
+                Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false, source = AnswerSource.FAILED)
                 Reply.Kind.EMPTY -> {}
             }
             return null
