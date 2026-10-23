@@ -202,9 +202,10 @@ class ManualTemplateTest {
     }
 
     @Test fun declinesABoxOutsideTheImage() {
-        assertNull(build(options = listOf(stack[0], PxRect(270, 2300, 810, h + 100))))
-        assertNull(build(options = listOf(stack[0], PxRect(-10, 1100, 400, 1300))))
-        assertNull(build(q = PxRect(108, 300, w + 1, 600), options = stack))
+        val px = screen(question, stack) // the capture itself is fine; only the drawn boxes stray
+        assertNull(build(options = listOf(stack[0], PxRect(270, 2300, 810, h + 100)), px = px))
+        assertNull(build(options = listOf(stack[0], PxRect(-10, 1100, 400, 1300)), px = px))
+        assertNull(build(q = PxRect(108, 300, w + 1, 600), options = stack, px = px))
     }
 
     @Test fun declinesOverlappingOptions() {
