@@ -60,6 +60,24 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
     }
 
     /**
+     * A question already read on the device, with its picture (see [Answerer.answerPicture]): the
+     * prompt and the picture in ONE request, through the same [race] as the others. [lastSent] is the
+     * picture as sent.
+     */
+    override fun answerPicture(prompt: String, picture: Bitmap): Reply {
+        return try {
+            val prepared = ScreenImage.preparePicture(picture)
+            lastSent = prepared.kept
+            val b64 = prepared.base64
+            race { m, mode -> GeminiRequests.pictureBody(m, prompt, b64, mode) }.toReply()
+        } catch (e: IOException) {
+            Reply.error(NO_CONNECTION)
+        } catch (e: Exception) {
+            Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
+        }
+    }
+
+    /**
      * The screen's layout, for learning a template (see [Answerer.layout]): ONE request to the user's
      * own model, with no fallbacks and no retries (only [ask]'s thinking-mode detour), so learning in
      * the background never takes free quota or time from the answers. [lastSent] and [lastModel] stay
@@ -223,7 +241,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
         // Thinking tokens count toward maxOutputTokens, so leave room beyond the short answer.
         val gen = JSONObject()
             .put("temperature", 0)
-            .put("maxOutputTokens", 1024)
+            .put("maxOutputTokens", GeminiRequests.ANSWER_MAX_OUTPUT_TOKENS)
         if (mediaLow) gen.put("mediaResolution", "MEDIA_RESOLUTION_LOW")
         // Least thinking = fastest answer. The option differs per model, see GeminiModels.
         GeminiModels.thinkingConfig(m, mode)?.let { gen.put("thinkingConfig", it) }

@@ -28,3 +28,13 @@ one; mark an entry "superseded by N" when it changes.
    implementer may not change them. This removes back-and-forth and makes review objective.
 10. **Learning never slows an answer.** Layout requests run in the background after the answer is
     shown, rate-limited, only for screens with no fitting template.
+11. **A picture question is asked with its picture, and remembered per picture.** In the parchment
+    game many questions ask about a photo pinned at the left ("ما اسم الشخصية الخيالية الاتية ؟" names
+    no picture at all), so the words never decide them: the text-only request cannot see the photo, and
+    a memory keyed by words would return the answer of an earlier photo. A template may carry the
+    photo's rect (`picture`); the photo is present when the luma of the right half of that rect is not
+    plain (std >= 20, measured: plain parchment 4-11, photos 31-89; the left half is the dark sea when
+    there is none). The crop (long side 512, JPEG 80) goes with the text in one request, much smaller
+    and faster than the screenshot, and the answer is stored with a 16x16 average hash of the photo
+    (the same photo differs by a few bits, another one by about half). Only a TRUSTED template that
+    reads the question decides this; anything else behaves as before.

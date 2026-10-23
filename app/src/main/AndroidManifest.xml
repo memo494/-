@@ -23,6 +23,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Manual calibration: boxes drawn on the last capture. It turns itself to match the capture,
+             and keeps its boxes (kept in capture pixels) through that turn. -->
+        <activity
+            android:name=".CalibrationActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+            android:exported="false" />
+
         <service
             android:name=".OverlayService"
             android:exported="false"

@@ -1,0 +1,11 @@
+<resources>
+    <!-- Title of a group on the settings screen; a thin divider (listDivider) goes right under it. -->
+    <style name="CluSectionHeader">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">24dp</item>
+        <item name="android:textAlignment">viewStart</item>
+        <item name="android:textSize">18sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+</resources>

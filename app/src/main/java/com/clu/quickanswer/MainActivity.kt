@@ -51,6 +51,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var clearTemplatesButton: Button
     private lateinit var volumeKeyCheck: CheckBox
     private lateinit var volumeKeyStatus: TextView
+    private lateinit var statsText: TextView
+    private lateinit var clearStatsButton: Button
 
     // Model ids in the same order as the spinner entries.
     private var modelIds: List<String> = emptyList()
@@ -195,6 +197,7 @@ class MainActivity : AppCompatActivity() {
         vibrateCheck.isChecked = Prefs.vibrateOnAnswer(this)
         AnswerStore.init(this)
         TemplateStore.init(this)
+        StatsStore.init(this)
         templatesStatus = findViewById(R.id.templatesStatus)
         clearTemplatesButton = findViewById(R.id.clearTemplatesButton)
         volumeKeyCheck = findViewById(R.id.volumeKeyCheck)
@@ -240,6 +243,24 @@ class MainActivity : AppCompatActivity() {
                 .setNegativeButton("إلغاء", null)
                 .show()
         }
+        findViewById<Button>(R.id.calibrateButton).setOnClickListener {
+            startActivity(Intent(this, CalibrationActivity::class.java))
+        }
+        statsText = findViewById(R.id.statsText)
+        clearStatsButton = findViewById(R.id.clearStatsButton)
+        clearStatsButton.setOnClickListener {
+            showRtl(
+                AlertDialog.Builder(this)
+                    .setMessage("مسح كل الإحصائيات؟")
+                    .setPositiveButton("مسح") { _, _ ->
+                        StatsStore.runAfterLoad {
+                            StatsStore.stats.clear()
+                            updateStats()
+                        }
+                    }
+                    .setNegativeButton("إلغاء", null)
+            )
+        }
         findViewById<Button>(R.id.opusButton).setOnClickListener {
             claudeModelInput.setText("claude-opus-5-5")
         }
@@ -271,6 +292,38 @@ class MainActivity : AppCompatActivity() {
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         if (savedInstanceState == null) handleRestart(intent)
+        maybeShowWelcome()
+    }
+
+    /**
+     * Three steps for the first launch. Someone who already has a key (an update, not a first
+     * launch) does not need them, so for them it is only marked as seen. The flag is saved when the
+     * dialog is answered or cancelled, not when it is shown: a rotation that dismisses it would
+     * otherwise lose it unread.
+     */
+    private fun maybeShowWelcome() {
+        if (Prefs.welcomeShown(this)) return
+        if (Prefs.apiKey(this).isNotEmpty() || Prefs.claudeKey(this).isNotEmpty()) {
+            Prefs.saveWelcomeShown(this)
+            return
+        }
+        showRtl(
+            AlertDialog.Builder(this)
+                .setTitle("أهلًا بك في Clu")
+                .setMessage(
+                    "1) الصق مفتاح Gemini المجاني (الرابط تحت).\n" +
+                        "2) اضغط «منح صلاحية الظهور فوق التطبيقات».\n" +
+                        "3) اضغط «تشغيل» وبعدين المس الفقاعة أو زر خفض الصوت لما يطلع السؤال."
+                )
+                .setPositiveButton("يلا نبلّش") { _, _ -> Prefs.saveWelcomeShown(this) }
+                .setOnCancelListener { Prefs.saveWelcomeShown(this) }
+        )
+    }
+
+    /** Shows the dialog right-to-left whatever the phone's language: the screen itself is. */
+    private fun showRtl(builder: AlertDialog.Builder) {
+        val dialog = builder.show()
+        dialog.window?.decorView?.layoutDirection = View.LAYOUT_DIRECTION_RTL
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -309,6 +362,19 @@ class MainActivity : AppCompatActivity() {
         TemplateStore.runAfterLoad {
             val counts = templateCounts()
             runOnUiThread { if (!isDestroyed) updateTemplatesStatus(counts) }
+        }
+        StatsStore.runAfterLoad { updateStats() }
+    }
+
+    /** Shows today's and the all-time numbers; call on [StatsStore.runAfterLoad]'s thread. */
+    private fun updateStats() {
+        val stats = StatsStore.stats
+        val all = stats.allTime()
+        val text = AnswerStats.describe(stats.today(StatsStore.today()), all)
+        runOnUiThread {
+            if (isDestroyed) return@runOnUiThread
+            statsText.text = text
+            clearStatsButton.isEnabled = all.total > 0
         }
     }
 

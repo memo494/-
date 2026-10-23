@@ -77,6 +77,11 @@ data class LayoutTemplate(
      * for measured templates; a learned one is not sure of its edges and keeps looking beyond them.
      */
     val bounded: Boolean = false,
+    /**
+     * Where the game shows the picture of a question that has one, or null when its questions have
+     * none. Not one of the [regions]: it has no signature and is never read as text.
+     */
+    val picture: RelRect? = null,
 ) {
     /** question, options in order, then the numeric field: the order of [signatures]. */
     val regions: List<RelRect> get() = listOf(question) + options + listOfNotNull(numericField)
@@ -93,7 +98,8 @@ data class LayoutTemplate(
             if (!shapeOk) return false
             val all = regions
             fun ok(s: List<RegionSignature>) = s.size == all.size && s.all { it.background in 0..255 && it.uniformity in 0f..1f }
-            return all.all { it.isValid } && ok(signatures) && (altSignatures == null || ok(altSignatures))
+            return all.all { it.isValid } && ok(signatures) && (altSignatures == null || ok(altSignatures)) &&
+                (picture == null || picture.isValid)
         }
 
     fun toJson(): JSONObject = JSONObject()
@@ -114,6 +120,7 @@ data class LayoutTemplate(
         .put("used", lastUsedAt)
         .put("sig2", altSignatures?.let { sigJson(it) } ?: JSONObject.NULL)
         .put("bnd", bounded)
+        .put("pic", picture?.let { rectJson(it) } ?: JSONObject.NULL)
 
     companion object {
         const val MIN_OPTIONS = 2
@@ -161,6 +168,8 @@ data class LayoutTemplate(
                     // Both optional: files written before they existed have neither.
                     altSignatures = if (!o.has("sig2") || o.isNull("sig2")) null else sigsOf(o.getJSONArray("sig2")),
                     bounded = o.optBoolean("bnd", false),
+                    // Also optional: files written before pictures were known have no "pic".
+                    picture = if (!o.has("pic") || o.isNull("pic")) null else rectOf(o.getJSONArray("pic")),
                 )
                 if (t.isValid) t else null
             } catch (_: Exception) {
