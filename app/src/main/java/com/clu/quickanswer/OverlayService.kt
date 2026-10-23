@@ -41,6 +41,7 @@ import com.clu.quickanswer.ocr.GameVisualLayout
 import com.clu.quickanswer.ocr.OptionWordDetector
 import com.clu.quickanswer.ocr.WordAnswerMatcher
 import com.clu.quickanswer.ocr.ColorLayout
+import com.clu.quickanswer.ocr.ChoiceTouchGuard
 import com.clu.quickanswer.ocr.LatinOcr
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
@@ -994,10 +995,22 @@ class OverlayService : Service() {
                         r.top < obstruction.bottom && r.bottom > obstruction.top
                 }) return false
                 val numeric = solved.numericLayout
-                if (numeric != null) {
+                if (numeric != null || solved.choiceButtons.isNotEmpty()) {
                     val pixels = IntArray(w * h)
                     frame.getPixels(pixels, 0, w, 0, 0, w, h)
-                    if (!GameVisualLayout.stillVisible(pixels, w, h, numeric, boxes.getOrNull(nextTap - 1))) return false
+                    if (numeric != null &&
+                        !GameVisualLayout.stillVisible(pixels, w, h, numeric, boxes.getOrNull(nextTap - 1))
+                    ) return false
+                    if (solved.choiceButtons.isNotEmpty() &&
+                        !ChoiceTouchGuard.isReady(pixels, w, h, solved.choiceButtons, solved.choiceWords)
+                    ) return false
+                    if (solved.choiceButtons.isNotEmpty() &&
+                        (solved.choiceStamps.size != 4 || solved.choiceButtons.indices.any { index ->
+                            fingerprint(frame, solved.choiceButtons[index])?.let {
+                                TouchFrameGuard.matches(solved.choiceStamps[index], it)
+                            } != true
+                        })
+                    ) return false
                 }
                 true
             } catch (_: Throwable) { false }
@@ -1066,6 +1079,9 @@ class OverlayService : Service() {
         val guardStamp: IntArray? = null,
         val numericLayout: GameVisualLayout.Detected? = null,
         val submitLast: Boolean = false,
+        val choiceButtons: List<PxRect> = emptyList(),
+        val choiceWords: List<PxRect> = emptyList(),
+        val choiceStamps: List<IntArray> = emptyList(),
     )
 
     /**
@@ -1083,10 +1099,21 @@ class OverlayService : Service() {
         val memory = AnswerStore.memory
         val q = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else null
         val wordsDecide = q != null && !QuestionPrompt.refersToPicture(q.questionText)
-        fun resolved(r: AnswerParser.Resolved, image: Bitmap?, key: String? = null, memory: Boolean = false): Solved {
+        fun resolved(
+            r: AnswerParser.Resolved, image: Bitmap?, key: String? = null, memory: Boolean = false,
+            rawChoiceAnswer: String = r.answer, allowOptionIndex: Boolean = false,
+        ): Solved {
             val keypad = if (q?.numeric == true) numericLayout(bmp) else null
+            val optionWords = q?.takeIf { !it.numeric }?.let { read ->
+                read.optionTextRects.takeIf { it.size == 4 } ?: read.optionRects
+            }.orEmpty()
             val touches = q?.let { read ->
                 if (read.numeric && keypad == null) return@let null
+                if (!read.numeric && read.bannerRect == null) return@let null
+                if (!read.numeric &&
+                    (!ChoiceAnswerGuard.matches(rawChoiceAnswer, r.answer, read.options, allowOptionIndex) ||
+                        !choicesReady(bmp, read.optionRects, optionWords))
+                ) return@let null
                 // Prefer the OCR's actual word box over the whole button.
                 // The entire button remains the visible green highlight.
                 val textRect = r.rect?.let { button ->
@@ -1101,13 +1128,20 @@ class OverlayService : Service() {
                     keypad?.submit ?: read.numericSubmit, bmp.width, bmp.height,
                     clear = keypad?.clear, backspace = keypad?.backspace, requireReset = read.numeric)
             }
-            val region = if (touches != null) keypad?.questionArea ?: q?.bannerRect else null
+            val region = if (touches == null) null else keypad?.questionArea ?: q?.let {
+                choiceGuardArea(bmp, it.bannerRect, it.optionRects)
+            }
             return Solved(
                 if (memory) "⚡ ${r.answer}" else r.answer,
                 r.rect, image, key, isAnswer = true,
                 touches = touches, guardRect = region,
                 guardStamp = region?.let { fingerprint(bmp, it) },
                 numericLayout = keypad, submitLast = keypad?.submit != null,
+                choiceButtons = if (touches != null && q?.numeric == false) q.optionRects else emptyList(),
+                choiceWords = optionWords,
+                choiceStamps = if (touches != null && q?.numeric == false) {
+                    q.optionRects.mapNotNull { fingerprint(bmp, it) }
+                } else emptyList(),
             )
         }
         var corrected: AnswerMemory.Hit? = null
@@ -1118,14 +1152,16 @@ class OverlayService : Service() {
             } else {
                 if (hit != null) {
                     AnswerParser.resolveStored(q, hit.answer)?.let { r ->
-                        return resolved(r, shownCopy(bmp), hit.key, memory = true)
+                        return resolved(r, shownCopy(bmp), hit.key, memory = true, rawChoiceAnswer = hit.answer)
                     }
                 }
                 val reply = c.answerText(QuestionPrompt.build(q))
                 when (reply.kind) {
                     Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
-                        memory.put(q.questionText, q.options, q.numeric, r.answer)
-                        return resolved(r, shownCopy(bmp))
+                        if (q.numeric) memory.put(q.questionText, q.options, true, r.answer)
+                        else ChoiceAnswerGuard.rememberChoice(memory, q.questionText, reply.text, r.answer,
+                            q.options, allowOptionIndex = true)
+                        return resolved(r, shownCopy(bmp), rawChoiceAnswer = reply.text, allowOptionIndex = true)
                     }
                     // Quota, key, region, no connection: the image request would fail the same way.
                     Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false)
@@ -1138,6 +1174,7 @@ class OverlayService : Service() {
         val detectQuizImage = q == null
         val autoTouchRequested = detectQuizImage && autoMode && Prefs.autoTouch(this)
         var choiceWords: List<PxRect>? = null
+        var choiceButtons: List<PxRect>? = null
         var visual: GameVisualLayout.Detected? = null
         if (detectQuizImage) {
             try {
@@ -1145,7 +1182,13 @@ class OverlayService : Service() {
                 bmp.getPixels(pixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
                 visual = GameVisualLayout.detect(pixels, bmp.width, bmp.height)
                 if (visual == null || visual?.kind == GameVisualLayout.Kind.CHOICE_GRID) {
-                    choiceWords = OptionWordDetector.detect(pixels, bmp.width, bmp.height)
+                    val choices = OptionWordDetector.detectChoices(pixels, bmp.width, bmp.height)
+                    if (choices != null && ChoiceTouchGuard.isReady(pixels, bmp.width, bmp.height,
+                            choices.buttons, choices.words)
+                    ) {
+                        choiceWords = choices.words
+                        choiceButtons = choices.buttons
+                    }
                 }
             } catch (_: Exception) { /* no geometry means no automatic tap */ }
         }
@@ -1179,19 +1222,21 @@ class OverlayService : Service() {
                 AnswerParser.resolveImageAnswer(q, text)
             }
             if (r != null) {
-                if (wordsDecide) {
+                if (wordsDecide && (q.numeric || ChoiceAnswerGuard.matches(text, r.answer, q.options, false))) {
                     // The entry that was corrected goes, but only if it was this question's own: a fuzzy hit
                     // belongs to another question, whose answer is still right for it.
                     if (corrected != null && corrected.exact) memory.remove(corrected.key)
-                    memory.put(q.questionText, q.options, q.numeric, r.answer)
+                    if (q.numeric) memory.put(q.questionText, q.options, true, r.answer)
+                    else ChoiceAnswerGuard.rememberChoice(memory, q.questionText, text, r.answer,
+                        q.options, allowOptionIndex = false)
                 }
-                return resolved(r, c.lastSent)
+                return resolved(r, c.lastSent, rawChoiceAnswer = text)
             }
         }
         // For 2-column questions an option NUMBER is not sufficient.
         // Read the actual four Arabic word regions and match the model's
         // literal answer against them. No unique OCR agreement -> no tap.
-        if (autoTouchRequested && choiceWords != null &&
+        if (autoTouchRequested && choiceWords != null && choiceButtons != null &&
             imageReply.kind == Reply.Kind.ANSWER
         ) {
             val printed = synchronized(ocrLock) {
@@ -1202,13 +1247,12 @@ class OverlayService : Service() {
                 val actions = TouchPlanner.plan(text, word, emptyMap(), null,
                     bmp.width, bmp.height)
                 if (actions != null) {
-                    val guard = PxRect(
-                        (bmp.width * 0.29f).toInt(), (bmp.height * 0.32f).toInt(),
-                        (bmp.width * 0.75f).toInt(), (bmp.height * 0.51f).toInt()
-                    )
+                    val guard = choiceGuardArea(bmp, null, choiceButtons)
                     return Solved(text, word, c.lastSent, null, isAnswer = true,
                         touches = actions, guardRect = guard,
-                        guardStamp = fingerprint(bmp, guard))
+                        guardStamp = fingerprint(bmp, guard),
+                        choiceButtons = choiceButtons, choiceWords = choiceWords,
+                        choiceStamps = choiceButtons.mapNotNull { fingerprint(bmp, it) })
                 }
             }
         }
@@ -1241,6 +1285,17 @@ class OverlayService : Service() {
             it.kind != GameVisualLayout.Kind.CHOICE_GRID
         }
     } catch (_: Throwable) { null }
+
+    private fun choicesReady(bitmap: Bitmap, buttons: List<PxRect>, words: List<PxRect>): Boolean = try {
+        val pixels = IntArray(bitmap.width * bitmap.height)
+        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        ChoiceTouchGuard.isReady(pixels, bitmap.width, bitmap.height, buttons, words)
+    } catch (_: Throwable) { false }
+
+    /** Include the pinned photo and all options, so an unchanged caption cannot reuse a different image. */
+    private fun choiceGuardArea(bitmap: Bitmap, banner: PxRect?, buttons: List<PxRect>): PxRect {
+        return ChoiceTouchGuard.contentArea(bitmap.width, bitmap.height, banner, buttons)
+    }
 
     /**
      * Use the existing offline Arabic reader first. If it cannot read this screen,

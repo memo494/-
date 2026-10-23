@@ -3,6 +3,7 @@ package com.clu.quickanswer
 import android.graphics.Bitmap
 import android.util.Base64
 import com.clu.quickanswer.ocr.SentGeometry
+import com.clu.quickanswer.ocr.PxRect
 import java.io.ByteArrayOutputStream
 
 /** Image preparation and prompt shared by every answer provider. */
@@ -65,13 +66,18 @@ object ScreenImage {
      * fingerprints always use the uncropped original capture.
      */
     fun focusQuiz(bitmap: Bitmap, whiteKeypad: Boolean): Bitmap {
-        val width = bitmap.width
-        val height = bitmap.height
-        val left = (width * 0.19f).toInt().coerceIn(0, width - 2)
+        val bounds = focusQuizBounds(bitmap.width, bitmap.height, whiteKeypad)
+        return Bitmap.createBitmap(bitmap, bounds.left, bounds.top, bounds.width, bounds.height)
+    }
+
+    /** The question's photo is pinned on the left; never crop away the evidence it asks about. */
+    fun focusQuizBounds(width: Int, height: Int, whiteKeypad: Boolean): PxRect {
+        require(width >= 2 && height >= 2)
+        val left = (width * 0.05f).toInt().coerceIn(0, width - 2)
         val right = (width * 0.78f).toInt().coerceIn(left + 1, width)
         val top = if (whiteKeypad) 0 else (height * 0.23f).toInt()
         val bottom = (height * 0.94f).toInt().coerceIn(top + 1, height)
-        return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        return PxRect(left, top, right, bottom)
     }
 
     /** Rows/columns sampled from a small copy; "dark" = luminance below 40. */

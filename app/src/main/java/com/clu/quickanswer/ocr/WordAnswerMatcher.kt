@@ -8,24 +8,31 @@ package com.clu.quickanswer.ocr
 object WordAnswerMatcher {
     data class Candidate(val text: String, val rect: PxRect, val confidence: Float)
 
-    private const val MIN_TEXT_SIMILARITY = 0.78
     private const val MIN_CONFIDENCE = 0.65f
-    private const val MIN_MARGIN = 0.12
 
     fun match(answer: String, candidates: List<Candidate>): PxRect? {
         if (candidates.size != 4) return null
         val target = ArabicText.key(answer)
         if (target.length < 3 || target.none { ArabicText.isArabicLetter(it) }) return null
-        val scores = candidates.map { candidate ->
-            if (candidate.confidence < MIN_CONFIDENCE ||
+        // An unreadable alternative can hide a duplicate answer. All four
+        // choices must be trustworthy before a unique match can authorize a tap.
+        if (candidates.any { candidate ->
+            val rect = candidate.rect
+            !candidate.confidence.isFinite() || candidate.confidence !in MIN_CONFIDENCE..1f ||
                 candidate.text.none { ArabicText.isArabicLetter(it) } ||
-                candidate.rect.width < 8 || candidate.rect.height < 8
-            ) 0.0 else ArabicText.similarity(answer, candidate.text)
-        }
-        val ranked = scores.withIndex().sortedByDescending { it.value }
-        val first = ranked.getOrNull(0) ?: return null
-        val second = ranked.getOrNull(1)?.value ?: 0.0
-        if (first.value < MIN_TEXT_SIMILARITY || first.value - second < MIN_MARGIN) return null
-        return candidates[first.index].rect
+                rect.left < 0 || rect.top < 0 || rect.right <= rect.left || rect.bottom <= rect.top ||
+                rect.width < 8 || rect.height < 8
+        }) return null
+        if (candidates.withIndex().any { (i, candidate) ->
+            candidates.drop(i + 1).any { other ->
+                val a = candidate.rect
+                val b = other.rect
+                a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+            }
+        }) return null
+        // Similarity is useful for showing a proposed answer, but a one-letter
+        // name or year difference must never choose a different printed option.
+        val matches = candidates.filter { ArabicText.key(it.text) == target }
+        return matches.singleOrNull()?.rect
     }
 }

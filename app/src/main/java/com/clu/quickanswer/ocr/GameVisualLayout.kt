@@ -245,7 +245,8 @@ object GameVisualLayout {
                 val score = backdrop - levels.average() - (levels.max() - levels.min()) * 0.5
                 if (score > best) {
                     best = score
-                    choiceRects = centers.map { (x, y) -> rect(x, y, 18, 14) }
+                    // These are visible button surfaces; tap targets come from their OCR words.
+                    choiceRects = centers.map { (x, y) -> rect(x, y, 132, 34) }
                 }
             }
         }

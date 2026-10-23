@@ -19,6 +19,62 @@ object OptionWordDetector {
     private const val REF_WIDTH = 1536f
     private const val REF_HEIGHT = 691f
 
+    data class Choices(val buttons: List<PxRect>, val words: List<PxRect>)
+
+    /** Follow detected button rows rather than a fixed text band when the HUD/layout shifts. */
+    fun detectChoices(argb: IntArray, width: Int, height: Int): Choices? {
+        val visual = GameVisualLayout.detect(argb, width, height)
+        if (visual?.kind == GameVisualLayout.Kind.CHOICE_GRID) {
+            val words = visual.options.map { button -> wordInButton(argb, width, height, button) ?: return null }
+            val buttons = visual.options.zip(words).map { (button, word) ->
+                val dx = word.centerX - button.centerX
+                val dy = word.centerY - button.centerY
+                PxRect((button.left + dx).toInt(), (button.top + dy).toInt(),
+                    (button.right + dx).toInt(), (button.bottom + dy).toInt())
+            }
+            return Choices(buttons, words)
+        }
+        val words = detect(argb, width, height) ?: return null
+        // The legacy word finder can succeed when texture spoils a template sample. Keep
+        // its measured text, but require independently verified full surfaces before tapping.
+        val buttons = words.map { word ->
+            val halfW = (width * 132f / REF_WIDTH).toInt()
+            val halfH = (height * 34f / REF_HEIGHT).toInt()
+            PxRect((word.centerX - halfW).toInt(), (word.centerY - halfH).toInt(),
+                (word.centerX + halfW).toInt(), (word.centerY + halfH).toInt())
+        }
+        return Choices(buttons, words)
+    }
+
+    private fun wordInButton(pixels: IntArray, width: Int, height: Int, button: PxRect): PxRect? {
+        // Surface templates may shift a little to avoid glyph pixels. Search a padded cell,
+        // then center its surface on the measured text so no character/diacritic is clipped.
+        val padding = max(2, button.height / 5)
+        val l = (button.left - padding).coerceIn(0, width)
+        val r = (button.right + padding).coerceIn(0, width)
+        val t = (button.top - padding).coerceIn(0, height)
+        val b = (button.bottom + padding).coerceIn(0, height)
+        var minX = r; var maxX = l; var minY = b; var maxY = t
+        var count = 0
+        for (y in t until b) for (x in l until r) {
+            val c = pixels[y * width + x]
+            val red = (c shr 16) and 255
+            val green = (c shr 8) and 255
+            val blue = c and 255
+            if (min(red, min(green, blue)) > 185 &&
+                max(red, max(green, blue)) - min(red, min(green, blue)) < 27
+            ) {
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+                count++
+            }
+        }
+        if (maxX - minX < max(12, button.width / 10) || maxY - minY < max(6, button.height / 8) ||
+            count < max(24, button.width * button.height / 100)
+        ) return null
+        return PxRect(max(l, minX - 2), max(t, minY - 2), min(r, maxX + 3), min(b, maxY + 3))
+    }
+
     fun detect(argb: IntArray, width: Int, height: Int): List<PxRect>? {
         if (width < 320 || height < 200 ||
             width.toDouble() / height !in 1.7..2.65 ||
