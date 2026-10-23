@@ -14,6 +14,8 @@ object GeminiRequests {
     // tokens (the boxes and texts of the question and its options), so this leaves plenty of room.
     private const val LAYOUT_MAX_OUTPUT_TOKENS = 2048
 
+    fun pictureBody(model: String, prompt: String, imageBase64: String, mode: ThinkingMode): String = TODO()
+
     /**
      * The body that asks [model] for the screen's layout: [LayoutPrompt.TEXT], then the JPEG
      * [imageBase64] (the same order as the answer request). The reply is JSON, so the response type is

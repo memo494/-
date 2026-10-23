@@ -28,7 +28,13 @@ import org.json.JSONObject
 class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
 
     /** One remembered question. [key] identifies it for exact lookup and for [remove]. */
-    class Entry(val question: String, val options: List<String>, val numeric: Boolean, val answer: String) {
+    class Entry(
+        val question: String,
+        val options: List<String>,
+        val numeric: Boolean,
+        val answer: String,
+        val picture: String? = null,
+    ) {
         private val questionKey = keyOf(question)
         private val optionKeys = if (numeric) emptyList() else options.map { keyOf(it) }.sorted()
 
@@ -64,7 +70,7 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
      * order), ignored when [numeric].
      */
     @Synchronized
-    fun lookup(question: String, options: List<String>, numeric: Boolean): Hit? {
+    fun lookup(question: String, options: List<String>, numeric: Boolean, picture: String? = null): Hit? {
         val probe = Entry(question, options, numeric, "")
         entries[probe.key]?.let { return Hit(it.answer, it.key, exact = true) }
         val qKey = keyOf(question)
@@ -93,7 +99,7 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
      * options that cannot be told apart after normalising (the answer would be ambiguous), an
      * answer that is not one of them or, for a numeric question, not a number.
      */
-    fun put(question: String, options: List<String>, numeric: Boolean, answer: String) {
+    fun put(question: String, options: List<String>, numeric: Boolean, answer: String, picture: String? = null) {
         if (!isValidEntry(question, options, numeric, answer)) return
         val entry = Entry(question, if (numeric) emptyList() else options, numeric, answer.trim())
         synchronized(this) {

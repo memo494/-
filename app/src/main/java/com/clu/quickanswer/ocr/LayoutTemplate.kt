@@ -77,6 +77,11 @@ data class LayoutTemplate(
      * for measured templates; a learned one is not sure of its edges and keeps looking beyond them.
      */
     val bounded: Boolean = false,
+    /**
+     * Where the game shows the picture of a question that has one, or null when its questions have
+     * none. Not one of the [regions]: it has no signature and is never read as text.
+     */
+    val picture: RelRect? = null,
 ) {
     /** question, options in order, then the numeric field: the order of [signatures]. */
     val regions: List<RelRect> get() = listOf(question) + options + listOfNotNull(numericField)

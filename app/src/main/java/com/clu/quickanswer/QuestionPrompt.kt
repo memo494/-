@@ -44,6 +44,8 @@ object QuestionPrompt {
         return sb.toString().trimEnd()
     }
 
+    fun buildPicture(q: Question): String = TODO()
+
     // The words (normalised) with which a question points at a picture on the screen.
     private val PICTURE_WORDS = setOf(
         "الصوره", "صوره", "بالصوره", "الصور", "الشكل", "الشعار",

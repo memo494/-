@@ -49,6 +49,35 @@ class BuiltinTemplatesTest {
         assertNotNull(wood.numericField)
     }
 
+    @Test fun theGridScreenKnowsWhereItsPictureIs() {
+        val store = LayoutTemplates().apply { merge(json) }
+        val grid = store.get("builtin-parchment-grid")!!
+        val pic = grid.picture
+        assertNotNull("the 2x2 screen pins a picture at the left", pic)
+        assertTrue(pic!!.isValid)
+        // Measured on the 2712 x 1220 captures (see RealScreenCalibration).
+        assertEquals(PxRect(258, 445, 848, 915), pic.toPx(2712, 1220))
+        // It survives the file round trip the store makes.
+        assertEquals(pic, LayoutTemplate.fromJson(JSONObject(grid.toJson().toString()))!!.picture)
+    }
+
+    @Test fun aPictureNeverOverlapsTheTextAreas() {
+        val store = LayoutTemplates().apply { merge(json) }
+        for (t in store.all()) {
+            val p = t.picture?.toPx(2712, 1220) ?: continue
+            for (r in t.regions) {
+                val q = r.toPx(2712, 1220)
+                val overlaps = p.left < q.right && q.left < p.right && p.top < q.bottom && q.top < p.bottom
+                assertTrue("${t.id}: the picture overlaps a region", !overlaps)
+            }
+        }
+    }
+
+    @Test fun phonesThatAlreadyMergedAnOlderFileMergeThisOne() {
+        // The picture rect arrived in version 3; raising the version is what ships it to existing installs.
+        assertTrue(BuiltinTemplates.VERSION >= 3)
+    }
+
     @Test fun yourOwnTemplatesWinOverTheBuiltInOnes() {
         val store = LayoutTemplates()
         store.merge(json)

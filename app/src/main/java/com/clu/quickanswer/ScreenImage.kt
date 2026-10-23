@@ -117,6 +117,11 @@ object ScreenImage {
         return top to bottom
     }
 
+    const val PICTURE_MAX_SIDE = 512
+    const val PICTURE_QUALITY = 80
+
+    internal fun scaledSize(width: Int, height: Int, maxSide: Int): Pair<Int, Int> = TODO()
+
     private fun encode(src: Bitmap, maxSide: Int, quality: Int, geometry: SentGeometry): Prepared {
         val longest = maxOf(src.width, src.height)
         val bmp = if (longest > maxSide) {
