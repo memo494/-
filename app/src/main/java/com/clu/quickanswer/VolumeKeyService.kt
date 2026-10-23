@@ -20,46 +20,43 @@ import android.view.accessibility.AccessibilityEvent
 class VolumeKeyService : AccessibilityService() {
 
     private val main = Handler(Looper.getMainLooper())
-    private var gestureBusy = false
+    private val taps = TapSequence(
+        dispatch = { rect, duration, complete ->
+            val path = Path().apply { moveTo(rect.centerX, rect.centerY) }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0L, duration))
+                .build()
+            dispatchGesture(gesture, object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) = complete(true)
+                override fun onCancelled(gestureDescription: GestureDescription?) = complete(false)
+            }, main)
+        },
+        schedule = { delay, action -> check(main.postDelayed({ action() }, delay)) },
+    )
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        active?.takeIf { it !== this }?.taps?.cancel()
         active = this
     }
 
     override fun onDestroy() {
         if (active === this) active = null
-        gestureBusy = false
+        taps.cancel()
         super.onDestroy()
     }
 
-    /** Sequence of short taps with gaps to preserve repeated digits. */
-    private fun tapSequence(boxes: List<PxRect>, result: (Boolean) -> Unit): Boolean {
-        if (Looper.myLooper() != Looper.getMainLooper() || gestureBusy || boxes.isEmpty() || boxes.size > 5) return false
-        val builder = GestureDescription.Builder()
-        boxes.forEachIndexed { i, rect ->
-            val path = Path().apply { moveTo(rect.centerX, rect.centerY) }
-            builder.addStroke(GestureDescription.StrokeDescription(path, i * 170L, 80L))
-        }
-        gestureBusy = true
-        val callback = object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                gestureBusy = false
-                result(true)
-            }
+    private fun tapSequence(
+        boxes: List<PxRect>, submitLast: Boolean, canContinue: () -> Boolean,
+        result: (Boolean) -> Unit,
+    ): Boolean {
+        if (Looper.myLooper() != Looper.getMainLooper() || active !== this) return false
+        return taps.start(boxes, submitLast, canContinue, result)
+    }
 
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                gestureBusy = false
-                result(false)
-            }
-        }
-        return try {
-            if (dispatchGesture(builder.build(), callback, main)) true
-            else { gestureBusy = false; false }
-        } catch (_: Exception) {
-            gestureBusy = false
-            false
-        }
+    private fun cancelSequence() {
+        if (Looper.myLooper() == Looper.getMainLooper()) taps.cancel()
+        else main.post { taps.cancel() }
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
@@ -72,15 +69,27 @@ class VolumeKeyService : AccessibilityService() {
         return true
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Window changes can move the keypad or replace the game with another app. Our overlay's
+        // own events are harmless; no window contents or accessibility tree are read.
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.packageName?.toString() != packageName
+        ) taps.cancel()
+    }
 
-    override fun onInterrupt() {}
+    override fun onInterrupt() = taps.cancel()
 
     companion object {
         @Volatile private var active: VolumeKeyService? = null
 
-        fun tapAnswer(boxes: List<PxRect>, result: (Boolean) -> Unit): Boolean =
-            active?.tapSequence(boxes, result) ?: false
+        fun tapAnswer(
+            boxes: List<PxRect>,
+            submitLast: Boolean = false,
+            canContinue: () -> Boolean = { true },
+            result: (Boolean) -> Unit,
+        ): Boolean = active?.tapSequence(boxes, submitLast, canContinue, result) ?: false
+
+        fun cancelAnswer() { active?.cancelSequence() }
 
         /** Whether the user has turned this service on in the system's Accessibility settings. */
         fun isEnabled(context: Context): Boolean {
