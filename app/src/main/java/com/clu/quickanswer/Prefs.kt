@@ -8,7 +8,7 @@ object Prefs {
     const val DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5"
 
     // Bumped when the meaning of the saved Gemini model changes (see GeminiModels.migrateSavedModel).
-    private const val MODEL_VERSION = 2
+    private const val MODEL_VERSION = 3
 
     private fun sp(c: Context) = c.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
