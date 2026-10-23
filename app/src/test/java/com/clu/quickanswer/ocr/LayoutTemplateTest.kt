@@ -64,6 +64,21 @@ class LayoutTemplateTest {
     }
 
     @Test
+    fun jsonRoundtrip_secondLookAndBounded() {
+        val g = grid()
+        val t = g.copy(altSignatures = g.signatures.map { RegionSignature(it.background / 2, it.uniformity) }, bounded = true)
+        assertTrue(t.isValid)
+        assertEquals(t, LayoutTemplate.fromJson(JSONObject(t.toJson().toString())))
+        // Older files have neither: one look, not bounded.
+        val old = JSONObject(g.toJson().toString()).apply { remove("sig2"); remove("bnd") }
+        val back = LayoutTemplate.fromJson(old)!!
+        assertEquals(null, back.altSignatures)
+        assertEquals(false, back.bounded)
+        // A second look must have one signature per region, like the first.
+        assertEquals(false, g.copy(altSignatures = g.signatures.drop(1)).isValid)
+    }
+
+    @Test
     fun validTemplates() {
         assertTrue(grid().isValid)
         assertTrue(numeric().isValid)

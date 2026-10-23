@@ -154,6 +154,16 @@ class RealScreenCalibration {
                 println("$name ~ ${t.id}: dist=${"%.2f".format(d)} fits=$fits layout=${lr.outcome} sigs=$sigs $read")
             }
         }
+        // Greyed (waiting) screens read with a template whose signatures come from them.
+        for (name in listOf("5ec78b50", "e97f5c84", "a77de709")) {
+            val f = File(dir, "$name-image.jpg"); if (!f.isFile) continue
+            val img = load(dir!!, name)
+            val g = built.first { it.id == "builtin-parchment-grid" }
+            val grey = g.copy(signatures = TemplateReader.signatures(g, img.argb, img.width, img.height))
+            val lr = TemplateReader.layoutForDetailed(grey, img.argb, img.width, img.height)
+            val r = lr.layout?.let { OcrFixtures.reader.analyze(img.argb, img.width, img.height, emptyList(), ColorLayout.Result(it, null)) }
+            println("GREY $name sigs=${grey.signatures} layout=${lr.outcome} -> ${r?.question?.let { "Q='${it.questionText}' O=${it.options} conf=${"%.2f".format(it.meanConfidence)}" } ?: r?.failure}")
+        }
         // The original game's choice screen is ColorLayout's, not a template's: it must read without one.
         for ((name, masks) in listOf("d1c6e924" to listOf(PxRect(141, 406, 333, 598), PxRect(1293, 734, 1551, 911)))) {
             val img = load(dir!!, name)
