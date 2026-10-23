@@ -1,5 +1,5 @@
 {
- "builtin": 2,
+ "builtin": 3,
  "templates": [
   {
    "arr": "GRID",
@@ -8,6 +8,12 @@
    "num": null,
    "fp": "23333446777555555545797623446878756766665675544423447b8877756666669a766623447cb99ba9997699bba57613437cccddddddca9cbbb45311127ccdccbccbbbbbcbb42211117cdda999a999acccb32111118cdd977797778dccc32111118ddd877786677dcab3211111adcbaaaabaaaabbbb43211115acaaaaaaaaaaaa98322111124444444455667665211",
    "used": 0,
+   "pic": [
+    0.0951327458024025,
+    0.3647541105747223,
+    0.3126843571662903,
+    0.75
+   ],
    "pkg": null,
    "sig": [
     [
@@ -99,6 +105,7 @@
    "num": null,
    "fp": "23333444444433344445797623446887777665555555544424547bccccccccbbbbba743323347ccccccccc889cbba32212337cccbbccccbbbcbbb42111127ccdccccdccccccbb41111117cdc66668676acccb31111118cdc77779777adccc31111118ddc88889888bdcab4111111adcbbbbbccbbb9bbb41111115acaaaaaaaaaaaa98311111124444444455667665211",
    "used": 0,
+   "pic": null,
    "pkg": null,
    "sig": [
     [
@@ -174,6 +181,7 @@
    ],
    "fp": "23333445555555677645797623446876655767765775544423447b8555856687789a766623447cb99aa9998799bba57613437cccbbcccca98cbbb45311127ccddccddc778ccbb43211117cdd86669d777cccc43311118cdda788ad888cccc42311118dddba9abd878ccbb4321111adcbbabbbb999abcb42211115acaaaaaaaaaaaa98311111124444444455667665211",
    "used": 0,
+   "pic": null,
    "pkg": null,
    "sig": [
     [
@@ -212,6 +220,7 @@
    ],
    "fp": "233334444........4457976234468877........555544424547bccccccccbbbbba743323347ccccccccc889ccc9322..337ccbbbabba99accc8221..227cccaaaada879ccc811111117cdb4474ca879ccc811111118cddcccdda779dcc811111118dddddddda88addc9211114abbcbbbbbcaaaaadd9211115dcccaaaaabaaaaaba7211112567444444455667665211",
    "used": 0,
+   "pic": null,
    "pkg": null,
    "sig": [
     [
@@ -250,6 +259,7 @@
    ],
    "fp": "45588bcccccccccccccc85864549ceedddddddddeebb95965459deeeeeeddeeeeeaa94966..9dddddeffffeddddd94654..599b88abbbba88b59545544544758aaaaaaa98666555544557958edcdddcc968855444447eed8dddcb8888b7c75544446dcd9dddcb9a78c9d65554447d9d9ddddb8978d9d55554546dbc8cccba7778ccd65554446cbb7777777777bbb6555",
    "used": 0,
+   "pic": null,
    "pkg": null,
    "sig": [
     [

@@ -15,7 +15,7 @@ object BuiltinTemplates {
     const val ASSET = "templates/builtin.json"
 
     /** Raise when builtin.json changes, so phones that already merged it merge the new one. */
-    const val VERSION = 2
+    const val VERSION = 3
 
     /** [LayoutTemplate.source] of a built-in template. */
     const val SOURCE = "builtin"
