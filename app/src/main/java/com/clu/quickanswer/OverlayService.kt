@@ -984,6 +984,8 @@ class OverlayService : Service() {
         val memory = AnswerStore.memory
         val read = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else DeviceRead(null)
         val q = read.question
+        // The cheapest rung of the answer ladder: arithmetic is computed here, before the memory and the model.
+        if (q != null) Calculator.answer(q)?.let { r -> return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true) }
         val wordsDecide = q != null && !QuestionPrompt.refersToPicture(q.questionText)
         var corrected: AnswerMemory.Hit? = null
         if (q != null && wordsDecide) {
