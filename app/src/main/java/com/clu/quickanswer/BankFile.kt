@@ -1,5 +1,7 @@
 package com.clu.quickanswer
 
+import org.json.JSONObject
+
 /**
  * The file "تصدير بنك الأسئلة" writes and "استيراد بنك أسئلة" reads. Since version 2 it carries the
  * learned layout templates next to the answers, so moving to a new phone (or sharing with a friend
@@ -24,7 +26,13 @@ object BankFile {
      * (what [com.clu.quickanswer.ocr.LayoutTemplates.encode] produced), both embedded as JSON objects
      * (not strings), under the keys "memory" and "templates".
      */
-    fun encode(memoryJson: String, templatesJson: String): String = TODO("issue: bank file with templates")
+    fun encode(memoryJson: String, templatesJson: String): String =
+        JSONObject()
+            .put("format", FORMAT)
+            .put("version", VERSION)
+            .put("memory", JSONObject(memoryJson))
+            .put("templates", JSONObject(templatesJson))
+            .toString()
 
     /**
      * The parts of [text]. Never throws (garbage, huge or deeply nested input gives null).
@@ -34,5 +42,20 @@ object BankFile {
      * - A version-1 file (an object with an "e" array and no "format"): `Parts(text, null)`.
      * - Anything else: null.
      */
-    fun decode(text: String): Parts? = TODO("issue: bank file with templates")
+    fun decode(text: String): Parts? {
+        val root = try {
+            JSONObject(text)
+        } catch (_: Throwable) {
+            // Not JSON, or so deeply nested or big that the parser gave up.
+            return null
+        }
+        if (!root.has("format")) {
+            return if (root.optJSONArray("e") != null) Parts(text, null) else null
+        }
+        if (root.optString("format") != FORMAT) return null
+        val memory = root.optJSONObject("memory")?.toString()
+        val templates = root.optJSONObject("templates")?.toString()
+        if (memory == null && templates == null) return null
+        return Parts(memory, templates)
+    }
 }

@@ -247,6 +247,21 @@
                 android:text="استيراد بنك أسئلة" />
         </LinearLayout>
 
+        <TextView
+            android:id="@+id/templatesStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAlignment="viewStart"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/clearTemplatesButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:enabled="false"
+            android:text="مسح القوالب" />
+
         <CheckBox
             android:id="@+id/volumeKeyCheck"
             android:layout_width="match_parent"

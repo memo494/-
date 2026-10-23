@@ -36,6 +36,11 @@ object TemplateStore {
         }
     }
 
+    /** Runs [block] on the store's thread, after the file has been loaded. */
+    fun runAfterLoad(block: () -> Unit) {
+        io.execute(block)
+    }
+
     private fun scheduleSave() {
         if (!saveQueued.compareAndSet(false, true)) return
         io.execute {

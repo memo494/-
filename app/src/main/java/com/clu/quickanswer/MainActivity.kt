@@ -21,8 +21,10 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.clu.quickanswer.ocr.TemplateState
 
 class MainActivity : AppCompatActivity() {
 
@@ -44,6 +46,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var highlightCheck: CheckBox
     private lateinit var vibrateCheck: CheckBox
     private lateinit var clearMemoryButton: Button
+    private lateinit var templatesStatus: TextView
+    private lateinit var clearTemplatesButton: Button
     private lateinit var volumeKeyCheck: CheckBox
     private lateinit var volumeKeyStatus: TextView
 
@@ -71,17 +75,22 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
             if (uri == null) return@registerForActivityResult
             val app = applicationContext
+            // Both files must have been loaded, or the export would miss what is on disk.
             AnswerStore.runAfterLoad {
-                val ok = try {
-                    app.contentResolver.openOutputStream(uri, "wt")?.use {
-                        it.write(AnswerStore.exportJson().toByteArray(Charsets.UTF_8))
-                    } != null
-                } catch (_: Exception) {
-                    false
-                }
-                val n = AnswerStore.memory.size
-                runOnUiThread {
-                    Toast.makeText(app, if (ok) "تم تصدير $n سؤال" else "تعذّر حفظ الملف", Toast.LENGTH_SHORT).show()
+                TemplateStore.runAfterLoad {
+                    val ok = try {
+                        val text = BankFile.encode(AnswerStore.exportJson(), TemplateStore.templates.encode())
+                        app.contentResolver.openOutputStream(uri, "wt")?.use {
+                            it.write(text.toByteArray(Charsets.UTF_8))
+                        } != null
+                    } catch (_: Exception) {
+                        false
+                    }
+                    val n = AnswerStore.memory.size
+                    val t = TemplateStore.templates.size
+                    runOnUiThread {
+                        Toast.makeText(app, if (ok) "تم تصدير $n سؤال و$t قالب" else "تعذّر حفظ الملف", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -91,32 +100,48 @@ class MainActivity : AppCompatActivity() {
             if (uri == null) return@registerForActivityResult
             val app = applicationContext
             AnswerStore.runAfterLoad {
-                var tooBig = false
-                // Throwable: a huge or deeply nested file can run out of memory or stack, which is not an Exception.
-                val merged = try {
-                    val bytes = app.contentResolver.openInputStream(uri)?.use {
-                        AnswerMemory.readAtMost(it, AnswerMemory.MAX_IMPORT_BYTES)
+                TemplateStore.runAfterLoad {
+                    var tooBig = false
+                    var notABank = false
+                    var merged: AnswerMemory.MergeResult? = null
+                    var templatesAdded = 0
+                    // Throwable: a huge or deeply nested file can run out of memory or stack, which is not an Exception.
+                    try {
+                        val bytes = app.contentResolver.openInputStream(uri)?.use {
+                            AnswerMemory.readAtMost(it, AnswerMemory.MAX_IMPORT_BYTES)
+                        }
+                        val parts = bytes?.let { BankFile.decode(it.toString(Charsets.UTF_8)) }
+                        when {
+                            bytes == null -> tooBig = true
+                            parts == null -> notABank = true
+                            else -> {
+                                merged = parts.memoryJson?.let { AnswerStore.memory.merge(it) }
+                                val templates = parts.templatesJson?.let { TemplateStore.templates.merge(it) }
+                                templatesAdded = templates?.added ?: 0
+                                // A file whose parts are both unreadable is not a bank either.
+                                if (merged == null && templates == null) notABank = true
+                            }
+                        }
+                    } catch (_: Throwable) {
+                        notABank = true
                     }
-                    if (bytes == null) {
-                        tooBig = true
-                        null
-                    } else {
-                        AnswerStore.memory.merge(bytes.toString(Charsets.UTF_8))
+                    val n = AnswerStore.memory.size
+                    val counts = templateCounts()
+                    val m = merged
+                    runOnUiThread {
+                        val message = when {
+                            tooBig -> "الملف كبير جدًا (الحد 5 ميغابايت)"
+                            notABank -> "الملف ليس بنك أسئلة من Clu"
+                            m != null && m.noRoom > 0 ->
+                                "أُضيف ${m.added} سؤال و$templatesAdded قالب (المجموع $n سؤال)؛ الذاكرة ممتلئة فتُرك ${m.noRoom} سؤال"
+                            else -> "أُضيف ${m?.added ?: 0} سؤال و$templatesAdded قالب (المجموع $n سؤال)"
+                        }
+                        Toast.makeText(app, message, Toast.LENGTH_LONG).show()
+                        if (!isDestroyed) {
+                            updateMemoryButton(n)
+                            updateTemplatesStatus(counts)
+                        }
                     }
-                } catch (_: Throwable) {
-                    null
-                }
-                val n = AnswerStore.memory.size
-                runOnUiThread {
-                    val message = when {
-                        tooBig -> "الملف كبير جدًا (الحد 5 ميغابايت)"
-                        merged == null -> "الملف ليس بنك أسئلة من Clu"
-                        merged.noRoom > 0 ->
-                            "أُضيف ${merged.added} سؤال (المجموع $n)؛ الذاكرة ممتلئة فتُرك ${merged.noRoom} سؤال"
-                        else -> "أُضيف ${merged.added} سؤال (المجموع $n)"
-                    }
-                    Toast.makeText(app, message, Toast.LENGTH_LONG).show()
-                    if (!isDestroyed) updateMemoryButton(n)
                 }
             }
         }
@@ -166,6 +191,9 @@ class MainActivity : AppCompatActivity() {
         highlightCheck.isChecked = Prefs.highlightAnswer(this)
         vibrateCheck.isChecked = Prefs.vibrateOnAnswer(this)
         AnswerStore.init(this)
+        TemplateStore.init(this)
+        templatesStatus = findViewById(R.id.templatesStatus)
+        clearTemplatesButton = findViewById(R.id.clearTemplatesButton)
         volumeKeyCheck = findViewById(R.id.volumeKeyCheck)
         volumeKeyStatus = findViewById(R.id.volumeKeyStatus)
         volumeKeyCheck.isChecked = Prefs.volumeKey(this)
@@ -195,6 +223,19 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+        clearTemplatesButton.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setMessage("مسح كل قوالب الألعاب؟ رح يرجع يتعلّمها من جديد.")
+                .setPositiveButton("مسح") { _, _ ->
+                    TemplateStore.runAfterLoad {
+                        TemplateStore.templates.clear()
+                        val counts = templateCounts()
+                        runOnUiThread { if (!isDestroyed) updateTemplatesStatus(counts) }
+                    }
+                }
+                .setNegativeButton("إلغاء", null)
+                .show()
         }
         findViewById<Button>(R.id.opusButton).setOnClickListener {
             claudeModelInput.setText("claude-opus-5-5")
@@ -262,6 +303,10 @@ class MainActivity : AppCompatActivity() {
             val n = AnswerStore.memory.size
             runOnUiThread { if (!isDestroyed) updateMemoryButton(n) }
         }
+        TemplateStore.runAfterLoad {
+            val counts = templateCounts()
+            runOnUiThread { if (!isDestroyed) updateTemplatesStatus(counts) }
+        }
     }
 
     private fun updateVolumeKeyStatus() {
@@ -275,6 +320,19 @@ class MainActivity : AppCompatActivity() {
     private fun updateMemoryButton(count: Int) {
         clearMemoryButton.text = "مسح الذاكرة ($count سؤال)"
         clearMemoryButton.isEnabled = count > 0
+    }
+
+    /** Trusted and candidate template counts; call on [TemplateStore.runAfterLoad]'s thread. */
+    private fun templateCounts(): Pair<Int, Int> {
+        val all = TemplateStore.templates.all()
+        val trusted = all.count { it.state == TemplateState.TRUSTED }
+        return trusted to all.size - trusted
+    }
+
+    private fun updateTemplatesStatus(counts: Pair<Int, Int>) {
+        val (trusted, candidate) = counts
+        templatesStatus.text = "قوالب الألعاب: $trusted معتمد، $candidate قيد التعلّم"
+        clearTemplatesButton.isEnabled = trusted + candidate > 0
     }
 
     override fun onPause() {
