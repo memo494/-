@@ -45,3 +45,8 @@ one; mark an entry "superseded by N" when it changes.
     so successful gesture callbacks alone cannot confirm a partially entered answer. Unsupported
     patterns show the answer without guessed interaction; later patterns extend this boundary
     rather than adding provider-specific tap logic. See `INTERACTIONS.md`.
+13. **Measured picture-request speed overrides the crop transport in decision 11.** Main's
+    `ea6d15f` reports 5.5 s for cropped-picture requests versus 2.4 s for whole screenshots on the
+    owner's phone. Picture questions therefore keep picture-specific lookup/hash/guards but send
+    the screenshot on a memory miss. The cropped provider API remains available; it is not the
+    active service path. Result watching also retains that update's option-only pixel buffer.

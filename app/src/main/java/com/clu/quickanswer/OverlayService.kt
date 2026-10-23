@@ -1337,9 +1337,8 @@ class OverlayService : Service() {
      * 1. Read it on the device. If that works: answer from memory when the question was seen before
      *    (unless it is [bypassKey], the answer being corrected), else ask the model with text only and
      *    remember the answer. A question about a picture skips this: its words do not decide it. When
-     *    the game's picture is shown (see [DeviceRead.picture]) the question is asked with the picture
-     *    cut out of the screen, and remembered per picture, whatever its words say (some name no picture:
-     *    "ما هو اسم الشخصية الخيالية الاتية ؟"); only when that cannot answer does the screenshot follow.
+     *    the game's picture is shown (see [DeviceRead.picture]) the whole screenshot answers it
+     *    (the faster measured path), and it is remembered per picture, whatever its words say.
      * 2. Otherwise, or when the text answer cannot be used, send the screenshot as before. If the
      *    question was read, an image answer that names one of its options still gets the box and is
      *    remembered. A correction goes straight here: the text request would get the same reply again.
@@ -1379,7 +1378,9 @@ class OverlayService : Service() {
                         return resolved(r, shownCopy(bmp), AnswerSource.MEMORY, reply = hit.answer, key = hit.key)
                     }
                 }
-                askWithPicture(c, memory, q, picture, bmp)?.let { return it }
+                // No cropped-picture request: on the owner's phone it took 5.5 s on average against 2.4 s
+                // for the whole screenshot (Oct 2026 statistics), so the screenshot below answers it and
+                // its answer is remembered for this picture.
             }
         }
         if (q != null && wordsDecide) {
@@ -1457,41 +1458,6 @@ class OverlayService : Service() {
         )
     }
 
-    /**
-     * Asks the model the question of [q] together with its picture, cut out of [bmp] at [pic]. An answer
-     * that names an option (or is the number) is remembered for this picture and returned. An error
-     * (quota, key, region, no connection) is returned as the answer: the screenshot request would fail
-     * the same way. Null when the picture cannot answer (the client does not support it, the reply is
-     * empty, refused or not one of the options, the picture cannot be cut out): the screenshot decides.
-     */
-    private fun askWithPicture(c: Answerer, memory: AnswerMemory, q: Question, pic: ShownPicture, bmp: Bitmap): Solved? {
-        val crop = cropOf(bmp, pic.rect) ?: return null
-        try {
-            val reply = c.answerPicture(QuestionPrompt.buildPicture(q), crop)
-            when (reply.kind) {
-                Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
-                    if (q.numeric || AnswerInteraction.matchesChoice(reply.text, r.answer, q.options, true)) {
-                        memory.put(q.questionText, q.options, q.numeric, r.answer, pic.hash)
-                    }
-                    // "آخر صورة" shows the picture that was sent; the crop itself is recycled below.
-                    val shown = try {
-                        crop.copy(Bitmap.Config.ARGB_8888, false)
-                    } catch (t: Throwable) {
-                        null
-                    }
-                    return Solved(r.answer, r.rect, shown, null, isAnswer = true, source = AnswerSource.PICTURE,
-                        request = AnswerInteraction.Request(q, r.answer, reply.text, indexRequested = true),
-                        rawReply = reply.text, pictureRect = pic.rect)
-                }
-                Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false, source = AnswerSource.FAILED)
-                Reply.Kind.EMPTY -> {}
-            }
-            return null
-        } finally {
-            if (crop !== bmp) crop.recycle()
-        }
-    }
-
     private fun legacyVisibleKind(bitmap: Bitmap): GameVisualLayout.Kind? = try {
         val w = bitmap.width
         val h = bitmap.height
@@ -1505,19 +1471,6 @@ class OverlayService : Service() {
         }
     } catch (_: Throwable) { null }
 
-    /** [rect] of [bmp], clamped to it; null when nothing is left or the crop cannot be made. The caller recycles it. */
-    private fun cropOf(bmp: Bitmap, rect: PxRect): Bitmap? {
-        val left = rect.left.coerceIn(0, bmp.width)
-        val top = rect.top.coerceIn(0, bmp.height)
-        val right = rect.right.coerceIn(0, bmp.width)
-        val bottom = rect.bottom.coerceIn(0, bmp.height)
-        if (right <= left || bottom <= top) return null
-        return try {
-            Bitmap.createBitmap(bmp, left, top, right - left, bottom - top)
-        } catch (t: Throwable) {
-            null
-        }
-    }
 
     /**
      * A copy of [bmp] to learn its layout from, or null. Only for a screen the templates were tried
@@ -1887,8 +1840,8 @@ class OverlayService : Service() {
      *
      * Frames are grabbed on the main thread, as everywhere. In auto mode the tick takes the new frames
      * and the watch only reads the one it kept: a frame taken here would be missing from the tick,
-     * which would then take the screen for unchanged and not send the next question. The kept frame
-     * is copied before the pixel work, because the next tick may recycle it.
+     * which would then take the screen for unchanged and not send the next question. Only option
+     * pixels are copied to a private buffer before analysis, because the next tick may recycle the frame.
      */
     private suspend fun watchResult(w: ResultWatch, base: IntArray) {
         val q = w.question
@@ -1908,28 +1861,30 @@ class OverlayService : Service() {
                 return
             }
             if (FrameSignature.diff(sig, base) > WATCH_SAME_SCREEN_DIFF) return
-            val masks = overlays.map { PxRect(it.left, it.top, it.right, it.bottom) }
-            val snapshot = try {
-                frame.copy(Bitmap.Config.ARGB_8888, false)
+            // Only the options' bounding box is read (about a twelfth of the screen), straight from the
+            // frame on this thread: no copy of the whole capture twice a second for 20 seconds.
+            val box = PxRect(
+                q.optionRects.minOf { it.left }.coerceAtLeast(0), q.optionRects.minOf { it.top }.coerceAtLeast(0),
+                q.optionRects.maxOf { it.right }.coerceAtMost(frame.width), q.optionRects.maxOf { it.bottom }.coerceAtMost(frame.height),
+            )
+            if (box.width <= 0 || box.height <= 0) return
+            val buffer = pixels?.takeIf { it.size == box.width * box.height }
+                ?: IntArray(box.width * box.height).also { pixels = it }
+            try {
+                frame.getPixels(buffer, 0, box.width, box.left, box.top, box.width, box.height)
             } catch (t: Throwable) {
-                null
-            } ?: return
-            val reading = try {
-                withContext(Dispatchers.Default) {
-                    try {
-                        val width = snapshot.width
-                        val height = snapshot.height
-                        val buffer = pixels?.takeIf { it.size == width * height }
-                            ?: IntArray(width * height).also { pixels = it }
-                        snapshot.getPixels(buffer, 0, width, 0, 0, width, height)
-                        val usable = ResultReader.optionsUsable(width, height, q.optionRects, masks)
-                        Pair(usable, ResultReader.correctOption(buffer, width, height, q.optionRects, masks))
-                    } catch (t: Throwable) {
-                        null
-                    }
+                return
+            }
+            fun moved(r: PxRect) = PxRect(r.left - box.left, r.top - box.top, r.right - box.left, r.bottom - box.top)
+            val options = q.optionRects.map(::moved)
+            val masks = overlays.map { moved(PxRect(it.left, it.top, it.right, it.bottom)) }
+            val reading = withContext(Dispatchers.Default) {
+                try {
+                    val usable = ResultReader.optionsUsable(box.width, box.height, options, masks)
+                    Pair(usable, ResultReader.correctOption(buffer, box.width, box.height, options, masks))
+                } catch (t: Throwable) {
+                    null
                 }
-            } finally {
-                snapshot.recycle() // withContext has finished with it, also when this watch was cancelled
             } ?: return
             when (val step = confirmer.offer(reading.first, reading.second)) {
                 is ResultConfirmer.Step.Act -> {

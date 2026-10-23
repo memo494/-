@@ -19,8 +19,8 @@ capture (MediaProjection) ─► our own windows painted black = masks
   ├─ question read: AnswerMemory.lookup → hit: answer at once ("⚡", no tokens)
   │                 miss: QuestionPrompt → Answerer.answerText (short text request) → remember
   │    a question that SHOWS A PICTURE (template with `picture`, PictureRegion.isShown) is looked up and
-  │    remembered per picture (PictureRegion.hash), and asked with the picture only:
-  │    QuestionPrompt.buildPicture → Answerer.answerPicture (512 px crop, one request)
+  │    remembered per picture (PictureRegion.hash). A miss asks with the whole screenshot:
+  │    measured faster on the owner's phone than a cropped-picture request (decision 13)
   │
   └─ not read (or text reply unusable): Answerer.answer(screenshot) (image request)
 ```
