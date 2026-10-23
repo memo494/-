@@ -50,6 +50,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var clearTemplatesButton: Button
     private lateinit var volumeKeyCheck: CheckBox
     private lateinit var volumeKeyStatus: TextView
+    private lateinit var statsText: TextView
+    private lateinit var clearStatsButton: Button
 
     // Model ids in the same order as the spinner entries.
     private var modelIds: List<String> = emptyList()
@@ -192,6 +194,7 @@ class MainActivity : AppCompatActivity() {
         vibrateCheck.isChecked = Prefs.vibrateOnAnswer(this)
         AnswerStore.init(this)
         TemplateStore.init(this)
+        StatsStore.init(this)
         templatesStatus = findViewById(R.id.templatesStatus)
         clearTemplatesButton = findViewById(R.id.clearTemplatesButton)
         volumeKeyCheck = findViewById(R.id.volumeKeyCheck)
@@ -236,6 +239,21 @@ class MainActivity : AppCompatActivity() {
                 }
                 .setNegativeButton("إلغاء", null)
                 .show()
+        }
+        statsText = findViewById(R.id.statsText)
+        clearStatsButton = findViewById(R.id.clearStatsButton)
+        clearStatsButton.setOnClickListener {
+            showRtl(
+                AlertDialog.Builder(this)
+                    .setMessage("مسح كل الإحصائيات؟")
+                    .setPositiveButton("مسح") { _, _ ->
+                        StatsStore.runAfterLoad {
+                            StatsStore.stats.clear()
+                            updateStats()
+                        }
+                    }
+                    .setNegativeButton("إلغاء", null)
+            )
         }
         findViewById<Button>(R.id.opusButton).setOnClickListener {
             claudeModelInput.setText("claude-opus-5-5")
@@ -338,6 +356,19 @@ class MainActivity : AppCompatActivity() {
         TemplateStore.runAfterLoad {
             val counts = templateCounts()
             runOnUiThread { if (!isDestroyed) updateTemplatesStatus(counts) }
+        }
+        StatsStore.runAfterLoad { updateStats() }
+    }
+
+    /** Shows today's and the all-time numbers; call on [StatsStore.runAfterLoad]'s thread. */
+    private fun updateStats() {
+        val stats = StatsStore.stats
+        val all = stats.allTime()
+        val text = AnswerStats.describe(stats.today(StatsStore.today()), all)
+        runOnUiThread {
+            if (isDestroyed) return@runOnUiThread
+            statsText.text = text
+            clearStatsButton.isEnabled = all.total > 0
         }
     }
 
