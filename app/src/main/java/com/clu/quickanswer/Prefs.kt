@@ -93,6 +93,12 @@ object Prefs {
         sp(c).edit().putString("quota_state", state).apply()
     }
 
+    /** The [com.clu.quickanswer.ocr.BuiltinTemplates.VERSION] last merged into the template store, 0 if none. */
+    fun builtinTemplatesVersion(c: Context): Int = sp(c).getInt("builtin_templates_version", 0)
+    fun saveBuiltinTemplatesVersion(c: Context, version: Int) {
+        sp(c).edit().putInt("builtin_templates_version", version).apply()
+    }
+
     /** Thinking options learned per model (see ThinkingMemory.encode). */
     fun learnedThinking(c: Context): String = sp(c).getString("learned_thinking", "") ?: ""
     fun saveLearnedThinking(c: Context, state: String) {

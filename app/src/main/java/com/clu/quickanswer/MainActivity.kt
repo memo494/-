@@ -229,7 +229,7 @@ class MainActivity : AppCompatActivity() {
                 .setMessage("مسح كل قوالب الألعاب؟ رح يرجع يتعلّمها من جديد.")
                 .setPositiveButton("مسح") { _, _ ->
                     TemplateStore.runAfterLoad {
-                        TemplateStore.templates.clear()
+                        TemplateStore.resetToBuiltins(this)
                         val counts = templateCounts()
                         runOnUiThread { if (!isDestroyed) updateTemplatesStatus(counts) }
                     }

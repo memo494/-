@@ -1,6 +1,7 @@
 package com.clu.quickanswer
 
 import android.content.Context
+import com.clu.quickanswer.ocr.BuiltinTemplates
 import com.clu.quickanswer.ocr.LayoutTemplates
 import java.io.File
 import java.util.concurrent.Executors
@@ -32,8 +33,35 @@ object TemplateStore {
             } catch (_: Throwable) {
                 // An unreadable file means starting empty; it is overwritten on the next save.
             }
+            if (mergeBuiltins(context.applicationContext)) scheduleSave()
             templates.onChange = { scheduleSave() }
         }
+    }
+
+    /**
+     * Adds the templates the app ships with ([BuiltinTemplates]) once per version of the file. True
+     * when the store changed. A broken or missing asset is skipped and tried again next time.
+     */
+    private fun mergeBuiltins(app: Context): Boolean {
+        return try {
+            if (Prefs.builtinTemplatesVersion(app) >= BuiltinTemplates.VERSION) return false
+            val json = app.assets.open(BuiltinTemplates.ASSET).use { it.readBytes().toString(Charsets.UTF_8) }
+            val r = templates.merge(json) ?: return false
+            Prefs.saveBuiltinTemplatesVersion(app, BuiltinTemplates.VERSION)
+            r.added > 0
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /**
+     * Forgets every learned template and puts the built-in ones back: what "مسح القوالب" does.
+     * Call on [runAfterLoad]'s thread.
+     */
+    fun resetToBuiltins(context: Context) {
+        templates.clear()
+        Prefs.saveBuiltinTemplatesVersion(context.applicationContext, 0)
+        mergeBuiltins(context.applicationContext)
     }
 
     /** Runs [block] on the store's thread, after the file has been loaded. */
