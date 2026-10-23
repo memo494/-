@@ -39,11 +39,16 @@ import androidx.core.app.NotificationCompat
 import com.clu.quickanswer.ocr.ArabicOcr
 import com.clu.quickanswer.ocr.ColorLayout
 import com.clu.quickanswer.ocr.LatinOcr
+import com.clu.quickanswer.ocr.LayoutReplyParser
+import com.clu.quickanswer.ocr.LearningGate
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
 import com.clu.quickanswer.ocr.ScreenFingerprint
 import com.clu.quickanswer.ocr.ScreenLayout
+import com.clu.quickanswer.ocr.TemplateLearner
 import com.clu.quickanswer.ocr.TemplateReader
+import com.clu.quickanswer.ocr.TemplateState
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -160,6 +165,9 @@ class OverlayService : Service() {
     private var ocr: ArabicOcr? = null
     private val latinOcrLock = Any()
     private val colorLayout = ColorLayout()
+
+    // When a layout request may go out in the background (see learnLayout).
+    private val learningGate = LearningGate()
     private var latinOcr: LatinOcr? = null
     @Volatile private var destroyed = false
 
@@ -907,7 +915,10 @@ class OverlayService : Service() {
             }
             if (sig != null) lastSentSig = sig
             setBusy(false)
-            if (fromAuto && ScreenImage.isNoQuestion(solved.text)) return@launch
+            if (fromAuto && ScreenImage.isNoQuestion(solved.text)) {
+                solved.learn?.let { dropLearning(it) }
+                return@launch
+            }
             lastHitKey = solved.memoryKey
             lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
             shownImage = solved.image ?: shownImage
@@ -923,6 +934,8 @@ class OverlayService : Service() {
             if (rect != null && capturedW == screenW && capturedH == screenH && Prefs.highlightAnswer(this@OverlayService)) {
                 showHighlight(rect)
             }
+            // After the answer is on screen, never before it (decision 10).
+            solved.learn?.let { startLearning(it) }
         }
     }
 
@@ -937,7 +950,28 @@ class OverlayService : Service() {
         val rect: PxRect?,
         val image: Bitmap?,
         val memoryKey: String?,
-        val isAnswer: Boolean
+        val isAnswer: Boolean,
+        /** A screen to learn the layout of once the answer is shown (see [learnLayout]), or null. */
+        val learn: LearnFrame? = null,
+    )
+
+    /**
+     * A copy of a screen no reader or template could read, kept to ask [client] for its layout in
+     * the background. [bitmap] is ours: [startLearning] or [dropLearning] recycles it.
+     */
+    private class LearnFrame(val bitmap: Bitmap, val masks: List<PxRect>, val fingerprint: String, val client: Answerer)
+
+    /**
+     * What the device read: [question] (null when nothing could be read), a [candidate] template's
+     * reading (only to be checked against the model's answer, never used to answer), the screen's
+     * [fingerprint] when templates were tried (null when [ColorLayout] took the screen), and
+     * whether some template [fits] the screen (then there is nothing new to learn).
+     */
+    private class DeviceRead(
+        val question: Question?,
+        val candidate: Pair<String, Question>? = null,
+        val fingerprint: String? = null,
+        val fits: Boolean = false,
     )
 
     /**
@@ -953,7 +987,8 @@ class OverlayService : Service() {
     private fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?): Solved {
         val c = currentClient()
         val memory = AnswerStore.memory
-        val q = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else null
+        val read = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else DeviceRead(null)
+        val q = read.question
         val wordsDecide = q != null && !QuestionPrompt.refersToPicture(q.questionText)
         var corrected: AnswerMemory.Hit? = null
         if (q != null && wordsDecide) {
@@ -998,7 +1033,81 @@ class OverlayService : Service() {
                 return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true)
             }
         }
-        return Solved(text, null, c.lastSent, null, imageReply.isAnswer)
+        read.candidate?.let { (id, cq) ->
+            val check = CandidateCheck.judge(cq, imageReply.isAnswer, text)
+            val now = System.currentTimeMillis()
+            when (check.verdict) {
+                CandidateCheck.Verdict.CONFIRMED -> TemplateStore.templates.recordSuccess(id, now)
+                CandidateCheck.Verdict.REFUTED -> TemplateStore.templates.recordFailure(id, now)
+                CandidateCheck.Verdict.UNKNOWN -> {}
+            }
+            // The answer came from the screenshot; the candidate only says where its button is.
+            check.resolved?.let { r -> return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true) }
+        }
+        return Solved(text, null, c.lastSent, null, imageReply.isAnswer, learnFrameFor(read, bmp, masks, c, imageReply, text))
+    }
+
+    /**
+     * A copy of [bmp] to learn its layout from, or null. Only for a screen the templates were tried
+     * on (not the original game, which [ColorLayout] reads), that none of them fits, that the model
+     * answered (not an error or "no question"), and only when [learningGate] lets a request go.
+     */
+    private fun learnFrameFor(read: DeviceRead, bmp: Bitmap, masks: List<PxRect>, c: Answerer, reply: Reply, text: String): LearnFrame? {
+        val fp = read.fingerprint ?: return null
+        if (read.fits || read.question != null || !reply.isAnswer || ScreenImage.isNoQuestion(text)) return null
+        if (!learningGate.tryStart(fp, SystemClock.elapsedRealtime())) return null
+        val copy = try {
+            bmp.copy(Bitmap.Config.ARGB_8888, false)
+        } catch (t: Throwable) {
+            null
+        }
+        if (copy == null) {
+            learningGate.finish(fp, learned = false, now = SystemClock.elapsedRealtime())
+            return null
+        }
+        return LearnFrame(copy, masks, fp, c)
+    }
+
+    private fun startLearning(f: LearnFrame) {
+        scope.launch(Dispatchers.IO) {
+            var learned = false
+            try {
+                learned = learnLayout(f)
+            } catch (t: Throwable) {
+                // Background work: a failure only means nothing was learned this time.
+            } finally {
+                f.bitmap.recycle()
+                learningGate.finish(f.fingerprint, learned, SystemClock.elapsedRealtime())
+            }
+        }
+    }
+
+    private fun dropLearning(f: LearnFrame) {
+        f.bitmap.recycle()
+        learningGate.finish(f.fingerprint, learned = false, now = SystemClock.elapsedRealtime())
+    }
+
+    /**
+     * Asks the model where the question and options of [f] are, builds a CANDIDATE template from the
+     * reply, and keeps it only when reading the same screen with it gives what the model saw
+     * ([TemplateLearner.confirms]). Blocking: run on Dispatchers.IO. True when a template was kept.
+     */
+    private fun learnLayout(f: LearnFrame): Boolean {
+        val answer = f.client.layout(f.bitmap) ?: return false
+        val reply = LayoutReplyParser.parse(answer.text) ?: return false
+        val w = f.bitmap.width
+        val h = f.bitmap.height
+        val pixels = IntArray(w * h)
+        f.bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+        val now = System.currentTimeMillis()
+        val t = TemplateLearner.build(reply, answer.geometry, pixels, w, h, f.masks, UUID.randomUUID().toString(), now)
+            ?: return false
+        val layout = TemplateReader.layoutFor(t, pixels, w, h) ?: return false
+        val read = readWith(f.bitmap, pixels, w, h, ColorLayout.Result(layout, null), layout, f.masks, t.language)
+            ?: return false
+        if (!TemplateLearner.confirms(read, reply)) return false
+        TemplateStore.templates.add(t)
+        return true
     }
 
     /**
@@ -1011,23 +1120,23 @@ class OverlayService : Service() {
      * failures (missing library, out of memory) are Errors, not Exceptions: they must lead to the
      * screenshot path, never crash the service, hence Throwable.
      */
-    private fun readQuestion(bmp: Bitmap, masks: List<PxRect>): Question? {
+    private fun readQuestion(bmp: Bitmap, masks: List<PxRect>): DeviceRead {
         // Hardware bitmaps cannot be read pixel by pixel.
         var copy: Bitmap? = null
         try {
             val src = if (bmp.config == Bitmap.Config.HARDWARE) {
                 bmp.copy(Bitmap.Config.ARGB_8888, false).also { copy = it }
             } else bmp
-            if (src == null) return null
+            if (src == null) return DeviceRead(null)
             val w = src.width
             val h = src.height
             val pixels = IntArray(w * h)
             src.getPixels(pixels, 0, w, 0, 0, w, h)
             val inspected = colorLayout.inspect(pixels, w, h)
             val layout = inspected.layout ?: return readWithTemplates(src, pixels, w, h, masks)
-            return readWith(src, pixels, w, h, inspected, layout, masks, null)
+            return DeviceRead(readWith(src, pixels, w, h, inspected, layout, masks, null))
         } catch (t: Throwable) {
-            return null
+            return DeviceRead(null)
         } finally {
             copy?.recycle()
         }
@@ -1067,15 +1176,20 @@ class OverlayService : Service() {
 
     /**
      * Reads a screen that [ColorLayout] declined with a learned layout. Only TRUSTED templates are
-     * used to read: candidates are confirmed in step 2, when the cloud reply is compared with what
-     * was read. A template that does not fit the screen is not a failure (another mode or screen of
-     * the game), but a fitting template whose reading is declined is, and counts against it.
+     * used to read. A template that does not fit the screen is not a failure (another mode or screen
+     * of the game), but a fitting template whose reading is declined is, and counts against it.
+     *
+     * When no trusted template reads it, the first fitting CANDIDATE that reads it is returned as
+     * [DeviceRead.candidate]: it is checked against the model's answer ([CandidateCheck]), which is
+     * how candidates earn their way to TRUSTED.
      */
-    private fun readWithTemplates(src: Bitmap, pixels: IntArray, w: Int, h: Int, masks: List<PxRect>): Question? {
+    private fun readWithTemplates(src: Bitmap, pixels: IntArray, w: Int, h: Int, masks: List<PxRect>): DeviceRead {
         val fp = ScreenFingerprint.of(pixels, w, h, masks)
         val templates = TemplateStore.templates
-        for (t in templates.find(fp, null, trustedOnly = true)) {
+        var fits = false
+        for (t in templates.find(fp, null, trustedOnly = false)) {
             if (!TemplateReader.fits(t, pixels, w, h)) continue
+            fits = true
             val now = System.currentTimeMillis()
             val tl = TemplateReader.layoutFor(t, pixels, w, h)
             if (tl == null) {
@@ -1083,13 +1197,16 @@ class OverlayService : Service() {
                 continue
             }
             val q = readWith(src, pixels, w, h, ColorLayout.Result(tl, null), tl, masks, t.language)
-            if (q != null) {
-                templates.recordSuccess(t.id, now)
-                return q
+            if (q == null) {
+                templates.recordFailure(t.id, now)
+                continue
             }
-            templates.recordFailure(t.id, now)
+            // A candidate's reading is judged later, against the answer; only a trusted one answers.
+            if (t.state != TemplateState.TRUSTED) return DeviceRead(null, t.id to q, fp, fits = true)
+            templates.recordSuccess(t.id, now)
+            return DeviceRead(q, null, fp, fits = true)
         }
-        return null
+        return DeviceRead(null, null, fp, fits)
     }
 
     /**
