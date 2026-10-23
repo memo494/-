@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFE47A"/>
+      <stop offset="0.6" stop-color="#FFC62E"/>
+      <stop offset="1" stop-color="#FF9F1A"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.3" r="0.42">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glass" cx="0.4" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.7" stop-color="#FFF6D6"/>
+      <stop offset="1" stop-color="#FFE9A6"/>
+    </radialGradient>
+    <filter id="shadow" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#B35A00" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="230" fill="url(#glow)"/>
+
+  <!-- rays of the idea -->
+  <g stroke="#FFFFFF" stroke-width="30" stroke-linecap="round" opacity="0.95">
+    <line x1="512" y1="70" x2="512" y2="118"/>
+    <line x1="330" y1="140" x2="358" y2="178"/>
+    <line x1="694" y1="140" x2="666" y2="178"/>
+    <line x1="250" y1="290" x2="296" y2="300"/>
+    <line x1="774" y1="290" x2="728" y2="300"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <!-- the light bulb -->
+    <path d="M436 400 A138 138 0 1 1 588 400 Q574 440 562 470 H462 Q450 440 436 400 Z" fill="url(#glass)" stroke="#FF9F1A" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M462 300 q25 -40 50 0 q25 40 50 0" fill="none" stroke="#FF8A00" stroke-width="16" stroke-linecap="round"/>
+    <path d="M490 312 V430 M534 312 V430" stroke="#FF8A00" stroke-width="12" stroke-linecap="round" opacity="0.8"/>
+    <rect x="456" y="468" width="112" height="70" rx="18" fill="#4B4F63"/>
+    <rect x="456" y="488" width="112" height="10" fill="#6B7086"/>
+    <rect x="456" y="510" width="112" height="10" fill="#6B7086"/>
+
+    <!-- the cloud -->
+    <g fill="#FFFFFF">
+      <circle cx="372" cy="712" r="108"/>
+      <circle cx="526" cy="676" r="138"/>
+      <circle cx="680" cy="722" r="100"/>
+      <rect x="256" y="706" width="526" height="140" rx="70"/>
+    </g>
+    <!-- a question inside the cloud -->
+    <path d="M478 702 a40 40 0 1 1 56 37 c-12 6 -18 14 -18 26 v6" fill="none" stroke="#FFB31A" stroke-width="30" stroke-linecap="round"/>
+    <circle cx="516" cy="820" r="17" fill="#FFB31A"/>
+  </g>
+</svg>
