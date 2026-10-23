@@ -47,16 +47,42 @@ object GameVisualLayout {
         var bottom = field.top
         for (y in field.top until field.bottom) for (x in field.left until field.right) {
             val c = argb[y * width + x]
-            val r = (c shr 16) and 255
-            val g = (c shr 8) and 255
-            val b = c and 255
-            if (r >= 170 && g >= 90 && r - g >= 20 && g - b >= 30) {
+            if (NumericFieldReader.isGold(c)) {
                 count++
                 top = min(top, y)
                 bottom = max(bottom, y)
             }
         }
         return count >= max(8, field.width * field.height / 500) && bottom - top >= max(4, field.height / 5)
+    }
+
+    /** A coloured parchment/shadow can fit sparse samples; an actual gold button has its own rim. */
+    fun hasSubmitControl(argb: IntArray, width: Int, height: Int, detected: Detected): Boolean {
+        val button = detected.submit ?: return false
+        if (argb.size.toLong() < width.toLong() * height || width <= 0 || height <= 0) return false
+        if (detected.kind == Kind.NUMERIC_WHITE) return true // its saturated green control is mandatory in detect
+        if (detected.kind != Kind.NUMERIC_DARK) return false
+        fun pixel(dx: Int, dy: Int): Int? {
+            val x = (button.centerX + dx * button.width / 120f).toInt()
+            val y = (button.centerY + dy * button.height / 34f).toInt()
+            return if (x in 0 until width && y in 0 until height) argb[y * width + x] else null
+        }
+        fun light(c: Int) = ((c shr 16 and 255) * 299 + (c shr 8 and 255) * 587 + (c and 255) * 114) / 1000
+        val fill = listOf(-73 to -6, 67 to -6, -68 to 9).mapNotNull { (x, y) -> pixel(x, y) }
+        if (fill.size != 3) return false
+        val fillLight = fill.map(::light).average()
+        fun rim(xs: IntArray, ys: IntArray): Boolean = xs.any { x -> ys.any { y ->
+            pixel(x, y)?.let { c ->
+                val r = c shr 16 and 255; val g = c shr 8 and 255; val b = c and 255
+                light(c) < fillLight - 20 && maxOf(r, g, b) - minOf(r, g, b) < 55
+            } == true
+        } }
+        return listOf(
+            rim(intArrayOf(-103, -23, 67), intArrayOf(-42, -36, -30)),
+            rim(intArrayOf(-103, -23, 67), intArrayOf(32, 38, 44)),
+            rim(intArrayOf(-148, -142, -136), intArrayOf(-16, 0, 16)),
+            rim(intArrayOf(134, 140, 146), intArrayOf(-16, 0, 16)),
+        ).count { it } >= 3
     }
 
     /** A just-released key may still be highlighted; every other surface must remain visible. */

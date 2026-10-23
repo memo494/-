@@ -113,6 +113,7 @@ class ScreenReader(
             numericField = found.numericField,
             digitKeys = found.digitKeys,
             bannerRect = found.banner,
+            questionTextRects = found.questionLines.take(qLines.size),
             numericSubmit = found.numericSubmit,
             optionTextRects = found.optionLines.mapIndexed { index, regions ->
                 val button = found.buttons[index]

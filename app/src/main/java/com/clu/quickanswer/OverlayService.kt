@@ -40,6 +40,8 @@ import com.clu.quickanswer.ocr.ArabicOcr
 import com.clu.quickanswer.ocr.ChoiceTouchGuard
 import com.clu.quickanswer.ocr.GameVisualLayout
 import com.clu.quickanswer.ocr.OptionWordDetector
+import com.clu.quickanswer.ocr.NumericFieldReader
+import com.clu.quickanswer.ocr.TextLines
 import com.clu.quickanswer.ocr.WordAnswerMatcher
 import com.clu.quickanswer.interaction.AnswerInteraction
 import com.clu.quickanswer.interaction.NumericEntryCheck
@@ -1027,7 +1029,7 @@ class OverlayService : Service() {
             val picture = solved.pictureRect
             fun overlaps(a: PxRect, b: PxRect) = a.left < b.right && b.left < a.right &&
                 a.top < b.bottom && b.top < a.bottom
-            if (picture != null && masks.any { overlaps(it, picture) }) {
+            if (picture != null && TouchFrameMask.obscuresPicture(picture, masks)) {
                 return solved.copy(touchFailure = "الفقاعة تغطّي الصورة؛ أبعدها ثم اطلب الجواب")
             }
             if (request != null && q != null && !q.numeric) {
@@ -1038,8 +1040,10 @@ class OverlayService : Service() {
                 }
                 val plan = AnswerInteraction.plan(request, AnswerInteraction.Controls(w, h))
                     ?: return solved.copy(touchFailure = "الإجابة لا تطابق خيارًا واضحًا؛ لم يتم الضغط")
-                return solved.copy(touches = plan.taps, guardRect = banner,
-                    guardStamp = fingerprint(bmp, banner, masks), ignoredRects = masks,
+                val questionRegion = questionRegion(q, pixels, w, h) ?: return solved.copy(
+                    touchFailure = "لم أجد منطقة السؤال كاملة للتحقق قبل اللمس")
+                return solved.copy(touches = plan.taps, guardRect = questionRegion,
+                    guardStamp = fingerprint(bmp, questionRegion, masks), ignoredRects = masks,
                     choiceButtons = q.optionRects, choiceWords = words, choiceFromLayout = true,
                     choiceStamps = words.mapNotNull { fingerprint(bmp, it, masks) },
                     pictureStamp = picture?.let { fingerprint(bmp, it, masks) })
@@ -1048,16 +1052,23 @@ class OverlayService : Service() {
             // cannot authorize a guessed keypad; future adapters can supply other verified controls.
             val visual = GameVisualLayout.detect(pixels, w, h)
                 ?.takeIf { it.kind != GameVisualLayout.Kind.CHOICE_GRID }
+                ?.let { if (it.submit != null && !GameVisualLayout.hasSubmitControl(pixels, w, h, it))
+                    it.copy(submit = null) else it }
             if (q?.numeric == true || request == null && visual != null) {
                 if (visual == null) return solved.copy(touchFailure = "لوحة الأرقام غير معروفة بعد؛ لم أكتب شيئًا")
-                val field = q?.numericField ?: visual.field ?: return solved
+                // The keypad adapter measures this skin's field; a learned box can include its bevel or wood.
+                val field = visual.field ?: q?.numericField ?: return solved
+                if (visual.submit == null && GameVisualLayout.inputHasText(pixels, w, h, visual, field)) {
+                    return solved.copy(touchFailure = "الرقم ظاهر ولا يوجد زر تأكيد؛ تحقق إن كانت الجولة تنتظر اللاعبين")
+                }
                 val numericRequest = request ?: AnswerInteraction.Request(
                     Question("", emptyList(), emptyList(), true, 1f, numericField = field),
                     solved.rawReply, solved.rawReply)
                 val plan = AnswerInteraction.plan(numericRequest, AnswerInteraction.Controls(
                     w, h, visual.digits, visual.clear, visual.backspace, visual.submit))
                     ?: return solved.copy(touchFailure = "الإدخال يدعم رقمًا من 1–4 خانات مع زر مسح واضح")
-                val banner = q?.bannerRect?.takeUnless { overlaps(it, field) } ?: visual.questionArea
+                val banner = q?.let { questionRegion(it, pixels, w, h) }?.takeUnless { overlaps(it, field) }
+                    ?: visual.questionArea
                 return solved.copy(touches = plan.taps, guardRect = banner,
                     guardStamp = fingerprint(bmp, banner, masks), ignoredRects = masks,
                     numericLayout = visual, submitLast = visual.submit != null,
@@ -1076,11 +1087,27 @@ class OverlayService : Service() {
             } ?: return solved
             val target = WordAnswerMatcher.match(literal, printed) ?: return solved
             val actions = TouchPlanner.plan(solved.rawReply, target, emptyMap(), null, w, h) ?: return solved
-            val region = ChoiceTouchGuard.contentArea(w, h, null, choices.buttons)
-            solved.copy(touches = actions, guardRect = region, guardStamp = fingerprint(bmp, region, masks),
+            val content = ChoiceTouchGuard.stableContent(pixels, w, h, choices.buttons) ?: return solved.copy(
+                touchFailure = "لم أجد نص السؤال كاملًا للتحقق قبل اللمس")
+            if (content.picture != null && TouchFrameMask.obscuresPicture(content.picture, masks)) return solved.copy(
+                touchFailure = "الفقاعة تغطّي الصورة؛ أبعدها ثم اطلب الجواب")
+            solved.copy(touches = actions, guardRect = content.question, guardStamp = fingerprint(bmp, content.question, masks),
                 choiceButtons = choices.buttons, choiceWords = choices.words,
-                choiceStamps = choices.words.mapNotNull { fingerprint(bmp, it, masks) }, ignoredRects = masks)
+                choiceStamps = choices.words.mapNotNull { fingerprint(bmp, it, masks) }, ignoredRects = masks,
+                pictureRect = content.picture, pictureStamp = content.picture?.let { fingerprint(bmp, it, masks) })
         } catch (_: Throwable) { solved }
+    }
+
+    /** Use measured question ink, not a banner that can also contain an animated badge. */
+    private fun questionRegion(q: Question, pixels: IntArray, w: Int, h: Int): PxRect? {
+        val lines = q.questionTextRects.ifEmpty {
+            val banner = q.bannerRect ?: return null
+            val found = TextLines.findDetailed(pixels, w, h, banner, bounded = true)
+            if (found.clipped) return null
+            found.lines
+        }
+        if (lines.isEmpty()) return null
+        return PxRect(lines.minOf { it.left }, lines.minOf { it.top }, lines.maxOf { it.right }, lines.maxOf { it.bottom })
     }
 
     /** Fresh field readback finishes asynchronously; no model lock or native inference on the UI thread. */
@@ -1094,32 +1121,34 @@ class OverlayService : Service() {
         }
         if (overlayRects().any { it.left < field.right && field.left < it.right &&
                 it.top < field.bottom && field.top < it.bottom }) { complete(false); return }
-        grabFrame()
-        val frame = lastFrame
-        val current = frame?.let { fingerprint(it, field, solved.ignoredRects) }
-        if (frame == null || current == null || !NumericEntryCheck.fieldChanged(initial, current)) {
-            complete(false)
-            return
-        }
-        val snapshot = try { frame.copy(Bitmap.Config.ARGB_8888, false) } catch (_: Throwable) { null }
-        if (snapshot == null) { complete(false); return }
         scope.launch {
-            val matches = withContext(Dispatchers.IO) {
-                try {
-                    val layout = solved.numericLayout
-                    if (layout != null) {
-                        val pixels = IntArray(snapshot.width * snapshot.height)
-                        snapshot.getPixels(pixels, 0, snapshot.width, 0, 0, snapshot.width, snapshot.height)
-                        if (!GameVisualLayout.inputHasText(pixels, snapshot.width, snapshot.height, layout, field)) {
-                            return@withContext false
+            // Accessibility's UP may precede the game's next rendered frame. Read again, never retype.
+            repeat(3) { attempt ->
+                if (destroyed || epoch != touchEpoch) { complete(false); return@launch }
+                if (attempt > 0) delay(120)
+                grabFrame()
+                val frame = lastFrame
+                val current = frame?.let { fingerprint(it, field, solved.ignoredRects) }
+                if (frame != null && current != null && NumericEntryCheck.fieldChanged(initial, current)) {
+                    val snapshot = try { Bitmap.createBitmap(frame, field.left, field.top, field.width, field.height)
+                        .takeUnless { it === frame } }
+                        catch (_: Throwable) { null }
+                    if (snapshot != null) {
+                        val localField = PxRect(0, 0, snapshot.width, snapshot.height)
+                        val matches = withContext(Dispatchers.IO) {
+                            try {
+                                val ink = if (solved.numericLayout?.kind == GameVisualLayout.Kind.NUMERIC_DARK)
+                                    NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.AUTO
+                                val read = synchronized(ocrLock) { ocr?.readField(snapshot, localField, ink) }
+                                read != null && NumericEntryCheck.matches(expected, read.text, read.confidence, changed = true)
+                            } catch (_: Throwable) { false }
+                            finally { if (snapshot !== frame) snapshot.recycle() }
                         }
+                        if (matches) { complete(!destroyed && epoch == touchEpoch); return@launch }
                     }
-                    val read = synchronized(ocrLock) { ocr?.readField(snapshot, field) }
-                    read != null && NumericEntryCheck.matches(expected, read.text, read.confidence, changed = true)
-                } catch (_: Throwable) { false }
-                finally { snapshot.recycle() }
+                }
             }
-            complete(matches && !destroyed && epoch == touchEpoch)
+            complete(false)
         }
     }
 
@@ -1157,6 +1186,8 @@ class OverlayService : Service() {
         val window = VolumeKeyService.contextVersion()
         var nextTap = 0
         var entryRejected = false
+        var cancelReason = "توقف الإدخال؛ تحقق من الشاشة"
+        fun blocked(reason: String): Boolean { cancelReason = reason; return false }
         var entryBaseline = solved.fieldStamp
         val resetCount = when {
             solved.numericLayout?.clear != null -> 1
@@ -1167,30 +1198,31 @@ class OverlayService : Service() {
             if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
                 window != VolumeKeyService.contextVersion() ||
                 w != screenW || h != screenH || preview != null || projection == null
-            ) return false
+            ) return blocked("تغيّر التطبيق أو وضع الشاشة؛ أُلغي اللمس")
             return try {
                 grabFrame()
-                val frame = lastFrame ?: return false
+                val frame = lastFrame ?: return blocked("لم تصل لقطة شاشة جديدة؛ لم أضغط")
                 val ignored = solved.ignoredRects + overlayRects().map { PxRect(it.left, it.top, it.right, it.bottom) }
                 if (frame.width != w || frame.height != h ||
                     fingerprint(frame, region, ignored)?.let { TouchFrameGuard.matches(stamp, it) } != true
-                ) return false
+                ) return blocked("تغيّر نص السؤال أو لم تستقر لقطته؛ لم أضغط")
                 val picture = solved.pictureRect
                 if (picture != null && (solved.pictureStamp == null ||
                     fingerprint(frame, picture, ignored)?.let { TouchFrameGuard.matches(solved.pictureStamp, it) } != true
-                )) return false
+                )) return blocked("تغيّرت الصورة أو حُجب جزء منها؛ لم أضغط")
                 val obstruction = viewRect(bubble)
                 if (obstruction != null && boxes.any { r ->
                     r.left < obstruction.right && r.right > obstruction.left &&
                         r.top < obstruction.bottom && r.bottom > obstruction.top
-                }) return false
+                }) return blocked("الفقاعة تغطّي زر الإجابة؛ أبعدها ثم أعد الطلب")
                 val numeric = solved.numericLayout
                 if (numeric != null || solved.choiceButtons.isNotEmpty()) {
                     val pixels = IntArray(w * h)
                     frame.getPixels(pixels, 0, w, 0, 0, w, h)
                     if (numeric != null &&
-                        !GameVisualLayout.stillVisible(pixels, w, h, numeric, boxes.getOrNull(nextTap - 1))
-                    ) return false
+                        (!GameVisualLayout.stillVisible(pixels, w, h, numeric, boxes.getOrNull(nextTap - 1)) ||
+                            numeric.submit != null && !GameVisualLayout.hasSubmitControl(pixels, w, h, numeric))
+                    ) return blocked("لوحة الأرقام أو زر التأكيد لم يعد ظاهرًا؛ أوقفت الإدخال")
                     // Compare typing with the cleared field, not with an old identical answer.
                     if (numeric != null && nextTap == resetCount && resetCount > 0) {
                         entryBaseline = solved.fieldRect?.let { fingerprint(frame, it, ignored) } ?: return false
@@ -1199,7 +1231,7 @@ class OverlayService : Service() {
                         val ready = if (solved.choiceFromLayout) ChoiceTouchGuard.isReadyFromLayout(
                             pixels, w, h, region, solved.choiceButtons, solved.choiceWords)
                         else ChoiceTouchGuard.isReady(pixels, w, h, solved.choiceButtons, solved.choiceWords)
-                        if (!ready) return false
+                        if (!ready) return blocked("أزرار الإجابة غير جاهزة للضغط؛ لم أضغط")
                     }
                     if (solved.choiceButtons.isNotEmpty() &&
                         (solved.choiceStamps.size != solved.choiceButtons.size ||
@@ -1208,10 +1240,10 @@ class OverlayService : Service() {
                                 TouchFrameGuard.matches(solved.choiceStamps[index], it)
                             } != true
                         })
-                    ) return false
+                    ) return blocked("تغيّر نص الخيارات أو حُجب؛ لم أضغط")
                 }
                 true
-            } catch (_: Throwable) { false }
+            } catch (_: Throwable) { blocked("تعذّر فحص الشاشة؛ أوقفت اللمس") }
         }
         handler.postDelayed({
             if (destroyed || epoch != touchEpoch) return@postDelayed
@@ -1231,34 +1263,39 @@ class OverlayService : Service() {
                     touchPending = false
                     return@postDelayed
                 }
-                if (!canContinue()) {
-                    touchPending = false
-                    showPanel("تغيّرت الشاشة أو الأزرار محجوبة؛ أُلغي اللمس")
-                    return@postDelayed
-                }
-                if (!touchAttempts.tryBegin(stamp, w, h)) {
-                    touchPending = false
-                    return@postDelayed
-                }
-                setBusy(true)
-                val ok = VolumeKeyService.tapAnswer(boxes, solved.submitLast, canContinue = {
-                    canContinue().also { if (it) nextTap++ }
-                }, beforeSubmit = { complete -> verifyEntry(solved.copy(fieldStamp = entryBaseline), epoch) { allowed ->
-                    entryRejected = !allowed
-                    complete(allowed)
-                } }, resetCount = resetCount) { finished ->
-                    if (destroyed || epoch != touchEpoch) return@tapAnswer
-                    touchPending = false
-                    setBusy(false)
-                    if (!finished) showPanel(if (entryRejected) "تعذّر التحقق من الرقم؛ لم يتم التأكيد"
-                        else "توقف الإدخال؛ لم تُعَد الضغطات تلقائياً. تحقق من الشاشة")
-                }
-                if (!ok) {
-                    // A refused request sent no stroke. Accepted but cancelled runs stay consumed.
-                    touchAttempts.reset()
-                    touchPending = false
-                    setBusy(false)
-                    showPanel("خدمة اللمس غير جاهزة أو مشغولة")
+                TouchPreflight { delay, action -> handler.postDelayed({ action() }, delay) }.awaitReady(
+                    isCurrent = { !destroyed && epoch == touchEpoch }, ready = ::canContinue,
+                ) preflight@{ ready ->
+                    if (destroyed || epoch != touchEpoch) return@preflight
+                    if (!ready) {
+                        touchPending = false
+                        showPanel("${solved.text}\n$cancelReason")
+                        return@preflight
+                    }
+                    if (!touchAttempts.tryBegin(stamp, w, h)) {
+                        touchPending = false
+                        return@preflight
+                    }
+                    setBusy(true)
+                    val ok = VolumeKeyService.tapAnswer(boxes, solved.submitLast, canContinue = {
+                        canContinue().also { if (it) nextTap++ }
+                    }, beforeSubmit = { complete -> verifyEntry(solved.copy(fieldStamp = entryBaseline), epoch) { allowed ->
+                        entryRejected = !allowed
+                        complete(allowed)
+                    } }, resetCount = resetCount) { finished ->
+                        if (destroyed || epoch != touchEpoch) return@tapAnswer
+                        touchPending = false
+                        setBusy(false)
+                        if (!finished) showPanel(if (entryRejected) "تعذّر التحقق من الرقم؛ لم يتم التأكيد"
+                            else cancelReason)
+                    }
+                    if (!ok) {
+                        // A refused request sent no stroke. Accepted but cancelled runs stay consumed.
+                        touchAttempts.reset()
+                        touchPending = false
+                        setBusy(false)
+                        showPanel("خدمة اللمس غير جاهزة أو مشغولة")
+                    }
                 }
             }, 100L)
         }, 80L)

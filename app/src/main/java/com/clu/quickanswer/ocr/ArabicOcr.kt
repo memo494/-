@@ -63,10 +63,10 @@ class ArabicOcr private constructor(
         reader.read(argb, width, height, masks, inspected)
 
     /** A visible numeric field, read off the main thread under the same model lock as questions. */
-    fun readField(bitmap: Bitmap, field: PxRect): RecognizedLine {
+    fun readField(bitmap: Bitmap, field: PxRect, ink: NumericFieldReader.Ink = NumericFieldReader.Ink.AUTO): RecognizedLine {
         val pixels = IntArray(bitmap.width * bitmap.height)
         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-        return NumericFieldReader(lineRecognizer).read(pixels, bitmap.width, bitmap.height, field)
+        return NumericFieldReader(lineRecognizer).read(pixels, bitmap.width, bitmap.height, field, ink)
     }
 
     override fun close() = model.close()

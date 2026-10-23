@@ -54,4 +54,5 @@ data class Question(
     val numericSubmit: PxRect? = null,
     val optionTextRects: List<PxRect> = emptyList(),
     val numericField: PxRect? = null,
+    val questionTextRects: List<PxRect> = emptyList(),
 )

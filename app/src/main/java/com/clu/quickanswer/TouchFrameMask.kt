@@ -6,6 +6,15 @@ import kotlin.math.floor
 
 /** Exclude the same overlay pixels from captured and live fingerprints, including resize bleed. */
 internal object TouchFrameMask {
+    /** Rounded bubble bounds can graze a photo frame without covering its content. */
+    fun obscuresPicture(area: PxRect, ignored: List<PxRect>): Boolean {
+        val px = maxOf(1, area.width / 50)
+        val py = maxOf(1, area.height / 50)
+        val inner = PxRect(area.left + px, area.top + py, area.right - px, area.bottom - py)
+        return ignored.any { it.left < inner.right && inner.left < it.right &&
+            it.top < inner.bottom && inner.top < it.bottom }
+    }
+
     fun apply(stamp: IntArray, area: PxRect, ignored: List<PxRect>): IntArray {
         require(stamp.size == TouchFrameGuard.WIDTH * TouchFrameGuard.HEIGHT)
         require(area.width > 0 && area.height > 0)

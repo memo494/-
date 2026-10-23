@@ -62,6 +62,7 @@ object LatinQuestionAssembler {
             // model returns real values; the gate above already rejected unavailable (0) ones.
             meanConfidence = overallMean,
             bannerRect = layout.banner,
+            questionTextRects = questionSegments.map { it.rect },
             numericField = layout.numericField,
             digitKeys = layout.digitKeys,
             numericSubmit = layout.numericSubmit,

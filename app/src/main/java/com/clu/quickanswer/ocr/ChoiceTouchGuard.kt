@@ -13,6 +13,49 @@ import kotlin.math.sqrt
 object ChoiceTouchGuard {
     private data class Surface(val light: Int, val red: Int, val green: Int, val blue: Int)
 
+    data class Content(val question: PxRect, val picture: PxRect?)
+
+    /** Stable content of the verified parchment fallback, excluding its category, HUD and timer. */
+    fun stableContent(argb: IntArray, width: Int, height: Int, buttons: List<PxRect>): Content? {
+        if (width < 320 || height < 200 || buttons.size != 4 ||
+            argb.size.toLong() < width.toLong() * height) return null
+        val left = (width * 0.33).toInt()
+        val right = (width * 0.76).toInt()
+        val bottom = (buttons.minOf { it.top } - height * 0.02).toInt().coerceIn(0, height)
+        val top = (buttons.minOf { it.top } - height * 0.24).toInt().coerceIn(0, bottom)
+        if (bottom - top < 8) return null
+        data class Row(val y: Int, val left: Int, val right: Int, val count: Int)
+        val rows = ArrayList<Row>()
+        for (y in top until bottom) {
+            var first = right; var last = left; var count = 0
+            for (x in left until right) {
+                val c = argb[y * width + x]
+                val r = c shr 16 and 255; val g = c shr 8 and 255; val b = c and 255
+                if (b - r < 20 || g - r < 15 || luma(c) !in 30..180) continue
+                first = minOf(first, x); last = maxOf(last, x); count++
+            }
+            if (count >= maxOf(3, width / 320)) rows.add(Row(y, first, last + 1, count))
+        }
+        val bands = ArrayList<MutableList<Row>>()
+        for (row in rows) {
+            if (bands.isEmpty() || row.y - bands.last().last().y > maxOf(3, height / 40)) bands.add(mutableListOf())
+            bands.last().add(row)
+        }
+        val text = bands.filter { band ->
+            band.maxOf { it.right } - band.minOf { it.left } >= width * 0.06 &&
+                band.sumOf { it.count } >= maxOf(24, width * height / 12_000) &&
+                band.last().y - band.first().y >= maxOf(4, height / 100)
+        }.flatten()
+        if (text.isEmpty()) return null
+        val pad = maxOf(2, height / 200)
+        val caption = PxRect(maxOf(left, text.minOf { it.left } - pad), maxOf(top, text.first().y - pad),
+            minOf(right, text.maxOf { it.right } + pad), minOf(bottom, text.last().y + pad + 1))
+        // Only this fallback adapter knows this photo mount; the general reader supplies its own geometry.
+        val photo = PxRect((width * 0.095).toInt(), (height * 0.365).toInt(),
+            (width * 0.313).toInt(), (height * 0.75).toInt())
+        return Content(caption, photo.takeIf { PictureRegion.isShown(argb, width, height, PictureRegion.detectArea(it)) })
+    }
+
     /** A trusted reader/template supplies all regions; no game-wide coordinates or four-choice assumption. */
     fun isReadyFromLayout(
         argb: IntArray, width: Int, height: Int, question: PxRect,
