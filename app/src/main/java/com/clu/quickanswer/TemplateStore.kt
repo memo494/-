@@ -46,6 +46,8 @@ object TemplateStore {
         return try {
             if (Prefs.builtinTemplatesVersion(app) >= BuiltinTemplates.VERSION) return false
             val json = app.assets.open(BuiltinTemplates.ASSET).use { it.readBytes().toString(Charsets.UTF_8) }
+            // The previous version's built-in templates make way for this one's (see BuiltinTemplates).
+            for (t in templates.all()) if (t.source == BuiltinTemplates.SOURCE) templates.remove(t.id)
             val r = templates.merge(json) ?: return false
             Prefs.saveBuiltinTemplatesVersion(app, BuiltinTemplates.VERSION)
             r.added > 0

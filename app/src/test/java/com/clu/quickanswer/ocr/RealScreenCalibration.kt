@@ -27,6 +27,8 @@ class RealScreenCalibration {
         val field: PxRect?,
         /** The first shot is the one the fingerprint and the signatures are taken from. */
         val shots: List<Shot>,
+        /** A shot of the same screen in its other look (greyed while others play), or null. */
+        val altLook: Shot? = null,
     )
 
     private val panel = PxRect(1030, 15, 1945, 152)
@@ -43,7 +45,9 @@ class RealScreenCalibration {
     private val patterns = listOf(
         Pattern(
             "builtin-parchment-grid", Arrangement.GRID,
-            question = PxRect(895, 478, 2045, 598), options = gridButtons, field = null,
+            // Right edge just past the longest line: the "other players are answering" note starts at 2034.
+            question = PxRect(895, 478, 2027, 598), options = gridButtons, field = null,
+            altLook = Shot("5ec78b50", listOf(bubbleLow)),
             shots = listOf(
                 Shot("6e0e9099", emptyList()),
                 Shot("d09bfafb", emptyList()),
@@ -129,6 +133,12 @@ class RealScreenCalibration {
                 signatures = regions.map { TemplateReader.signature(src.argb, w, h, it) },
                 language = null, state = TemplateState.TRUSTED, hits = 0, misses = 0, source = BuiltinTemplates.SOURCE,
                 createdAt = 0L, lastUsedAt = 0L,
+                altSignatures = p.altLook?.let { a ->
+                    val img = load(dir!!, a.file)
+                    regions.map { TemplateReader.signature(img.argb, img.width, img.height, it) }
+                },
+                // Measured on the game's own text areas: nothing outside them is part of the text.
+                bounded = true,
             )
             check(t.isValid) { "${p.id} is not valid" }
             built.add(t)

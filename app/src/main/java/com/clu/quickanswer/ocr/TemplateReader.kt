@@ -77,16 +77,22 @@ object TemplateReader {
      * same background and its frame is about as uniform. Only the border ring is compared, not
      * the text: how much text there is, and what has been typed into a field, changes all the time.
      * A screen that merely shares the layout (a dialog over the game, another mode) fails here
-     * instead of being read as if it were the game.
+     * instead of being read as if it were the game. A template with a second look
+     * ([LayoutTemplate.altSignatures]) fits when either look matches.
      */
     fun fits(t: LayoutTemplate, argb: IntArray, width: Int, height: Int): Boolean {
-        if (t.signatures.size != t.regions.size) return false
         val now = signatures(t, argb, width, height)
-        for ((stored, seen) in t.signatures.zip(now)) {
-            if (abs(stored.background - seen.background) > SIGNATURE_TOLERANCE) return false
+        return matches(t.signatures, now) || t.altSignatures?.let { matches(it, now) } == true
+    }
+
+    /** Whether the regions look as [stored] says: about the same background, about as uniform (either way). */
+    private fun matches(stored: List<RegionSignature>, now: List<RegionSignature>): Boolean {
+        if (stored.size != now.size) return false
+        for ((s, seen) in stored.zip(now)) {
+            if (abs(s.background - seen.background) > SIGNATURE_TOLERANCE) return false
             // Both ways: a region that became much MORE uniform has lost what framed it too (the wood
             // game's number field, seen on its choices screen, is plain banner where the board was).
-            if (abs(seen.uniformity - stored.uniformity) > UNIFORMITY_SLACK) return false
+            if (abs(seen.uniformity - s.uniformity) > UNIFORMITY_SLACK) return false
         }
         return true
     }
@@ -104,7 +110,7 @@ object TemplateReader {
     /** Like [layoutFor], with the reason when there is none. */
     fun layoutForDetailed(t: LayoutTemplate, argb: IntArray, width: Int, height: Int): LayoutResult {
         val question = t.question.toPx(width, height)
-        val q = TextLines.findDetailed(argb, width, height, question)
+        val q = TextLines.findDetailed(argb, width, height, question, t.bounded)
         if (q.lines.isEmpty()) return LayoutResult(null, Outcome.NO_QUESTION_TEXT)
         if (q.clipped) return LayoutResult(null, Outcome.QUESTION_CLIPPED)
         if (t.arrangement == Arrangement.NUMERIC) {
@@ -121,7 +127,7 @@ object TemplateReader {
             )
         }
         val buttons = t.options.map { it.toPx(width, height) }
-        val options = buttons.map { TextLines.findDetailed(argb, width, height, it) }
+        val options = buttons.map { TextLines.findDetailed(argb, width, height, it, t.bounded) }
         if (options.any { it.clipped }) return LayoutResult(null, Outcome.OPTION_CLIPPED)
         return LayoutResult(
             ScreenLayout(

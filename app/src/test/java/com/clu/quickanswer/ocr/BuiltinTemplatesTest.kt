@@ -31,7 +31,9 @@ class BuiltinTemplatesTest {
             assertEquals(t.id, TemplateState.TRUSTED, t.state)
             assertEquals(t.id, BuiltinTemplates.SOURCE, t.source)
             assertNull("unknown language: read Arabic, then English", t.language)
+            assertTrue("measured on the game's text areas", t.bounded)
         }
+        assertNotNull("the 2x2 screen also has its greyed look", store.get("builtin-parchment-grid")!!.altSignatures)
     }
 
     @Test fun theGamesAreToldApart() {

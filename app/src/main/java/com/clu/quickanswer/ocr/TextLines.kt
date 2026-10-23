@@ -99,8 +99,12 @@ object TextLines {
      * without ink. [Result.clipped] is true when a line is still going at the end of that range (ink
      * within [SEGMENT_GAP] line heights of its last column, or the screen's edge): the text continues
      * outside the box and a word may be missing.
+     *
+     * [bounded]: the box is known to hold all of the text (a measured template), so nothing beyond
+     * it is looked at: a keypad or a note right next to a line is not taken for more of it. Only
+     * the screen's edge still counts as clipping.
      */
-    fun findDetailed(argb: IntArray, width: Int, height: Int, box: PxRect): Result {
+    fun findDetailed(argb: IntArray, width: Int, height: Int, box: PxRect, bounded: Boolean = false): Result {
         require(width > 0 && height > 0 && argb.size >= width * height) { "bad image size" }
         val none = Result(emptyList(), false)
         val unit = max(width, height) / REFERENCE_LONG_SIDE
@@ -114,8 +118,8 @@ object TextLines {
         if (w <= 0 || h <= 0) return none
         // Columns: the box, [expand] beyond it (where a line may legitimately stick out), and [peek] more
         // (only to see whether a line continues past that: a word gap must not hide it).
-        val expand = (box.width * EXPAND_X).toInt()
-        val peek = Math.ceil(SEGMENT_GAP * h).toInt()
+        val expand = if (bounded) 0 else (box.width * EXPAND_X).toInt()
+        val peek = if (bounded) 0 else Math.ceil(SEGMENT_GAP * h).toInt()
         val ex0 = (box.left - expand).coerceIn(0, width)
         val ex1 = (box.right + expand).coerceIn(0, width)
         val ox0 = (box.left - expand - peek).coerceIn(0, width)

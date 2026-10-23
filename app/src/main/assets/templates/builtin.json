@@ -1,5 +1,5 @@
 {
- "builtin": 1,
+ "builtin": 2,
  "templates": [
   {
    "arr": "GRID",
@@ -35,7 +35,7 @@
    "q": [
     0.33001473546028137,
     0.3918032646179199,
-    0.7540560364723206,
+    0.7474188804626465,
     0.4901639223098755
    ],
    "opts": [
@@ -64,7 +64,30 @@
      0.7622950673103333
     ]
    ],
+   "sig2": [
+    [
+     194,
+     0.9866935610771179
+    ],
+    [
+     163,
+     0.9740932583808899
+    ],
+    [
+     166,
+     0.9827288389205933
+    ],
+    [
+     164,
+     0.9853194952011108
+    ],
+    [
+     166,
+     0.9818652868270874
+    ]
+   ],
    "misses": 0,
+   "bnd": true,
    "id": "builtin-parchment-grid",
    "state": "TRUSTED",
    "lang": null
@@ -132,7 +155,9 @@
      0.7237704992294312
     ]
    ],
+   "sig2": null,
    "misses": 0,
+   "bnd": true,
    "id": "builtin-parchment-grid-tie",
    "state": "TRUSTED",
    "lang": null
@@ -168,7 +193,9 @@
     0.49180328845977783
    ],
    "opts": [],
+   "sig2": null,
    "misses": 0,
+   "bnd": true,
    "id": "builtin-parchment-numeric",
    "state": "TRUSTED",
    "lang": null
@@ -204,7 +231,9 @@
     0.4508196711540222
    ],
    "opts": [],
+   "sig2": null,
    "misses": 0,
+   "bnd": true,
    "id": "builtin-parchment-numeric-tie",
    "state": "TRUSTED",
    "lang": null
@@ -240,7 +269,9 @@
     0.24590164422988892
    ],
    "opts": [],
+   "sig2": null,
    "misses": 0,
+   "bnd": true,
    "id": "builtin-wood-numeric",
    "state": "TRUSTED",
    "lang": null
