@@ -26,6 +26,11 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        /** Set by OverlayService's "bubble stopped" notification: start the bubble again on open. */
+        const val EXTRA_RESTART = "com.clu.quickanswer.RESTART"
+    }
+
     private lateinit var apiKeyInput: EditText
     private lateinit var modelSpinner: Spinner
     private lateinit var modelIdText: TextView
@@ -225,6 +230,20 @@ class MainActivity : AppCompatActivity() {
         ) {
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        if (savedInstanceState == null) handleRestart(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleRestart(intent)
+    }
+
+    /** Opened from the "bubble stopped" notification: ask for the screen capture again right away. */
+    private fun handleRestart(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_RESTART, false) != true) return
+        intent.removeExtra(EXTRA_RESTART)
+        onStartClicked()
     }
 
     // A refresh may finish while this screen is showing, or after it was recreated by a rotation.
