@@ -1,6 +1,8 @@
 package com.clu.quickanswer
 
 import android.graphics.Bitmap
+import com.clu.quickanswer.ocr.LayoutPrompt
+import com.clu.quickanswer.ocr.SentGeometry
 
 /** What one provider call produced, see [Answerer.answerText]. */
 class Reply(val text: String, val kind: Kind) {
@@ -29,6 +31,13 @@ class Reply(val text: String, val kind: Kind) {
     }
 }
 
+/**
+ * A model's reply to [LayoutPrompt.TEXT] (see [Answerer.layout]). [text] is the raw reply, not parsed
+ * yet. [geometry] says where the image the model saw came from in the capture (which rows were kept,
+ * see [ScreenImage.Prepared.geometry]), which is what maps the boxes in [text] back to the capture.
+ */
+class LayoutAnswer(val text: String, val geometry: SentGeometry)
+
 interface Answerer {
     /**
      * Asks about the whole screenshot. [Reply.text] is the short answer, or a short Arabic error
@@ -41,6 +50,18 @@ interface Answerer {
      * sent. Same models, quota handling and fallbacks as [answer]. Never throws.
      */
     fun answerText(prompt: String): Reply
+
+    /**
+     * Asks for the screen's layout: the screenshot together with [LayoutPrompt.TEXT], so a template
+     * can be learned from the reply. Background work only: ONE request to the user's own model, with
+     * no fallbacks, no retries and no fan-out, so it never competes with the answers for quota or
+     * time. It must not change [lastSent] or [lastModel].
+     *
+     * Null on any failure: a black screen, a model the quota tracker knows is out of quota, no
+     * network, a non-2xx status, or an empty reply. Never throws. Blocks, so call it off the main
+     * thread. Default: not supported (null).
+     */
+    fun layout(bitmap: Bitmap): LayoutAnswer? = null
 
     /** The image last sent (after cropping/scaling), so the user can check it. */
     val lastSent: Bitmap?
