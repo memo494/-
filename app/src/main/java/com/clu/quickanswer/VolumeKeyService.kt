@@ -54,10 +54,11 @@ class VolumeKeyService : AccessibilityService() {
     private fun tapSequence(
         boxes: List<PxRect>, submitLast: Boolean, canContinue: () -> Boolean,
         beforeSubmit: ((Boolean) -> Unit) -> Unit,
+        resetCount: Int,
         result: (Boolean) -> Unit,
     ): Boolean {
         if (Looper.myLooper() != Looper.getMainLooper() || active !== this) return false
-        return taps.start(boxes, submitLast, canContinue, beforeSubmit, result)
+        return taps.start(boxes, submitLast, canContinue, beforeSubmit, resetCount, result)
     }
 
     private fun cancelSequence() {
@@ -104,8 +105,9 @@ class VolumeKeyService : AccessibilityService() {
             submitLast: Boolean = false,
             canContinue: () -> Boolean = { true },
             beforeSubmit: ((Boolean) -> Unit) -> Unit = { complete -> complete(true) },
+            resetCount: Int = 0,
             result: (Boolean) -> Unit,
-        ): Boolean = active?.tapSequence(boxes, submitLast, canContinue, beforeSubmit, result) ?: false
+        ): Boolean = active?.tapSequence(boxes, submitLast, canContinue, beforeSubmit, resetCount, result) ?: false
 
         fun cancelAnswer() { active?.cancelSequence() }
 

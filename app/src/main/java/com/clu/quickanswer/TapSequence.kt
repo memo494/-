@@ -20,6 +20,8 @@ internal class TapSequence(
         const val RELEASE_GAP_MS = 40L
         // Let the game apply the final digit before its confirmation action is pressed.
         const val SUBMIT_GAP_MS = 120L
+        // Give the reset a render interval before the first digit and its field baseline capture.
+        const val RESET_GAP_MS = 120L
         // A lost platform callback must not leave auto mode permanently busy or replay a digit.
         const val CALLBACK_TIMEOUT_MS = 750L
         const val VERIFICATION_TIMEOUT_MS = 2_000L
@@ -36,6 +38,7 @@ internal class TapSequence(
         val canContinue: () -> Boolean,
         val result: (Boolean) -> Unit,
         val beforeSubmit: ((Boolean) -> Unit) -> Unit,
+        val resetCount: Int,
     ) {
         var index = 0
         var verified = false
@@ -48,12 +51,14 @@ internal class TapSequence(
         submitLast: Boolean = false,
         canContinue: () -> Boolean = { true },
         beforeSubmit: ((Boolean) -> Unit) -> Unit = { complete -> complete(true) },
+        resetCount: Int = 0,
         result: (Boolean) -> Unit,
     ): Boolean {
         if (active != null || boxes.size !in 1..MAX_TAPS ||
-            (submitLast && boxes.size < 2) || boxes.any { !valid(it) }
+            (submitLast && boxes.size < 2) || boxes.any { !valid(it) } ||
+            resetCount !in 0..4 || resetCount >= boxes.size - (if (submitLast) 1 else 0)
         ) return false
-        val run = Run(boxes.toList(), submitLast, canContinue, result, beforeSubmit)
+        val run = Run(boxes.toList(), submitLast, canContinue, result, beforeSubmit, resetCount)
         active = run
         tap(run)
         return true
@@ -101,6 +106,8 @@ internal class TapSequence(
                 } else {
                     val delay = if (run.submitLast && run.index == run.boxes.lastIndex) {
                         SUBMIT_GAP_MS
+                    } else if (run.index == run.resetCount) {
+                        RESET_GAP_MS
                     } else RELEASE_GAP_MS
                     later(run, delay) { tap(run) }
                 }

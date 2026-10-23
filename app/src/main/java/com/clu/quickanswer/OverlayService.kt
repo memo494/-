@@ -1157,6 +1157,12 @@ class OverlayService : Service() {
         val window = VolumeKeyService.contextVersion()
         var nextTap = 0
         var entryRejected = false
+        var entryBaseline = solved.fieldStamp
+        val resetCount = when {
+            solved.numericLayout?.clear != null -> 1
+            solved.numericLayout?.backspace != null -> TouchPlanner.MAX_DIGITS
+            else -> 0
+        }
         fun canContinue(): Boolean {
             if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
                 window != VolumeKeyService.contextVersion() ||
@@ -1185,6 +1191,10 @@ class OverlayService : Service() {
                     if (numeric != null &&
                         !GameVisualLayout.stillVisible(pixels, w, h, numeric, boxes.getOrNull(nextTap - 1))
                     ) return false
+                    // Compare typing with the cleared field, not with an old identical answer.
+                    if (numeric != null && nextTap == resetCount && resetCount > 0) {
+                        entryBaseline = solved.fieldRect?.let { fingerprint(frame, it, ignored) } ?: return false
+                    }
                     if (solved.choiceButtons.isNotEmpty()) {
                         val ready = if (solved.choiceFromLayout) ChoiceTouchGuard.isReadyFromLayout(
                             pixels, w, h, region, solved.choiceButtons, solved.choiceWords)
@@ -1233,10 +1243,10 @@ class OverlayService : Service() {
                 setBusy(true)
                 val ok = VolumeKeyService.tapAnswer(boxes, solved.submitLast, canContinue = {
                     canContinue().also { if (it) nextTap++ }
-                }, beforeSubmit = { complete -> verifyEntry(solved, epoch) { allowed ->
+                }, beforeSubmit = { complete -> verifyEntry(solved.copy(fieldStamp = entryBaseline), epoch) { allowed ->
                     entryRejected = !allowed
                     complete(allowed)
-                } }) { finished ->
+                } }, resetCount = resetCount) { finished ->
                     if (destroyed || epoch != touchEpoch) return@tapAnswer
                     touchPending = false
                     setBusy(false)
