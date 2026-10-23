@@ -22,7 +22,12 @@ class LightNumericReadbackTest {
             fc.getConstructor(String::class.java, Int::class.java, Int::class.java).newInstance("Serif", 1, 38))
         color(0)
         val draw = gc.getMethod("drawString", String::class.java, Int::class.java, Int::class.java)
-        number.forEachIndexed { i, c -> draw.invoke(g, c.toString(), 245 - (number.length - i - 1) * 24, 60) }
+        // Logical Serif has different glyph widths on different JDKs. Keep the complete test text
+        // inside the field on every runner; clipping is exercised separately below.
+        val metrics = gc.getMethod("getFontMetrics").invoke(g)
+        val textWidth = Class.forName("java.awt.FontMetrics").getMethod("stringWidth", String::class.java)
+            .invoke(metrics, number) as Int
+        draw.invoke(g, number, field.right - 12 - textWidth, 60)
         gc.getMethod("dispose").invoke(g)
         val glyph = ic.getMethod("getRGB", Int::class.java, Int::class.java, Int::class.java, Int::class.java,
             IntArray::class.java, Int::class.java, Int::class.java).invoke(image, 0, 0, w, h, null, 0, w) as IntArray
@@ -43,7 +48,8 @@ class LightNumericReadbackTest {
         val reader = NumericFieldReader(OcrFixtures.recognizer)
         for (number in listOf("4", "71", "1355", "0011", "0000", "1950")) {
             val p = image(number)
-            assertEquals(NumericFieldInk.State.FILLED, NumericFieldInk.inspect(p, w, h, field, NumericFieldReader.Ink.LIGHT).state)
+            assertEquals("visible $number", NumericFieldInk.State.FILLED,
+                NumericFieldInk.inspect(p, w, h, field, NumericFieldReader.Ink.LIGHT).state)
             val read = reader.read(p, w, h, field, NumericFieldReader.Ink.LIGHT)
             println("[light field] expected=$number observed=${read.text} confidence=${read.confidence}")
             assertEquals(number, read.text)
