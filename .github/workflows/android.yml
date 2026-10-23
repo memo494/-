@@ -38,7 +38,7 @@ jobs:
       # first: a failing test stops the build before a broken APK is published.
       - name: Unit tests
         run: ./gradlew testDebugUnitTest
-      # The shared APK is the release build: R8-shrunk, compressed native libraries, same key.
+      # The shared APK is the release build: compressed native libraries, same key, not shrunk.
       - name: Build APK
         run: ./gradlew assembleRelease
       - name: Rename APK

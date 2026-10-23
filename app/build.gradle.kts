@@ -16,10 +16,10 @@ android {
         applicationId = "com.clu.quickanswer"
         minSdk = 26
         targetSdk = 35
-        // Must grow with every CI build or Android refuses to install it as an update. The 1000 keeps
-        // builds of this repository above every build of the old repository (whose runs counted from 1),
-        // so the first build here still installs over an older install signed with the same key.
-        versionCode = 1000 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
+        // Must grow with every CI build or Android refuses to install it as an update. The 1100 keeps
+        // CI builds above every earlier build: the old repository's runs (from 1), this repository's
+        // first runs (1000 + run) and the hand-built 1.0.1050 / 1.0.1051 shared with the owner.
+        versionCode = 1100 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
         versionName = "1.0.$versionCode"
         // The OCR model runs on onnxruntime-android; only 64-bit ARM phones are supported, which
         // keeps the APK free of the other three ABIs' native libraries.
@@ -53,11 +53,13 @@ android {
                 versionNameSuffix = "-beta"
             }
         }
-        // The build that is shared as Clu.apk: shrunk by R8 (the libraries' unused code goes) and
-        // signed like the debug build (the fixed key when there is one), so it installs over it.
+        // The build that is shared as Clu.apk, signed like the debug build (the fixed key when there
+        // is one) so it installs over it. Not shrunk: the owner wants the whole app, and R8 could
+        // break something only a phone would show. Turn both on (rules in proguard-rules.pro) to
+        // get the 27.7 MB build instead of about 34 MB.
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = if (cluKeystore != null) signingConfigs.getByName("clu") else signingConfigs.getByName("debug")
         }
