@@ -20,7 +20,23 @@ object QuestionPrompt {
         "If this text is not a real quiz question (it comes from a dialog, menu, chat, settings or " +
             "other screen), reply exactly: $NONE\n"
 
-    fun build(q: Question): String {
+    /** What tells the model the attached image is part of the question, see [buildPicture]. */
+    private const val PICTURE_NOTE =
+        "A picture is attached: it is the picture this question shows, and the answer depends on it.\n"
+
+    /** The prompt for a question read as text only: no image goes with it. */
+    fun build(q: Question): String = compose(q, withPicture = false)
+
+    /**
+     * The prompt for a question that shows a picture, sent together with that picture (see
+     * [Answerer.answerPicture]): [build] plus one line saying the attached image is the picture the
+     * question shows and that the answer depends on it. Without it the model may take the image for
+     * decoration, and "ما هو اسم الشخصية الخيالية الاتية ؟" has no word that points at a picture. The
+     * answer format and the [NONE] escape are the same, so the same parser reads the reply.
+     */
+    fun buildPicture(q: Question): String = compose(q, withPicture = true)
+
+    private fun compose(q: Question, withPicture: Boolean): String {
         val sb = StringBuilder()
         if (q.numeric) {
             sb.append(
@@ -34,6 +50,7 @@ object QuestionPrompt {
                     "option (for example: 2). No option text, no explanation.\n"
             )
         }
+        if (withPicture) sb.append(PICTURE_NOTE)
         sb.append(NOT_A_QUESTION)
         sb.append("The text was read from a screenshot by OCR and may contain small spelling mistakes.\n\n")
         sb.append("Question: ").append(q.questionText).append('\n')

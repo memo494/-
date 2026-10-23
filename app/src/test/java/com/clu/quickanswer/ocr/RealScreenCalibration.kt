@@ -29,6 +29,11 @@ class RealScreenCalibration {
         val shots: List<Shot>,
         /** A shot of the same screen in its other look (greyed while others play), or null. */
         val altLook: Shot? = null,
+        /**
+         * Where the game pins the picture of a question that has one, or null. The photo itself, not the
+         * area around it: [PictureRegion.detectArea] looks at its right half.
+         */
+        val picture: PxRect? = null,
     )
 
     private val panel = PxRect(1030, 15, 1945, 152)
@@ -48,6 +53,8 @@ class RealScreenCalibration {
             // Right edge just past the longest line: the "other players are answering" note starts at 2034.
             question = PxRect(895, 478, 2027, 598), options = gridButtons, field = null,
             altLook = Shot("5ec78b50", listOf(bubbleLow)),
+            // The pinned photo, at the left of the question and the buttons (which start at x = 895).
+            picture = PxRect(258, 445, 848, 915),
             shots = listOf(
                 Shot("6e0e9099", emptyList()),
                 Shot("d09bfafb", emptyList()),
@@ -139,6 +146,7 @@ class RealScreenCalibration {
                 },
                 // Measured on the game's own text areas: nothing outside them is part of the text.
                 bounded = true,
+                picture = p.picture?.let { rel(it, w, h) },
             )
             check(t.isValid) { "${p.id} is not valid" }
             built.add(t)
@@ -161,7 +169,15 @@ class RealScreenCalibration {
                     if (q.question == null) println("      (no masks: ${bare.question?.let { "Q='${it.questionText}' O=${it.options}" } ?: bare.failure})")
                     read = q.question?.let { "Q='${it.questionText}' O=${it.options} num=${it.numeric} conf=${"%.2f".format(it.meanConfidence)}" } ?: "declined: ${q.failure}"
                 }
-                println("$name ~ ${t.id}: dist=${"%.2f".format(d)} fits=$fits layout=${lr.outcome} sigs=$sigs $read")
+                // A picture is pinned when its detection area (the right half of the photo's rect) is not plain.
+                val pic = t.picture?.let { r ->
+                    val area = PictureRegion.detectArea(r.toPx(img.width, img.height))
+                    val std = PictureRegion.lumaStd(img.argb, img.width, img.height, area)
+                    val shown = PictureRegion.isShown(img.argb, img.width, img.height, area)
+                    " pic=$shown std=${"%.1f".format(std)}" +
+                        if (shown) " hash=${PictureRegion.hash(img.argb, img.width, img.height, r.toPx(img.width, img.height))}" else ""
+                } ?: ""
+                println("$name ~ ${t.id}: dist=${"%.2f".format(d)} fits=$fits layout=${lr.outcome} sigs=$sigs$pic $read")
             }
         }
         // Greyed (waiting) screens read with a template whose signatures come from them.

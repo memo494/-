@@ -40,7 +40,9 @@ import com.clu.quickanswer.ocr.ArabicOcr
 import com.clu.quickanswer.ocr.ColorLayout
 import com.clu.quickanswer.ocr.LatinOcr
 import com.clu.quickanswer.ocr.LayoutReplyParser
+import com.clu.quickanswer.ocr.LayoutTemplate
 import com.clu.quickanswer.ocr.LearningGate
+import com.clu.quickanswer.ocr.PictureRegion
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
 import com.clu.quickanswer.ocr.ScreenFingerprint
@@ -215,6 +217,7 @@ class OverlayService : Service() {
         warmUp()
         AnswerStore.init(this)
         TemplateStore.init(this)
+        StatsStore.init(this)
         loadOcr()
         loadLatinOcr()
 
@@ -901,6 +904,8 @@ class OverlayService : Service() {
         val bypass = if (!fromAuto && SystemClock.uptimeMillis() - lastHitAt < CORRECTION_WINDOW_MS) lastHitKey else null
         val capturedW = bmp.width
         val capturedH = bmp.height
+        // Monotonic, so a clock change cannot give a negative time; includes reading, memory and the network.
+        val started = SystemClock.elapsedRealtime()
         val masks = captureMasks.remove(bmp).orEmpty().map { PxRect(it.left, it.top, it.right, it.bottom) }
         scope.launch {
             val solved = withContext(Dispatchers.IO) {
@@ -910,7 +915,10 @@ class OverlayService : Service() {
                         if (!(fromAuto && ScreenImage.isNoQuestion(it.text))) LastCapture.set(bmp, masks)
                     }
                 } catch (e: Exception) {
-                    Solved("خطأ: ${e.javaClass.simpleName}", null, null, null, isAnswer = false)
+                    Solved(
+                        "خطأ: ${e.javaClass.simpleName}", null, null, null,
+                        isAnswer = false, source = AnswerSource.FAILED,
+                    )
                 } finally {
                     bmp.recycle()
                 }
@@ -921,6 +929,8 @@ class OverlayService : Service() {
                 solved.learn?.let { dropLearning(it) }
                 return@launch
             }
+            // After the not-a-quiz return above: a screen auto mode skipped is not a failed question.
+            StatsStore.record(solved.source, SystemClock.elapsedRealtime() - started)
             lastHitKey = solved.memoryKey
             lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
             shownImage = solved.image ?: shownImage
@@ -942,6 +952,7 @@ class OverlayService : Service() {
      * the picture "آخر صورة" shows, and the memory entry it came from (null if not from memory).
      * [isAnswer]: the text is an answer (from memory or the model), not an error or "no question";
      * only an answer gets a haptic tick (see [Reply.isAnswer]).
+     * [source]: which step produced it, for the statistics; no default, so a new path cannot forget it.
      */
     private class Solved(
         val text: String,
@@ -949,6 +960,7 @@ class OverlayService : Service() {
         val image: Bitmap?,
         val memoryKey: String?,
         val isAnswer: Boolean,
+        val source: AnswerSource,
         /** A screen to learn the layout of once the answer is shown (see [learnLayout]), or null. */
         val learn: LearnFrame? = null,
     )
@@ -963,21 +975,30 @@ class OverlayService : Service() {
      * What the device read: [question] (null when nothing could be read), a [candidate] template's
      * reading (only to be checked against the model's answer, never used to answer), the screen's
      * [fingerprint] when templates were tried (null when [ColorLayout] took the screen), and
-     * whether some template [fits] the screen (then there is nothing new to learn).
+     * whether some template [fits] the screen (then there is nothing new to learn). [picture] is the
+     * picture the question shows, only for a question a TRUSTED template read on a screen where it
+     * pins one (see [shownPicture]); null for everything else.
      */
     private class DeviceRead(
         val question: Question?,
         val candidate: Pair<String, Question>? = null,
         val fingerprint: String? = null,
         val fits: Boolean = false,
+        val picture: ShownPicture? = null,
     )
+
+    /** The picture a question shows: where it is in the capture (pixels) and its [PictureRegion.hash]. */
+    private class ShownPicture(val rect: PxRect, val hash: String)
 
     /**
      * Answers the question on [bmp] (blocking; run off the main thread). [masks] are the places where
      * our own windows were painted black over it.
      * 1. Read it on the device. If that works: answer from memory when the question was seen before
      *    (unless it is [bypassKey], the answer being corrected), else ask the model with text only and
-     *    remember the answer. A question about a picture skips this: its words do not decide it.
+     *    remember the answer. A question about a picture skips this: its words do not decide it. When
+     *    the game's picture is shown (see [DeviceRead.picture]) the question is asked with the picture
+     *    cut out of the screen, and remembered per picture, whatever its words say (some name no picture:
+     *    "ما هو اسم الشخصية الخيالية الاتية ؟"); only when that cannot answer does the screenshot follow.
      * 2. Otherwise, or when the text answer cannot be used, send the screenshot as before. If the
      *    question was read, an image answer that names one of its options still gets the box and is
      *    remembered. A correction goes straight here: the text request would get the same reply again.
@@ -987,8 +1008,25 @@ class OverlayService : Service() {
         val memory = AnswerStore.memory
         val read = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else DeviceRead(null)
         val q = read.question
-        val wordsDecide = q != null && !QuestionPrompt.refersToPicture(q.questionText)
+        // The cheapest rung of the answer ladder: arithmetic is computed here, before the memory and the model.
+        if (q != null) Calculator.answer(q)?.let { r -> return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true, source = AnswerSource.CALCULATOR) }
+        val picture = if (q != null) read.picture else null
+        // A shown picture decides the question, whatever its words say: never the text-only request.
+        val wordsDecide = q != null && picture == null && !QuestionPrompt.refersToPicture(q.questionText)
         var corrected: AnswerMemory.Hit? = null
+        if (q != null && picture != null) {
+            val hit = memory.lookup(q.questionText, q.options, q.numeric, picture.hash)
+            if (hit != null && hit.key == bypassKey) {
+                corrected = hit
+            } else {
+                if (hit != null) {
+                    AnswerParser.resolveStored(q, hit.answer)?.let { r ->
+                        return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key, isAnswer = true, source = AnswerSource.MEMORY)
+                    }
+                }
+                askWithPicture(c, memory, q, picture, bmp)?.let { return it }
+            }
+        }
         if (q != null && wordsDecide) {
             val hit = memory.lookup(q.questionText, q.options, q.numeric)
             if (hit != null && hit.key == bypassKey) {
@@ -996,17 +1034,22 @@ class OverlayService : Service() {
             } else {
                 if (hit != null) {
                     AnswerParser.resolveStored(q, hit.answer)?.let { r ->
-                        return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key, isAnswer = true)
+                        return Solved(
+                            "⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key,
+                            isAnswer = true, source = AnswerSource.MEMORY,
+                        )
                     }
                 }
                 val reply = c.answerText(QuestionPrompt.build(q))
                 when (reply.kind) {
                     Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
                         memory.put(q.questionText, q.options, q.numeric, r.answer)
-                        return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true)
+                        return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true, source = AnswerSource.TEXT)
                     }
                     // Quota, key, region, no connection: the image request would fail the same way.
-                    Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false)
+                    Reply.Kind.ERROR -> return Solved(
+                        reply.text, null, null, null, isAnswer = false, source = AnswerSource.FAILED,
+                    )
                     Reply.Kind.EMPTY -> {}
                 }
             }
@@ -1022,13 +1065,13 @@ class OverlayService : Service() {
                 AnswerParser.resolveImageAnswer(q, text)
             }
             if (r != null) {
-                if (wordsDecide) {
+                if (wordsDecide || picture != null) {
                     // The entry that was corrected goes, but only if it was this question's own: a fuzzy hit
                     // belongs to another question, whose answer is still right for it.
                     if (corrected != null && corrected.exact) memory.remove(corrected.key)
-                    memory.put(q.questionText, q.options, q.numeric, r.answer)
+                    memory.put(q.questionText, q.options, q.numeric, r.answer, picture?.hash)
                 }
-                return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true)
+                return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true, source = AnswerSource.IMAGE)
             }
         }
         read.candidate?.let { (id, cq) ->
@@ -1040,9 +1083,60 @@ class OverlayService : Service() {
                 CandidateCheck.Verdict.UNKNOWN -> {}
             }
             // The answer came from the screenshot; the candidate only says where its button is.
-            check.resolved?.let { r -> return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true) }
+            check.resolved?.let { r ->
+                return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true, source = AnswerSource.IMAGE)
+            }
         }
-        return Solved(text, null, c.lastSent, null, imageReply.isAnswer, learnFrameFor(read, bmp, masks, c, imageReply, text))
+        val source = if (imageReply.isAnswer) AnswerSource.IMAGE else AnswerSource.FAILED
+        return Solved(
+            text, null, c.lastSent, null, imageReply.isAnswer, source,
+            learnFrameFor(read, bmp, masks, c, imageReply, text),
+        )
+    }
+
+    /**
+     * Asks the model the question of [q] together with its picture, cut out of [bmp] at [pic]. An answer
+     * that names an option (or is the number) is remembered for this picture and returned. An error
+     * (quota, key, region, no connection) is returned as the answer: the screenshot request would fail
+     * the same way. Null when the picture cannot answer (the client does not support it, the reply is
+     * empty, refused or not one of the options, the picture cannot be cut out): the screenshot decides.
+     */
+    private fun askWithPicture(c: Answerer, memory: AnswerMemory, q: Question, pic: ShownPicture, bmp: Bitmap): Solved? {
+        val crop = cropOf(bmp, pic.rect) ?: return null
+        try {
+            val reply = c.answerPicture(QuestionPrompt.buildPicture(q), crop)
+            when (reply.kind) {
+                Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
+                    memory.put(q.questionText, q.options, q.numeric, r.answer, pic.hash)
+                    // "آخر صورة" shows the picture that was sent; the crop itself is recycled below.
+                    val shown = try {
+                        crop.copy(Bitmap.Config.ARGB_8888, false)
+                    } catch (t: Throwable) {
+                        null
+                    }
+                    return Solved(r.answer, r.rect, shown, null, isAnswer = true, source = AnswerSource.PICTURE)
+                }
+                Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false, source = AnswerSource.FAILED)
+                Reply.Kind.EMPTY -> {}
+            }
+            return null
+        } finally {
+            if (crop !== bmp) crop.recycle()
+        }
+    }
+
+    /** [rect] of [bmp], clamped to it; null when nothing is left or the crop cannot be made. The caller recycles it. */
+    private fun cropOf(bmp: Bitmap, rect: PxRect): Bitmap? {
+        val left = rect.left.coerceIn(0, bmp.width)
+        val top = rect.top.coerceIn(0, bmp.height)
+        val right = rect.right.coerceIn(0, bmp.width)
+        val bottom = rect.bottom.coerceIn(0, bmp.height)
+        if (right <= left || bottom <= top) return null
+        return try {
+            Bitmap.createBitmap(bmp, left, top, right - left, bottom - top)
+        } catch (t: Throwable) {
+            null
+        }
     }
 
     /**
@@ -1202,9 +1296,21 @@ class OverlayService : Service() {
             // A candidate's reading is judged later, against the answer; only a trusted one answers.
             if (t.state != TemplateState.TRUSTED) return DeviceRead(null, t.id to q, fp, fits = true)
             templates.recordSuccess(t.id, now)
-            return DeviceRead(q, null, fp, fits = true)
+            return DeviceRead(q, null, fp, fits = true, picture = shownPicture(t, pixels, w, h))
         }
         return DeviceRead(null, null, fp, fits)
+    }
+
+    /**
+     * The picture the question on this screen shows, when [t] says where its game pins one
+     * ([LayoutTemplate.picture]) and one is pinned now ([PictureRegion.isShown] on the right half of that
+     * rect, which is plain background otherwise). Null for a template without a picture rect, which is
+     * every template but the parchment grid, and for a question without a picture.
+     */
+    private fun shownPicture(t: LayoutTemplate, pixels: IntArray, w: Int, h: Int): ShownPicture? {
+        val rect = t.picture?.toPx(w, h) ?: return null
+        if (!PictureRegion.isShown(pixels, w, h, PictureRegion.detectArea(rect))) return null
+        return ShownPicture(rect, PictureRegion.hash(pixels, w, h, rect))
     }
 
     /**

@@ -176,8 +176,14 @@ class CalibrationActivity : AppCompatActivity() {
             // On the store's own thread, after its file has loaded, so nothing is lost on a fresh start.
             TemplateStore.runAfterLoad {
                 // add() hands back the template already stored for the same layout instead of adding.
+                // Boxes the user drew by hand win over it (a candidate still learning, or a template
+                // that reads this screen badly, which is why the user is calibrating): replace it.
                 val stored = try {
-                    TemplateStore.templates.add(t)
+                    val existing = TemplateStore.templates.add(t)
+                    if (existing.id != t.id) {
+                        TemplateStore.templates.remove(existing.id)
+                        TemplateStore.templates.add(t)
+                    } else existing
                 } catch (_: Throwable) {
                     null
                 }
