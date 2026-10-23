@@ -252,7 +252,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="لمس الإجابة تلقائياً في وضع A (خيارات أو رقم من 1–4 خانات)" />
+            android:text="ضغط الإجابة عند لمس الفقاعة أو تشغيل A (خيارات أو رقم من 1–4 خانات)" />
 
         <TextView
             android:layout_width="match_parent"
@@ -266,7 +266,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="زر خفض الصوت = جواب (بدل لمس الفقاعة)" />
+            android:text="زر خفض الصوت يحلّ ويضغط الإجابة أو يكتب الرقم، دون تشغيل A" />
 
         <TextView
             android:id="@+id/volumeKeyStatus"

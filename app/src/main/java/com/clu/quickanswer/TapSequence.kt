@@ -9,16 +9,24 @@ import com.clu.quickanswer.ocr.PxRect
 internal class TapSequence(
     private val dispatch: (PxRect, Long, (Boolean) -> Unit) -> Boolean,
     private val schedule: (Long, () -> Unit) -> Unit,
+    private val pressDurationMs: Long = PRESS_MS,
 ) {
     companion object {
         // Shorter than a long press, with an explicit release interval for game input polling.
         const val PRESS_MS = 45L
+        // At 15 fps a game polls every 67ms: a 45ms DOWN can fall entirely between two frames.
+        // Accessibility game taps use 90ms while preserving the explicit UP gap between repeats.
+        const val GAME_PRESS_MS = 90L
         const val RELEASE_GAP_MS = 40L
         // Let the game apply the final digit before its confirmation action is pressed.
         const val SUBMIT_GAP_MS = 120L
         // A lost platform callback must not leave auto mode permanently busy or replay a digit.
         const val CALLBACK_TIMEOUT_MS = 750L
         const val MAX_TAPS = 9 // four backspaces, four digits, then confirmation
+    }
+
+    init {
+        require(pressDurationMs in 45L..200L) { "Tap duration must stay below long-press timing" }
     }
 
     private class Run(
@@ -81,7 +89,7 @@ internal class TapSequence(
             }
         }
         val accepted = try {
-            dispatch(run.boxes[index], PRESS_MS, completed)
+            dispatch(run.boxes[index], pressDurationMs, completed)
         } catch (_: Exception) {
             false
         }

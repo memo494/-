@@ -270,7 +270,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateVolumeKeyStatus() {
         volumeKeyStatus.text = if (VolumeKeyService.isEnabled(this)) {
-            "✓ زر الصوت مفعّل: اضغط خفض الصوت أثناء عمل الفقاعة"
+            "✓ زر الصوت مفعّل: خفض الصوت يحلّ ويضغط الإجابة أثناء عمل الفقاعة، دون تشغيل A"
         } else {
             "زر الصوت غير مفعّل بعد في إمكانية الوصول"
         }

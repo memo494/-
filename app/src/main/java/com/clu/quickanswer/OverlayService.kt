@@ -246,7 +246,7 @@ class OverlayService : Service() {
 
         setupCapture(proj)
         createBubble()
-        volumeTrigger = { answerNow() }
+        volumeTrigger = { answerNow(AnswerTrigger.VOLUME_DOWN) }
         return START_NOT_STICKY
     }
 
@@ -874,7 +874,7 @@ class OverlayService : Service() {
         updateBubbleStyle()
     }
 
-    private fun answerNow() {
+    private fun answerNow(trigger: AnswerTrigger = AnswerTrigger.BUBBLE) {
         if (busy || touchPending) return
         hiddenAnswer.clear()
         if (panelAdded || preview != null) {
@@ -884,7 +884,7 @@ class OverlayService : Service() {
             setBusy(true)
             handler.postDelayed({
                 setBusy(false)
-                answerNow()
+                answerNow(trigger)
             }, 250)
             return
         }
@@ -895,8 +895,13 @@ class OverlayService : Service() {
         }
         // In auto mode count this as the last frame sent, or the next tick would see the question as
         // "new", hide this answer and ask again.
-        sendFrame(bmp, if (autoMode) signature(bmp, ignoreRects()) else null, fromAuto = false)
+        // A new deliberate press permits a retry; continuous A scanning never replays a partial entry.
+        touchAttempts.reset()
+        sendFrame(bmp, if (autoMode) signature(bmp, ignoreRects()) else null, fromAuto = false, trigger = trigger)
     }
+
+    private fun permitsTouch(trigger: AnswerTrigger): Boolean = trigger.permitsTouch(
+        autoMode, Prefs.autoTouch(this), Prefs.volumeKey(this))
 
     /**
      * Sends [bmp] and shows the answer. A send that auto mode started on its own ([fromAuto]) shows
@@ -904,7 +909,8 @@ class OverlayService : Service() {
      * (the notification shade, another app, Clu's settings), and it must neither cover the screen
      * nor replace the picture "آخر صورة" shows. The screen still counts as sent, so it is not asked again.
      */
-    private fun sendFrame(bmp: Bitmap, sig: IntArray?, fromAuto: Boolean) {
+    private fun sendFrame(bmp: Bitmap, sig: IntArray?, fromAuto: Boolean,
+                          trigger: AnswerTrigger = AnswerTrigger.AUTOMATIC) {
         setBusy(true)
         val bypass = if (!fromAuto && SystemClock.uptimeMillis() - lastHitAt < CORRECTION_WINDOW_MS) lastHitKey else null
         val capturedW = bmp.width
@@ -912,11 +918,12 @@ class OverlayService : Service() {
         val started = SystemClock.uptimeMillis()
         val masks = captureMasks.remove(bmp).orEmpty().map { PxRect(it.left, it.top, it.right, it.bottom) }
         val capturedEpoch = touchEpoch
+        val touchRequested = permitsTouch(trigger)
         scope.launch {
             val solved = withContext(Dispatchers.IO) {
                 try {
-                    solve(bmp, masks, bypass)
-                } catch (e: Exception) {
+                    solve(bmp, masks, bypass, touchRequested)
+                } catch (e: Throwable) {
                     Solved("خطأ: ${e.javaClass.simpleName}", null, null, null, isAnswer = false)
                 } finally {
                     bmp.recycle()
@@ -933,23 +940,26 @@ class OverlayService : Service() {
             val via = if (solved.memoryKey != null) "" else {
                 client?.lastModel?.removePrefix("gemini-")?.removePrefix("claude-")?.let { " · $it" } ?: ""
             }
-            showPanel(if (solved.isAnswer) "${solved.text}   ($secs ث$via)" else solved.text)
+            val noTarget = touchRequested && solved.isAnswer && solved.touches == null &&
+                !ScreenImage.isNoQuestion(solved.text)
+            val status = if (noTarget) "\nتعذّر تحديد أزرار واضحة؛ لم يتم الضغط" else ""
+            showPanel(if (solved.isAnswer) "${solved.text}   ($secs ث$via)$status" else solved.text)
             if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
             // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
             val rect = solved.rect
             if (rect != null && capturedW == screenW && capturedH == screenH && Prefs.highlightAnswer(this@OverlayService)) {
                 showHighlight(rect)
             }
-            if (fromAuto && autoMode && Prefs.autoTouch(this@OverlayService) &&
+            if (touchRequested && permitsTouch(trigger) &&
                 solved.touches != null && capturedEpoch == touchEpoch &&
                 capturedW == screenW && capturedH == screenH
-            ) performAnswerTouches(solved, capturedW, capturedH)
+            ) performAnswerTouches(solved, capturedW, capturedH, trigger)
         }
     }
 
 
     /** Preserve every question line, including its final word; input fields are outside [area]. */
-    private fun fingerprint(bitmap: Bitmap, area: PxRect): IntArray? {
+    private fun fingerprint(bitmap: Bitmap, area: PxRect, ignored: List<PxRect> = emptyList()): IntArray? {
         val left = area.left.coerceIn(0, bitmap.width)
         val top = area.top.coerceIn(0, bitmap.height)
         val right = area.right.coerceIn(0, bitmap.width)
@@ -957,17 +967,18 @@ class OverlayService : Service() {
         if (right <= left || bottom <= top) return null
         val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
         val small = Bitmap.createScaledBitmap(crop, TouchFrameGuard.WIDTH, TouchFrameGuard.HEIGHT, true)
-        if (crop !== small) crop.recycle()
+        if (crop !== small && crop !== bitmap) crop.recycle()
         val pixels = IntArray(TouchFrameGuard.WIDTH * TouchFrameGuard.HEIGHT)
         small.getPixels(pixels, 0, TouchFrameGuard.WIDTH, 0, 0, TouchFrameGuard.WIDTH, TouchFrameGuard.HEIGHT)
-        small.recycle()
-        return IntArray(pixels.size) { i ->
+        if (small !== bitmap) small.recycle()
+        val stamp = IntArray(pixels.size) { i ->
             val c = pixels[i]
             (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000
         }
+        return TouchFrameMask.apply(stamp, PxRect(left, top, right, bottom), ignored)
     }
 
-    private fun performAnswerTouches(solved: Solved, w: Int, h: Int) {
+    private fun performAnswerTouches(solved: Solved, w: Int, h: Int, trigger: AnswerTrigger) {
         val boxes = solved.touches ?: return
         val stamp = solved.guardStamp ?: return
         val region = solved.guardRect ?: return
@@ -980,14 +991,15 @@ class OverlayService : Service() {
         val epoch = touchEpoch
         var nextTap = 0
         fun canContinue(): Boolean {
-            if (destroyed || epoch != touchEpoch || !autoMode || !Prefs.autoTouch(this) ||
+            if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
                 w != screenW || h != screenH || preview != null || projection == null
             ) return false
             return try {
                 grabFrame()
                 val frame = lastFrame ?: return false
+                val ignored = solved.ignoredRects + overlayRects().map { PxRect(it.left, it.top, it.right, it.bottom) }
                 if (frame.width != w || frame.height != h ||
-                    fingerprint(frame, region)?.let { TouchFrameGuard.matches(stamp, it) } != true
+                    fingerprint(frame, region, ignored)?.let { TouchFrameGuard.matches(stamp, it) } != true
                 ) return false
                 val obstruction = viewRect(bubble)
                 if (obstruction != null && boxes.any { r ->
@@ -1005,8 +1017,8 @@ class OverlayService : Service() {
                         !ChoiceTouchGuard.isReady(pixels, w, h, solved.choiceButtons, solved.choiceWords)
                     ) return false
                     if (solved.choiceButtons.isNotEmpty() &&
-                        (solved.choiceStamps.size != 4 || solved.choiceButtons.indices.any { index ->
-                            fingerprint(frame, solved.choiceButtons[index])?.let {
+                        (solved.choiceStamps.size != 4 || solved.choiceWords.size != 4 || solved.choiceWords.indices.any { index ->
+                            fingerprint(frame, solved.choiceWords[index], ignored)?.let {
                                 TouchFrameGuard.matches(solved.choiceStamps[index], it)
                             } != true
                         })
@@ -1017,7 +1029,7 @@ class OverlayService : Service() {
         }
         handler.postDelayed({
             if (destroyed || epoch != touchEpoch) return@postDelayed
-            if (!autoMode || !Prefs.autoTouch(this) ||
+            if (!permitsTouch(trigger) ||
                 w != screenW || h != screenH || preview != null
             ) {
                 touchPending = false
@@ -1027,7 +1039,7 @@ class OverlayService : Service() {
             hideHighlight()
             handler.postDelayed({
                 if (destroyed || epoch != touchEpoch) return@postDelayed
-                if (!autoMode || !Prefs.autoTouch(this) ||
+                if (!permitsTouch(trigger) ||
                     w != screenW || h != screenH
                 ) {
                     touchPending = false
@@ -1082,6 +1094,7 @@ class OverlayService : Service() {
         val choiceButtons: List<PxRect> = emptyList(),
         val choiceWords: List<PxRect> = emptyList(),
         val choiceStamps: List<IntArray> = emptyList(),
+        val ignoredRects: List<PxRect> = emptyList(),
     )
 
     /**
@@ -1094,7 +1107,7 @@ class OverlayService : Service() {
      *    question was read, an image answer that names one of its options still gets the box and is
      *    remembered. A correction goes straight here: the text request would get the same reply again.
      */
-    private fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?): Solved {
+    private fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?, allowTouches: Boolean): Solved {
         val c = currentClient()
         val memory = AnswerStore.memory
         val q = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else null
@@ -1108,6 +1121,7 @@ class OverlayService : Service() {
                 read.optionTextRects.takeIf { it.size == 4 } ?: read.optionRects
             }.orEmpty()
             val touches = q?.let { read ->
+                if (!allowTouches) return@let null
                 if (read.numeric && keypad == null) return@let null
                 if (!read.numeric && read.bannerRect == null) return@let null
                 if (!read.numeric &&
@@ -1135,13 +1149,14 @@ class OverlayService : Service() {
                 if (memory) "⚡ ${r.answer}" else r.answer,
                 r.rect, image, key, isAnswer = true,
                 touches = touches, guardRect = region,
-                guardStamp = region?.let { fingerprint(bmp, it) },
+                guardStamp = region?.let { fingerprint(bmp, it, masks) },
                 numericLayout = keypad, submitLast = keypad?.submit != null,
                 choiceButtons = if (touches != null && q?.numeric == false) q.optionRects else emptyList(),
                 choiceWords = optionWords,
                 choiceStamps = if (touches != null && q?.numeric == false) {
-                    q.optionRects.mapNotNull { fingerprint(bmp, it) }
+                    optionWords.mapNotNull { fingerprint(bmp, it, masks) }
                 } else emptyList(),
+                ignoredRects = masks,
             )
         }
         var corrected: AnswerMemory.Hit? = null
@@ -1172,7 +1187,7 @@ class OverlayService : Service() {
         // Screen words are localized from the screenshot, not guessed from
         // option indices or normalized coordinates returned by the model.
         val detectQuizImage = q == null
-        val autoTouchRequested = detectQuizImage && autoMode && Prefs.autoTouch(this)
+        val autoTouchRequested = detectQuizImage && allowTouches
         var choiceWords: List<PxRect>? = null
         var choiceButtons: List<PxRect>? = null
         var visual: GameVisualLayout.Detected? = null
@@ -1240,7 +1255,7 @@ class OverlayService : Service() {
             imageReply.kind == Reply.Kind.ANSWER
         ) {
             val printed = synchronized(ocrLock) {
-                try { ocr?.readWords(bmp, choiceWords) } catch (_: Exception) { null }
+                try { ocr?.readWords(bmp, choiceWords) } catch (_: Throwable) { null }
             }
             val word = printed?.let { WordAnswerMatcher.match(text, it) }
             if (word != null) {
@@ -1250,9 +1265,10 @@ class OverlayService : Service() {
                     val guard = choiceGuardArea(bmp, null, choiceButtons)
                     return Solved(text, word, c.lastSent, null, isAnswer = true,
                         touches = actions, guardRect = guard,
-                        guardStamp = fingerprint(bmp, guard),
+                        guardStamp = fingerprint(bmp, guard, masks),
                         choiceButtons = choiceButtons, choiceWords = choiceWords,
-                        choiceStamps = choiceButtons.mapNotNull { fingerprint(bmp, it) })
+                        choiceStamps = choiceWords.mapNotNull { fingerprint(bmp, it, masks) },
+                        ignoredRects = masks)
                 }
             }
         }
@@ -1271,8 +1287,8 @@ class OverlayService : Service() {
                 val guard = visual.questionArea
                 return Solved(text, null, c.lastSent, null, isAnswer = true,
                     touches = actions, guardRect = guard,
-                    guardStamp = fingerprint(bmp, guard),
-                    numericLayout = visual, submitLast = visual.submit != null)
+                    guardStamp = fingerprint(bmp, guard, masks),
+                    numericLayout = visual, submitLast = visual.submit != null, ignoredRects = masks)
             }
         }
         return Solved(text, null, c.lastSent, null, imageReply.isAnswer)

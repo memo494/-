@@ -14,12 +14,13 @@ import android.view.accessibility.AccessibilityEvent
 
 /**
  * Optional accessibility service: while the Clu bubble is running, pressing VOLUME DOWN asks for an
- * answer (like tapping the bubble) and the volume does not change. When the bubble is not running,
+ * answer and enters it on the verified game controls; the volume does not change. When the bubble is not running,
  * or the setting is off, the key is left alone and works as usual. It reads no screen content.
  */
 class VolumeKeyService : AccessibilityService() {
 
     private val main = Handler(Looper.getMainLooper())
+    private lateinit var windows: ForegroundWindowGuard
     private val taps = TapSequence(
         dispatch = { rect, duration, complete ->
             val path = Path().apply { moveTo(rect.centerX, rect.centerY) }
@@ -32,11 +33,13 @@ class VolumeKeyService : AccessibilityService() {
             }, main)
         },
         schedule = { delay, action -> check(main.postDelayed({ action() }, delay)) },
+        pressDurationMs = TapSequence.GAME_PRESS_MS,
     )
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         active?.takeIf { it !== this }?.taps?.cancel()
+        windows = ForegroundWindowGuard(packageName)
         active = this
     }
 
@@ -70,14 +73,17 @@ class VolumeKeyService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Window changes can move the keypad or replace the game with another app. Our overlay's
-        // own events are harmless; no window contents or accessibility tree are read.
-        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            event.packageName?.toString() != packageName
-        ) taps.cancel()
+        // An in-game window/focus event does not imply a different target app. Per-tap pixels
+        // still verify the keypad/options; only a package change invalidates the app context here.
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            if (!::windows.isInitialized || windows.onWindow(event.packageName?.toString())) taps.cancel()
+        }
     }
 
-    override fun onInterrupt() = taps.cancel()
+    override fun onInterrupt() {
+        taps.cancel()
+        if (::windows.isInitialized) windows.reset()
+    }
 
     companion object {
         @Volatile private var active: VolumeKeyService? = null

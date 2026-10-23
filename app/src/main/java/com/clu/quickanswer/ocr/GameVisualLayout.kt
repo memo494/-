@@ -96,7 +96,9 @@ object GameVisualLayout {
         val lightX = intArrayOf(-26, 26)
         val lightY = intArrayOf(-22, 22)
         fun darkSurface(p: RGB): Boolean =
-            p.r in 112.0..178.0 && p.r - p.g in 4.0..21.0 && p.g - p.b in 3.0..21.0
+            p.light in 55.0..210.0 &&
+                max(p.r, max(p.g, p.b)) - min(p.r, min(p.g, p.b)) <= 48.0 &&
+                p.r - p.g in -8.0..26.0 && p.g - p.b in -8.0..32.0
 
         fun whiteSurface(p: RGB): Boolean =
             min(p.r, min(p.g, p.b)) > 223.0 &&
@@ -111,6 +113,25 @@ object GameVisualLayout {
             abs(y * yScale - previousTap.centerY) <= max(2f, 3 * yScale)) || xs.all { xo -> ys.all { yo ->
             matches(patch(x, y, intArrayOf(xo), intArrayOf(yo)))
         } }
+        fun wasPressed(x: Int, y: Int): Boolean = previousTap != null &&
+            abs(x * xScale - previousTap.centerX) <= max(2f, 3 * xScale) &&
+            abs(y * yScale - previousTap.centerY) <= max(2f, 3 * yScale)
+
+        fun darkKey(x: Int, y: Int): Boolean {
+            if (!surface(x, y, compactX, compactY, ::darkSurface)) return false
+            if (wasPressed(x, y)) return true
+            // Neutral gray and bevel gradients vary by frame/device. A key is
+            // identified by its separate edges as well as its four gray corners;
+            // a flat gray panel covering all template locations is insufficient.
+            val center = patch(x, y, compactX, compactY)
+            val surrounding = listOf(
+                patch(x - 35, y, intArrayOf(0), intArrayOf(-5, 5)),
+                patch(x + 35, y, intArrayOf(0), intArrayOf(-5, 5)),
+                patch(x, y - 34, intArrayOf(-5, 5), intArrayOf(0)),
+                patch(x, y + 34, intArrayOf(-5, 5), intArrayOf(0)),
+            )
+            return surrounding.count { abs(it.light - center.light) >= 18.0 } >= 2
+        }
         // Several translations can fit broad key surfaces equally well. Do
         // not bias taps towards the upper-left just because it is searched first.
         fun closer(dx: Int, dy: Int, previous: Pair<Int, Int>?): Boolean =
@@ -127,7 +148,7 @@ object GameVisualLayout {
         var darkBest = 0
         for (dy in -12..12 step 6) for (dx in -12..12 step 6) {
             val matches = darkRows.count { (x, y) ->
-                surface(x + dx, y + dy, compactX, compactY, ::darkSurface)
+                darkKey(x + dx, y + dy)
             }
             if (matches > darkBest || matches == darkBest && closer(dx, dy, darkOffset)) {
                 darkBest = matches
@@ -154,15 +175,39 @@ object GameVisualLayout {
                 val submitSamples = listOf(600 to 480, 740 to 480, 605 to 495)
                     .map { (x, y) -> patch(x + dx, y + dy,
                         intArrayOf(-5, 5), intArrayOf(-3, 3)) }
-                val visibleSubmit = submitSamples.count { color ->
+                val strongGold = submitSamples.count { color ->
                     color.r > 110 && color.g > 65 &&
                         color.r - color.g > 25 && color.g - color.b > 34
                 } >= 2
+                val paleGold = submitSamples.count { color ->
+                    color.r > 135 && color.g > 100 && color.b < 210 &&
+                        color.r - color.g in 8.0..80.0 && color.g - color.b >= 20
+                } >= 2
+                val fillLight = submitSamples.map { it.light }.average()
+                val distinctGoldFill = listOf(650 to 438, 650 to 534, 510 to 486, 835 to 486)
+                    .count { (x, y) ->
+                        abs(patch(x + dx, y + dy, intArrayOf(-2, 2), intArrayOf(-2, 2)).light - fillLight) >= 18
+                    } >= 2
+                fun rim(xs: IntArray, ys: IntArray): Boolean = xs.any { x -> ys.any { y ->
+                    val color = patch(x + dx, y + dy, intArrayOf(-2, 2), intArrayOf(-2, 2))
+                    color.light < fillLight - 20 &&
+                        max(color.r, max(color.g, color.b)) - min(color.r, min(color.g, color.b)) < 55
+                } }
+                // Empty input can disable the button with a very pale gold fill,
+                // then turn it orange after typing. Its gray rim still proves it
+                // is present; plain parchment at these positions must not count.
+                val goldRim = listOf(
+                    rim(intArrayOf(570, 650, 740), intArrayOf(444, 450, 456)),
+                    rim(intArrayOf(570, 650, 740), intArrayOf(518, 524, 530)),
+                    rim(intArrayOf(525, 531, 537), intArrayOf(470, 486, 502)),
+                    rim(intArrayOf(807, 813, 819), intArrayOf(470, 486, 502)),
+                ).count { it } >= 2
+                val visibleSubmit = strongGold && distinctGoldFill || paleGold && goldRim
                 return Detected(Kind.NUMERIC_DARK, digits = digits,
-                    submit = if (visibleSubmit) rect(650 + dx, 480 + dy, 60, 17) else null,
+                    submit = if (visibleSubmit) rect(673 + dx, 486 + dy, 60, 17) else null,
                     // End before the keypad: a highlighted 1/4/7 key is not a changed question.
                     questionArea = rect(650 + dx, 291 + dy, 235, 63),
-                    clear = if (surface(922 + dx, 504 + dy, compactX, compactY, ::darkSurface))
+                    clear = if (darkKey(922 + dx, 504 + dy))
                         rect(922 + dx, 504 + dy, 18, 16) else null)
             }
         }
