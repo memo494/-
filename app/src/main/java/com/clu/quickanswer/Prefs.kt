@@ -51,6 +51,17 @@ object Prefs {
     /** Draw a green box around the right option on screen. Read at each answer. */
     fun highlightAnswer(c: Context): Boolean = sp(c).getBoolean("highlight_answer", true)
 
+    /**
+     * Watch the game's result screen after an answer and, when it colours a different option as
+     * correct than the one remembered, fix the answer memory (see [com.clu.quickanswer.ocr.ResultReader]).
+     * Read each time an answer is shown.
+     */
+    fun learnFromResults(c: Context): Boolean = sp(c).getBoolean("learn_from_results", true)
+
+    fun saveLearnFromResults(c: Context, on: Boolean) {
+        sp(c).edit().putBoolean("learn_from_results", on).apply()
+    }
+
     /** A short haptic tick when an answer is shown (not for errors). Read each time one is shown. */
     fun vibrateOnAnswer(c: Context): Boolean = sp(c).getBoolean("vibrate_on_answer", true)
 

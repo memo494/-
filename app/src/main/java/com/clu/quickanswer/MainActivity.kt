@@ -44,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var panelPositionGroup: RadioGroup
     private lateinit var smartReadingCheck: CheckBox
     private lateinit var highlightCheck: CheckBox
+    private lateinit var learnFromResultsCheck: CheckBox
     private lateinit var vibrateCheck: CheckBox
     private lateinit var clearMemoryButton: Button
     private lateinit var templatesStatus: TextView
@@ -185,10 +186,12 @@ class MainActivity : AppCompatActivity() {
         )
         smartReadingCheck = findViewById(R.id.smartReadingCheck)
         highlightCheck = findViewById(R.id.highlightCheck)
+        learnFromResultsCheck = findViewById(R.id.learnFromResultsCheck)
         vibrateCheck = findViewById(R.id.vibrateCheck)
         clearMemoryButton = findViewById(R.id.clearMemoryButton)
         smartReadingCheck.isChecked = Prefs.smartReading(this)
         highlightCheck.isChecked = Prefs.highlightAnswer(this)
+        learnFromResultsCheck.isChecked = Prefs.learnFromResults(this)
         vibrateCheck.isChecked = Prefs.vibrateOnAnswer(this)
         AnswerStore.init(this)
         TemplateStore.init(this)
@@ -398,6 +401,7 @@ class MainActivity : AppCompatActivity() {
             else PanelPlacement.Mode.TOP
         )
         Prefs.saveReading(this, smartReadingCheck.isChecked, highlightCheck.isChecked)
+        Prefs.saveLearnFromResults(this, learnFromResultsCheck.isChecked)
         Prefs.saveVibrateOnAnswer(this, vibrateCheck.isChecked)
         Prefs.saveVolumeKey(this, volumeKeyCheck.isChecked)
     }

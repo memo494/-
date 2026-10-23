@@ -43,12 +43,15 @@ import com.clu.quickanswer.ocr.LayoutReplyParser
 import com.clu.quickanswer.ocr.LearningGate
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
+import com.clu.quickanswer.ocr.ResultConfirmer
+import com.clu.quickanswer.ocr.ResultReader
 import com.clu.quickanswer.ocr.ScreenFingerprint
 import com.clu.quickanswer.ocr.ScreenLayout
 import com.clu.quickanswer.ocr.TemplateLearner
 import com.clu.quickanswer.ocr.TemplateReader
 import com.clu.quickanswer.ocr.TemplateState
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -84,6 +87,16 @@ class OverlayService : Service() {
         private const val SIG_SIZE = 32
         private const val CHANGE_THRESHOLD = 6.0
         private const val STABLE_THRESHOLD = 2.0
+
+        // The result watch (see watchResult). None of these is measured on real captures yet: there
+        // are no screenshots of these games' result moment.
+        // How often it looks, and how long it keeps looking after the answer is shown.
+        private const val WATCH_INTERVAL_MS = 500L
+        private const val WATCH_MAX_MS = 20_000L
+        // It stops when the screen, leaving the option buttons out, differs from the question's by more
+        // than this (FrameSignature.diff). Half of CHANGE_THRESHOLD: the buttons are what differs most
+        // between two questions and are not compared, so the rest has to be held to a stricter limit.
+        private const val WATCH_SAME_SCREEN_DIFF = CHANGE_THRESHOLD / 2
         private const val LONG_PRESS_MS = 600L
         private const val PANEL_AUTO_HIDE_MS = 15_000L
         private const val PANEL_TOP_MARGIN_DP = 6
@@ -146,6 +159,8 @@ class OverlayService : Service() {
 
     private var autoMode = false
     private var autoJob: Job? = null
+    // The watch for the game's result screen after the last answer (see watchResult); one at a time.
+    private var watchJob: Job? = null
     @Volatile private var busy = false
     private var lastSentSig: IntArray? = null
     private var prevTickSig: IntArray? = null
@@ -868,6 +883,7 @@ class OverlayService : Service() {
 
     private fun answerNow() {
         if (busy) return
+        stopResultWatch()
         hiddenAnswer.clear()
         if (panelAdded || preview != null) {
             // Remove the old answer (and the sent-image preview) first so they don't hide part of the question.
@@ -898,10 +914,21 @@ class OverlayService : Service() {
      */
     private fun sendFrame(bmp: Bitmap, sig: IntArray?, fromAuto: Boolean) {
         setBusy(true)
+        // A new question: what the last one's result screen shows must not be taken for this one's.
+        stopResultWatch()
         val bypass = if (!fromAuto && SystemClock.uptimeMillis() - lastHitAt < CORRECTION_WINDOW_MS) lastHitKey else null
         val capturedW = bmp.width
         val capturedH = bmp.height
-        val masks = captureMasks.remove(bmp).orEmpty().map { PxRect(it.left, it.top, it.right, it.bottom) }
+        val maskRects = captureMasks.remove(bmp).orEmpty()
+        val masks = maskRects.map { PxRect(it.left, it.top, it.right, it.bottom) }
+        // The question screen as the watch will compare it (see startResultWatch); [bmp] is gone after solve.
+        val watchBase = if (Prefs.learnFromResults(this)) {
+            try {
+                signature(bmp, maskRects)
+            } catch (t: Throwable) {
+                null
+            }
+        } else null
         scope.launch {
             val solved = withContext(Dispatchers.IO) {
                 try {
@@ -931,6 +958,13 @@ class OverlayService : Service() {
             }
             // After the answer is on screen, never before it (decision 10).
             solved.learn?.let { startLearning(it) }
+            // The game's result screen may show another option as the right one; skip it if the screen rotated.
+            val watch = solved.watch
+            if (watch != null && watchBase != null && capturedW == screenW && capturedH == screenH &&
+                Prefs.learnFromResults(this@OverlayService)
+            ) {
+                startResultWatch(watch, watchBase)
+            }
         }
     }
 
@@ -948,7 +982,23 @@ class OverlayService : Service() {
         val isAnswer: Boolean,
         /** A screen to learn the layout of once the answer is shown (see [learnLayout]), or null. */
         val learn: LearnFrame? = null,
+        /** What to watch the game's result screen for after this answer (see [watchResult]), or null. */
+        val watch: ResultWatch? = null,
     )
+
+    /**
+     * What a result watch needs: the multiple-choice [question] as read on the device (its option
+     * texts and buttons) and the [answer], the option's text that was shown for it.
+     */
+    private class ResultWatch(val question: Question, val answer: String)
+
+    /**
+     * A result watch for [answer] to [q], or null. Only for a multiple-choice question read on the
+     * device with a button for every option: the colour the game shows has to be tied to an option
+     * on the screen, and a number or a question that was not read has none.
+     */
+    private fun watchFor(q: Question?, answer: String): ResultWatch? =
+        if (q != null && !q.numeric && q.optionRects.size == q.options.size) ResultWatch(q, answer) else null
 
     /**
      * A copy of a screen no reader or template could read, kept to ask [client] for its layout in
@@ -993,14 +1043,14 @@ class OverlayService : Service() {
             } else {
                 if (hit != null) {
                     AnswerParser.resolveStored(q, hit.answer)?.let { r ->
-                        return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key, isAnswer = true)
+                        return Solved("⚡ ${r.answer}", r.rect, shownCopy(bmp), hit.key, isAnswer = true, watch = watchFor(q, r.answer))
                     }
                 }
                 val reply = c.answerText(QuestionPrompt.build(q))
                 when (reply.kind) {
                     Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
                         memory.put(q.questionText, q.options, q.numeric, r.answer)
-                        return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true)
+                        return Solved(r.answer, r.rect, shownCopy(bmp), null, isAnswer = true, watch = watchFor(q, r.answer))
                     }
                     // Quota, key, region, no connection: the image request would fail the same way.
                     Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false)
@@ -1025,7 +1075,11 @@ class OverlayService : Service() {
                     if (corrected != null && corrected.exact) memory.remove(corrected.key)
                     memory.put(q.questionText, q.options, q.numeric, r.answer)
                 }
-                return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true)
+                // Not for a question about a picture: the memory is never read for it (words do not decide it).
+                return Solved(
+                    r.answer, r.rect, c.lastSent, null, isAnswer = true,
+                    watch = if (wordsDecide) watchFor(q, r.answer) else null
+                )
             }
         }
         read.candidate?.let { (id, cq) ->
@@ -1353,6 +1407,118 @@ class OverlayService : Service() {
         if (Prefs.highlightAnswer(this)) showHighlight(box.rect)
     }
 
+    private fun stopResultWatch() {
+        watchJob?.cancel()
+        watchJob = null
+    }
+
+    /**
+     * Starts watching the screen for the game's result of the question in [w] (replacing any watch
+     * before it). [base] is the question screen's luminance grid from before the answer, the
+     * reference for "still the same screen"; the option buttons are left out of it here, since they
+     * are exactly what the result changes.
+     */
+    private fun startResultWatch(w: ResultWatch, base: IntArray) {
+        stopResultWatch()
+        for (r in w.question.optionRects) {
+            FrameSignature.ignoreRect(base, SIG_SIZE, screenW, screenH, r.left, r.top, r.right, r.bottom)
+        }
+        watchJob = scope.launch {
+            try {
+                watchResult(w, base)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                // Learning is best effort: whatever went wrong, the answer already shown stands.
+            }
+        }
+    }
+
+    /**
+     * After an answer, quiz games colour the correct option for a moment. Every [WATCH_INTERVAL_MS],
+     * for at most [WATCH_MAX_MS], this reads the newest frame ([ResultReader.correctOption], on
+     * Dispatchers.Default) and, once the same option is green in two checks in a row
+     * ([ResultConfirmer]), makes the answer memory say what the game showed (see [learnFromResult]).
+     *
+     * It stops without learning when
+     * - the screen no longer looks like the question's: the screen, leaving the option buttons out,
+     *   moved on by more than [WATCH_SAME_SCREEN_DIFF] (a new question, another app), the screen was
+     *   rotated, or a frame cannot be read. A result screen of a game that changes more than the
+     *   buttons is then not learned from: declining is the safe side;
+     * - the options could not be judged in 3 checks in a row (covered by our own windows, see
+     *   [ResultConfirmer]).
+     * Our green box is not among the masks (it sits outside the buttons, and the reader samples only
+     * their interior); the bubble, the panel and the preview are, as the reader cannot see through them.
+     *
+     * Frames are grabbed on the main thread, as everywhere. In auto mode the tick takes the new frames
+     * and the watch only reads the one it kept: a frame taken here would be missing from the tick,
+     * which would then take the screen for unchanged and not send the next question. The kept frame
+     * is copied before the pixel work, because the next tick may recycle it.
+     */
+    private suspend fun watchResult(w: ResultWatch, base: IntArray) {
+        val q = w.question
+        val optionRects = q.optionRects.map { Rect(it.left, it.top, it.right, it.bottom) }
+        val confirmer = ResultConfirmer()
+        var pixels: IntArray? = null // one buffer for every check of this watch
+        val until = SystemClock.uptimeMillis() + WATCH_MAX_MS
+        while (SystemClock.uptimeMillis() < until) {
+            delay(WATCH_INTERVAL_MS)
+            if (!autoMode) grabFrame()
+            val frame = lastFrame ?: continue
+            if (frame.width != screenW || frame.height != screenH) return
+            val overlays = overlayRects()
+            val sig = try {
+                signature(frame, overlays + listOfNotNull(viewRect(highlight)) + optionRects)
+            } catch (t: Throwable) {
+                return
+            }
+            if (FrameSignature.diff(sig, base) > WATCH_SAME_SCREEN_DIFF) return
+            val masks = overlays.map { PxRect(it.left, it.top, it.right, it.bottom) }
+            val snapshot = try {
+                frame.copy(Bitmap.Config.ARGB_8888, false)
+            } catch (t: Throwable) {
+                null
+            } ?: return
+            val reading = try {
+                withContext(Dispatchers.Default) {
+                    try {
+                        val width = snapshot.width
+                        val height = snapshot.height
+                        val buffer = pixels?.takeIf { it.size == width * height }
+                            ?: IntArray(width * height).also { pixels = it }
+                        snapshot.getPixels(buffer, 0, width, 0, 0, width, height)
+                        val usable = ResultReader.optionsUsable(width, height, q.optionRects, masks)
+                        Pair(usable, ResultReader.correctOption(buffer, width, height, q.optionRects, masks))
+                    } catch (t: Throwable) {
+                        null
+                    }
+                }
+            } finally {
+                snapshot.recycle() // withContext has finished with it, also when this watch was cancelled
+            } ?: return
+            when (val step = confirmer.offer(reading.first, reading.second)) {
+                is ResultConfirmer.Step.Act -> {
+                    learnFromResult(w, step.index)
+                    return
+                }
+                ResultConfirmer.Step.GiveUp -> return
+                ResultConfirmer.Step.Wait -> {}
+            }
+        }
+    }
+
+    /**
+     * The game showed option [index] of the watched question as the correct one. When that is not
+     * the answer that was shown, the memory entry for the question is replaced with the game's: the
+     * game knows, the memory (or the model it came from) was wrong. When it is the same, nothing to do.
+     */
+    private fun learnFromResult(w: ResultWatch, index: Int) {
+        val q = w.question
+        val correct = q.options.getOrNull(index) ?: return
+        if (AnswerMemory.keyOf(correct) == AnswerMemory.keyOf(w.answer)) return
+        AnswerStore.memory.put(q.questionText, q.options, false, correct)
+    }
+
     private fun toggleAuto() {
         autoMode = !autoMode
         updateBubbleStyle()
@@ -1436,6 +1602,7 @@ class OverlayService : Service() {
         destroyed = true
         volumeTrigger = null
         autoJob?.cancel()
+        stopResultWatch()
         scope.cancel()
         handler.removeCallbacksAndMessages(null)
         hidePanel()

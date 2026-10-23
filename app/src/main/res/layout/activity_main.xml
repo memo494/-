@@ -213,6 +213,12 @@
             android:text="تحديد الجواب الصحيح بمربع أخضر" />
 
         <CheckBox
+            android:id="@+id/learnFromResultsCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="تعلّم من شاشة النتيجة (يصلّح الجواب الغلط بالبنك لحاله)" />
+
+        <CheckBox
             android:id="@+id/vibrateCheck"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
