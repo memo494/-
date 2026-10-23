@@ -4,12 +4,21 @@ package com.clu.quickanswer
 internal class TouchPreflight(private val schedule: (Long, () -> Unit) -> Unit) {
     fun awaitReady(isCurrent: () -> Boolean, ready: () -> Boolean, result: (Boolean) -> Unit) {
         var attempts = 0
+        var delivered = false
+        fun finish(allowed: Boolean) {
+            if (delivered) return
+            delivered = true
+            result(allowed)
+        }
         fun poll() {
+            if (delivered) return
             val current = try { isCurrent() } catch (_: Throwable) { false }
-            if (!current) { result(false); return }
+            if (!current) { finish(false); return }
             val allowed = try { ready() } catch (_: Throwable) { false }
             attempts++
-            if (allowed || attempts >= 3) result(allowed) else schedule(100L, ::poll)
+            if (allowed || attempts >= 3) finish(allowed) else {
+                try { schedule(100L, ::poll) } catch (_: Throwable) { finish(false) }
+            }
         }
         poll()
     }

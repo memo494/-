@@ -68,11 +68,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -175,8 +179,10 @@ class OverlayService : Service() {
     private var watchJob: Job? = null
     @Volatile private var busy = false
     private var touchPending = false
+    private var touchJob: Job? = null
     private var touchEpoch = 0L
     private val touchAttempts = TouchAttemptGuard()
+    private val autoRetry = AutoAnswerRetry()
     private var lastSentSig: IntArray? = null
     private var prevTickSig: IntArray? = null
     // The answer provider for the settings it was made from (clientKey); see currentClient().
@@ -922,6 +928,7 @@ class OverlayService : Service() {
         // In auto mode count this as the last frame sent, or the next tick would see the question as
         // "new", hide this answer and ask again.
         touchAttempts.reset()
+        autoRetry.reset()
         sendFrame(bmp, if (autoMode) signature(bmp, ignoreRects()) else null, fromAuto = false, trigger = trigger)
     }
 
@@ -930,6 +937,8 @@ class OverlayService : Service() {
 
     private fun cancelTouches() {
         touchEpoch++
+        touchJob?.cancel()
+        touchJob = null
         VolumeKeyService.cancelAnswer()
         if (touchPending) setBusy(false)
         touchPending = false
@@ -939,11 +948,10 @@ class OverlayService : Service() {
      * Sends [bmp] and shows the answer. A send that auto mode started on its own ([fromAuto]) shows
      * nothing when the model says there is no question: that is a screen that is not the quiz
      * (the notification shade, another app, Clu's settings), and it must neither cover the screen
-     * nor replace the picture "آخر صورة" shows. The screen still counts as sent, so it is not asked again.
+     * nor replace the picture "آخر صورة" shows. Failed readings get at most two delayed retries.
      */
     private fun sendFrame(bmp: Bitmap, sig: IntArray?, fromAuto: Boolean,
                           trigger: AnswerTrigger = AnswerTrigger.AUTOMATIC) {
-        setBusy(true)
         // A new question: what the last one's result screen shows must not be taken for this one's.
         stopResultWatch()
         val bypass = if (!fromAuto && SystemClock.uptimeMillis() - lastHitAt < CORRECTION_WINDOW_MS) lastHitKey else null
@@ -959,62 +967,84 @@ class OverlayService : Service() {
         // The question screen as the watch will compare it (see startResultWatch); [bmp] is gone after solve.
         val watchBase = if (Prefs.learnFromResults(this)) {
             try {
-                signature(bmp, maskRects)
-            } catch (t: Throwable) {
-                null
-            }
-        } else null
-        scope.launch {
-            val solved = withContext(Dispatchers.IO) {
-                try {
-                    solve(bmp, masks, bypass).let {
-                        if (touchRequested && it.isAnswer) prepareTouches(it, bmp, masks) else it
-                    }.also {
-                        // For "معايرة يدوية": not a screen auto mode found to be something else (settings, shade).
-                        if (!(fromAuto && ScreenImage.isNoQuestion(it.text))) LastCapture.set(bmp, masks)
-                    }
-                } catch (e: Throwable) {
-                    Solved(
-                        "خطأ: ${e.javaClass.simpleName}", null, null, null,
-                        isAnswer = false, source = AnswerSource.FAILED,
-                    )
-                } finally {
-                    bmp.recycle()
+                    signature(bmp, maskRects)
+                } catch (t: Throwable) {
+                    null
                 }
-            }
-            if (sig != null) lastSentSig = sig
-            setBusy(false)
-            if (fromAuto && ScreenImage.isNoQuestion(solved.text)) {
-                solved.learn?.let { dropLearning(it) }
-                return@launch
-            }
-            // After the not-a-quiz return above: a screen auto mode skipped is not a failed question.
-            StatsStore.record(solved.source, SystemClock.elapsedRealtime() - started)
-            lastHitKey = solved.memoryKey
-            lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
-            shownImage = solved.image ?: shownImage
-            // The answer only: the owner found the time and model next to it distracting.
-            showPanel(if (touchRequested && solved.isAnswer && solved.touches == null)
-                "${solved.text}\n${solved.touchFailure ?: "لم أجد طريقة إدخال موثوقة لهذا الشكل"}" else solved.text)
-            if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
-            // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
-            val rect = solved.rect
-            if (rect != null && capturedW == screenW && capturedH == screenH && Prefs.highlightAnswer(this@OverlayService)) {
-                showHighlight(rect)
-            }
-            // After the answer is on screen, never before it (decision 10).
-            solved.learn?.let { startLearning(it) }
-            // The game's result screen may show another option as the right one; skip it if the screen rotated.
-            val watch = solved.watch
-            if (watch != null && watchBase != null && capturedW == screenW && capturedH == screenH &&
-                Prefs.learnFromResults(this@OverlayService)
-            ) {
-                startResultWatch(watch, watchBase)
-            }
-            if (touchRequested && permitsTouch(trigger) && capturedEpoch == touchEpoch &&
-                capturedWindow == VolumeKeyService.contextVersion() &&
-                capturedW == screenW && capturedH == screenH && solved.touches != null) {
-                performAnswerTouches(solved, capturedW, capturedH, trigger)
+            } else null
+            setBusy(true)
+            scope.launch {
+            try {
+                val solved = withContext(Dispatchers.IO) {
+                    try {
+                        solve(bmp, masks, bypass).let {
+                            if (touchRequested && it.isAnswer) prepareTouches(it, bmp, masks) else it
+                        }.also {
+                            // For "معايرة يدوية": not a screen auto mode found to be something else (settings, shade).
+                            if (!(fromAuto && ScreenImage.isNoQuestion(it.text))) LastCapture.set(bmp, masks)
+                        }
+                    } catch (e: Throwable) {
+                        Solved(
+                            "خطأ: ${e.javaClass.simpleName}", null, null, null,
+                            isAnswer = false, source = AnswerSource.FAILED,
+                        )
+                    } finally {
+                        bmp.recycle()
+                    }
+                }
+                if (destroyed) {
+                    solved.learn?.let { dropLearning(it) }
+                    return@launch
+                }
+                if (sig != null) {
+                    lastSentSig = sig
+                    autoRetry.record(sig, !solved.isAnswer || touchRequested && solved.touches == null,
+                        SystemClock.uptimeMillis())
+                }
+                if (fromAuto && ScreenImage.isNoQuestion(solved.text)) {
+                    solved.learn?.let { dropLearning(it) }
+                    return@launch
+                }
+                // After the not-a-quiz return above: a screen auto mode skipped is not a failed question.
+                StatsStore.record(solved.source, SystemClock.elapsedRealtime() - started)
+                lastHitKey = solved.memoryKey
+                lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
+                shownImage = solved.image ?: shownImage
+                // The answer only: the owner found the time and model next to it distracting.
+                showPanel(if (touchRequested && solved.isAnswer && solved.touches == null)
+                    "${solved.text}\n${solved.touchFailure ?: "لم أجد طريقة إدخال موثوقة لهذا الشكل"}" else solved.text)
+                if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
+                // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
+                val rect = solved.rect
+                if (rect != null && capturedW == screenW && capturedH == screenH && Prefs.highlightAnswer(this@OverlayService)) {
+                    showHighlight(rect)
+                }
+                // After the answer is on screen, never before it (decision 10).
+                solved.learn?.let { startLearning(it) }
+                // The game's result screen may show another option as the right one; skip it if the screen rotated.
+                val watch = solved.watch
+                if (watch != null && watchBase != null && capturedW == screenW && capturedH == screenH &&
+                    Prefs.learnFromResults(this@OverlayService)
+                ) {
+                    startResultWatch(watch, watchBase)
+                }
+                if (touchRequested && permitsTouch(trigger) && capturedEpoch == touchEpoch &&
+                    capturedWindow == VolumeKeyService.contextVersion() &&
+                    capturedW == screenW && capturedH == screenH && solved.touches != null) {
+                    performAnswerTouches(solved, capturedW, capturedH, trigger)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                if (sig != null) {
+                    lastSentSig = sig
+                    // A gesture may already have started; never retry partial input automatically.
+                    autoRetry.record(sig, !touchPending, SystemClock.uptimeMillis())
+                }
+                if (!destroyed) try { showPanel("تعذّرت المحاولة؛ يمكنك طلب الإجابة من جديد") } catch (_: Throwable) { }
+            } finally {
+                // Touch execution owns busy until its own finally block. All other exits release it.
+                if (!touchPending) setBusy(false)
             }
         }
     }
@@ -1269,60 +1299,69 @@ class OverlayService : Service() {
                 true
             } catch (_: Throwable) { blocked("تعذّر فحص الشاشة؛ أوقفت اللمس") }
         }
-        handler.postDelayed({
-            if (destroyed || epoch != touchEpoch) return@postDelayed
-            if (!permitsTouch(trigger) ||
-                w != screenW || h != screenH || preview != null
-            ) {
-                touchPending = false
-                return@postDelayed
-            }
-            hidePanel()
-            hideHighlight()
-            handler.postDelayed({
-                if (destroyed || epoch != touchEpoch) return@postDelayed
-                if (!permitsTouch(trigger) ||
-                    w != screenW || h != screenH
-                ) {
-                    touchPending = false
-                    return@postDelayed
-                }
-                TouchPreflight { delay, action -> handler.postDelayed({ action() }, delay) }.awaitReady(
-                    isCurrent = { !destroyed && epoch == touchEpoch }, ready = ::canContinue,
-                ) preflight@{ ready ->
-                    if (destroyed || epoch != touchEpoch) return@preflight
+        touchJob = scope.launch {
+            try {
+                // Includes queued capture frames, all gesture callbacks and numeric readback.
+                // Even a missing platform callback cannot leave the bubble busy indefinitely.
+                withTimeout(15_000L) {
+                    delay(80L)
+                    if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
+                        w != screenW || h != screenH || preview != null) return@withTimeout
+                    hidePanel()
+                    hideHighlight()
+                    delay(100L)
+                    val ready = suspendCancellableCoroutine<Boolean> { continuation ->
+                        TouchPreflight { delay, action -> check(handler.postDelayed({ action() }, delay)) }
+                            .awaitReady(
+                                isCurrent = { continuation.isActive && !destroyed && epoch == touchEpoch },
+                                ready = ::canContinue,
+                            ) { if (continuation.isActive) continuation.resume(it) }
+                    }
                     if (!ready) {
-                        touchPending = false
                         showPanel("${solved.text}\n$cancelReason")
-                        return@preflight
+                        return@withTimeout
                     }
-                    if (!touchAttempts.tryBegin(stamp, w, h)) {
-                        touchPending = false
-                        return@preflight
-                    }
+                    if (!touchAttempts.tryBegin(stamp, w, h)) return@withTimeout
                     setBusy(true)
-                    val ok = VolumeKeyService.tapAnswer(boxes, solved.submitLast, canContinue = {
-                        canContinue().also { if (it) nextTap++ }
-                    }, beforeSubmit = { complete -> verifyEntry(solved, epoch) { allowed ->
-                        entryRejected = !allowed
-                        complete(allowed)
-                    } }) { finished ->
-                        if (destroyed || epoch != touchEpoch) return@tapAnswer
-                        touchPending = false
-                        setBusy(false)
-                        if (!finished) showPanel(if (entryRejected) "تعذّر التحقق من الرقم؛ لم يتم التأكيد"
-                            else cancelReason)
+                    val finished = suspendCancellableCoroutine<Boolean> { continuation ->
+                        val accepted = VolumeKeyService.tapAnswer(boxes, solved.submitLast, canContinue = {
+                            continuation.isActive && canContinue().also { if (it) nextTap++ }
+                        }, beforeSubmit = { complete -> verifyEntry(solved, epoch) { allowed ->
+                            entryRejected = !allowed
+                            complete(allowed)
+                        } }) { if (continuation.isActive) continuation.resume(it) }
+                        if (!accepted) {
+                            // A refused request sent no stroke. Accepted runs stay consumed.
+                            touchAttempts.reset()
+                            cancelReason = "خدمة اللمس غير جاهزة أو مشغولة"
+                            if (continuation.isActive) continuation.resume(false)
+                        }
                     }
-                    if (!ok) {
-                        // A refused request sent no stroke. Accepted but cancelled runs stay consumed.
-                        touchAttempts.reset()
+                    if (!finished) showPanel(if (entryRejected) "تعذّر التحقق من الرقم؛ لم يتم التأكيد"
+                        else cancelReason)
+                }
+            } catch (_: TimeoutCancellationException) {
+                if (!destroyed && epoch == touchEpoch) try {
+                    showPanel("انتهت مهلة اللمس؛ جاهز للسؤال التالي")
+                } catch (_: Throwable) { }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                if (!destroyed && epoch == touchEpoch) try {
+                    showPanel("تعذّر إكمال اللمس؛ جاهز للسؤال التالي")
+                } catch (_: Throwable) { }
+            } finally {
+                if (epoch == touchEpoch) {
+                    // Invalidate any late readback before releasing the next request.
+                    touchEpoch++
+                    try { VolumeKeyService.cancelAnswer() } finally {
                         touchPending = false
+                        touchJob = null
                         setBusy(false)
-                        showPanel("خدمة اللمس غير جاهزة أو مشغولة")
                     }
                 }
-            }, 100L)
-        }, 80L)
+            }
+        }
     }
 
     /**
@@ -1992,10 +2031,18 @@ class OverlayService : Service() {
         if (autoMode) {
             lastSentSig = null
             prevTickSig = null
+            autoRetry.reset()
             autoJob = scope.launch {
                 while (isActive) {
                     delay(AUTO_INTERVAL_MS)
-                    autoTick()
+                    try {
+                        autoTick()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Throwable) {
+                        // A transient capture/overlay failure must not kill the automatic reader.
+                        prevTickSig = null
+                    }
                 }
             }
         }
@@ -2035,7 +2082,9 @@ class OverlayService : Service() {
         } else {
             previous
         }
-        val verdict = FrameSignature.judge(sig, previous, lastSentSig, panelShown, CHANGE_THRESHOLD, STABLE_THRESHOLD)
+        val retry = autoRetry.due(sig, SystemClock.uptimeMillis())
+        val verdict = FrameSignature.judge(sig, previous, if (retry) null else lastSentSig,
+            panelShown, CHANGE_THRESHOLD, STABLE_THRESHOLD)
         prevTickSig = sig
         when (verdict) {
             FrameSignature.Verdict.HIDE_PANEL -> if (panelAdded) {

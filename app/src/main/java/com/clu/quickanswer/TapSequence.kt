@@ -85,7 +85,7 @@ internal class TapSequence(
             if (!delivered && active === run) later(run, VERIFICATION_TIMEOUT_MS) { verified(false) }
             return
         }
-        val allowed = try { run.canContinue() } catch (_: Exception) { false }
+        val allowed = try { run.canContinue() } catch (_: Throwable) { false }
         // A guard can itself cancel the run (for example when capture stops).
         if (active !== run) return
         if (!allowed) {
@@ -115,7 +115,7 @@ internal class TapSequence(
         }
         val accepted = try {
             dispatch(run.boxes[index], pressDurationMs, completed)
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             false
         }
         if (!accepted) {
@@ -128,7 +128,7 @@ internal class TapSequence(
     private fun later(run: Run, delay: Long, action: () -> Unit) {
         try {
             schedule(delay) { if (active === run) action() }
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             finish(run, false)
         }
     }
