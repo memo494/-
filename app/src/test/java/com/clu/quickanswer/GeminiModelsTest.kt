@@ -92,7 +92,7 @@ class GeminiModelsTest {
         val entries = GeminiModels.mergeWithCatalog(GeminiModels.filterListModels(realList))
         val expected = GeminiModels.CATALOG.map { it.id }
         assertEquals(expected, entries.map { it.id })
-        assertEquals("gemini-3-flash-preview", entries.first().id)
+        assertEquals("gemini-3.5-flash-lite", entries.first().id)
         // Once a paid-only model shows up, no free one follows.
         val firstPaid = entries.indexOfFirst { !it.freeTier }
         assertTrue(firstPaid > 0)
@@ -130,16 +130,16 @@ class GeminiModelsTest {
     @Test
     fun pickerText_isLabelDashNote_andMarksBlockedModels() {
         val e = GeminiModels.entryFor("gemini-3-flash-preview")
-        assertEquals("Gemini 3 Flash — الأسرع (1–2 ث)", e.pickerText(blocked = false))
-        assertEquals("Gemini 3 Flash — الأسرع (1–2 ث) (انتهى الحد مؤقتًا)", e.pickerText(blocked = true))
+        assertEquals("Gemini 3 Flash — سريع (1–2 ث)", e.pickerText(blocked = false))
+        assertEquals("Gemini 3 Flash — سريع (1–2 ث) (انتهى الحد مؤقتًا)", e.pickerText(blocked = true))
     }
 
     @Test
     fun catalog_invariants() {
         val ids = GeminiModels.CATALOG.map { it.id }
         assertEquals(ids.size, ids.toSet().size)
-        assertEquals("gemini-3-flash-preview", GeminiModels.DEFAULT_ID)
-        assertEquals("gemini-3-flash-preview", ids.first())
+        assertEquals("gemini-3.5-flash-lite", GeminiModels.DEFAULT_ID)
+        assertEquals("gemini-3.5-flash-lite", ids.first())
         // Shared quota groups from the lab data.
         assertEquals(GeminiModels.quotaGroup("gemini-3.8-flash"), GeminiModels.quotaGroup("gemini-flash-latest"))
         assertEquals(GeminiModels.quotaGroup("gemini-3.5-flash-lite"), GeminiModels.quotaGroup("gemini-flash-lite-latest"))
@@ -166,7 +166,7 @@ class GeminiModelsTest {
     // ------------------------------------------------------------ fallback order
 
     private val standardOrder = listOf(
-        "gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash"
+        "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash"
     )
 
     @Test
@@ -178,11 +178,11 @@ class GeminiModelsTest {
     @Test
     fun fallbackOrder_skipsTheUsersOwnModel() {
         assertEquals(
-            listOf("gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash"),
-            GeminiModels.fallbackOrder("gemini-3-flash-preview")
+            listOf("gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash"),
+            GeminiModels.fallbackOrder("gemini-3.5-flash-lite")
         )
         assertEquals(
-            listOf("gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"),
+            listOf("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.8-flash"),
             GeminiModels.fallbackOrder("gemini-3.7-flash")
         )
     }
@@ -191,11 +191,11 @@ class GeminiModelsTest {
     fun fallbackOrder_skipsModelsInTheUsersQuotaGroup() {
         // gemini-flash-latest is gemini-3.8-flash, so asking 3.8 as a "fallback" would hit the same quota.
         assertEquals(
-            listOf("gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash"),
+            listOf("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.7-flash"),
             GeminiModels.fallbackOrder("gemini-flash-latest")
         )
         assertEquals(
-            listOf("gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash"),
+            listOf("gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash"),
             GeminiModels.fallbackOrder("gemini-flash-lite-latest")
         )
     }
@@ -214,25 +214,25 @@ class GeminiModelsTest {
 
     @Test
     fun plan_nothingBlocked_userFirstThenStandardFallbacks() {
-        val p = GeminiModels.plan("gemini-3-flash-preview") { false }
-        assertEquals("gemini-3-flash-preview", p.first)
-        assertEquals(listOf("gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash"), p.fallbacks)
+        val p = GeminiModels.plan("gemini-3.5-flash-lite") { false }
+        assertEquals("gemini-3.5-flash-lite", p.first)
+        assertEquals(listOf("gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash"), p.fallbacks)
         assertFalse(p.forced)
     }
 
     @Test
     fun plan_blockedFallbacksAreSkipped() {
-        val blocked = setOf("gemini-3.6-flash", "gemini-3.5-flash-lite")
-        val p = GeminiModels.plan("gemini-3-flash-preview") { it in blocked }
-        assertEquals("gemini-3-flash-preview", p.first)
-        assertEquals(listOf("gemini-3.8-flash", "gemini-3.7-flash"), p.fallbacks)
+        val blocked = setOf("gemini-3.1-flash-lite", "gemini-3.6-flash")
+        val p = GeminiModels.plan("gemini-3.5-flash-lite") { it in blocked }
+        assertEquals("gemini-3.5-flash-lite", p.first)
+        assertEquals(listOf("gemini-3-flash-preview", "gemini-3.8-flash", "gemini-3.7-flash"), p.fallbacks)
     }
 
     @Test
     fun plan_blockedUserModel_startsAtOnceWithFirstFreeFallback() {
-        val p = GeminiModels.plan("gemini-3-flash-preview") { it == "gemini-3-flash-preview" || it == "gemini-3.6-flash" }
-        assertEquals("gemini-3.8-flash", p.first)
-        assertEquals(listOf("gemini-3.5-flash-lite", "gemini-3.7-flash"), p.fallbacks)
+        val p = GeminiModels.plan("gemini-3.5-flash-lite") { it == "gemini-3.5-flash-lite" || it == "gemini-3.1-flash-lite" }
+        assertEquals("gemini-3-flash-preview", p.first)
+        assertEquals(listOf("gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.7-flash"), p.fallbacks)
         assertFalse(p.forced)
     }
 
@@ -251,8 +251,8 @@ class GeminiModelsTest {
         q.block("gemini-3.8-flash", 28_945_000L)
         // User picked the alias: it is blocked through the shared group, so 3.8 is not offered either.
         val p = GeminiModels.plan("gemini-flash-latest") { q.isBlocked(it) }
-        assertEquals("gemini-3-flash-preview", p.first)
-        assertEquals(listOf("gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash"), p.fallbacks)
+        assertEquals("gemini-3.5-flash-lite", p.first)
+        assertEquals(listOf("gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-3.6-flash", "gemini-3.7-flash"), p.fallbacks)
     }
 
     // ------------------------------------------------------------ thinking config
@@ -382,15 +382,15 @@ class GeminiModelsTest {
 
     @Test
     fun migrateSavedModel_replacesBlankAndGemini2() {
-        assertEquals("gemini-3-flash-preview", GeminiModels.migrateSavedModel("", true))
-        assertEquals("gemini-3-flash-preview", GeminiModels.migrateSavedModel("  ", false))
-        assertEquals("gemini-3-flash-preview", GeminiModels.migrateSavedModel("gemini-2.5-flash", true))
-        assertEquals("gemini-3-flash-preview", GeminiModels.migrateSavedModel("gemini-2.0-flash", false))
+        assertEquals("gemini-3.5-flash-lite", GeminiModels.migrateSavedModel("", true))
+        assertEquals("gemini-3.5-flash-lite", GeminiModels.migrateSavedModel("  ", false))
+        assertEquals("gemini-3.5-flash-lite", GeminiModels.migrateSavedModel("gemini-2.5-flash", true))
+        assertEquals("gemini-3.5-flash-lite", GeminiModels.migrateSavedModel("gemini-2.0-flash", false))
     }
 
     @Test
     fun migrateSavedModel_oldDefaultIsReplacedOnlyOnce() {
-        assertEquals("gemini-3-flash-preview", GeminiModels.migrateSavedModel("gemini-3.5-flash", false))
+        assertEquals("gemini-3.5-flash-lite", GeminiModels.migrateSavedModel("gemini-3.5-flash", false))
         // After the first save with this version it is a deliberate choice and stays.
         assertEquals("gemini-3.5-flash", GeminiModels.migrateSavedModel("gemini-3.5-flash", true))
     }
@@ -398,8 +398,15 @@ class GeminiModelsTest {
     @Test
     fun migrateSavedModel_firstDefaultFlashLatestIsReplacedOnlyOnce() {
         // The app's first default; the old settings screen saved it on every pause.
-        assertEquals("gemini-3-flash-preview", GeminiModels.migrateSavedModel("gemini-flash-latest", false))
+        assertEquals("gemini-3.5-flash-lite", GeminiModels.migrateSavedModel("gemini-flash-latest", false))
         assertEquals("gemini-flash-latest", GeminiModels.migrateSavedModel("gemini-flash-latest", true))
+    }
+
+    @Test
+    fun migrateSavedModel_previousDefault3FlashIsReplacedOnlyOnce() {
+        // The default until Flash-Lite became the first choice (Oct 2026).
+        assertEquals("gemini-3.5-flash-lite", GeminiModels.migrateSavedModel("gemini-3-flash-preview", false))
+        assertEquals("gemini-3-flash-preview", GeminiModels.migrateSavedModel("gemini-3-flash-preview", true))
     }
 
     @Test

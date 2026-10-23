@@ -49,12 +49,22 @@ class RequestPlan(val first: String, val fallbacks: List<String>, val forced: Bo
  */
 object GeminiModels {
 
-    const val DEFAULT_ID = "gemini-3-flash-preview"
+    const val DEFAULT_ID = "gemini-3.5-flash-lite"
 
     /** Lab figures (free key, minimal thinking) are in the notes. Free models first, paid-only last. */
     val CATALOG: List<GeminiModel> = listOf(
+        // The owner's choice (Oct 2026): the Flash-Lite models first. 3.5 Flash-Lite answered image
+        // requests in 1.9-3.0 s on the owner's phone; 3.1 Flash-Lite is the cheaper backup.
         GeminiModel(
-            "gemini-3-flash-preview", "Gemini 3 Flash", "الأسرع (1–2 ث)",
+            "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", "الأسرع (2–3 ث بالصورة)",
+            ThinkingMode.MINIMAL, quotaGroup = "gemini-3.5-flash-lite", autoFallback = true
+        ),
+        GeminiModel(
+            "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite", "بديل سريع",
+            ThinkingMode.UNKNOWN, autoFallback = true
+        ),
+        GeminiModel(
+            "gemini-3-flash-preview", "Gemini 3 Flash", "سريع (1–2 ث)",
             ThinkingMode.MINIMAL, autoFallback = true
         ),
         GeminiModel(
@@ -70,10 +80,6 @@ object GeminiModels {
             ThinkingMode.LOW, quotaGroup = "gemini-3.8-flash"
         ),
         GeminiModel(
-            "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", "دقيق لكنه أبطأ (5–10 ث)",
-            ThinkingMode.MINIMAL, quotaGroup = "gemini-3.5-flash-lite", autoFallback = true
-        ),
-        GeminiModel(
             "gemini-flash-lite-latest", "Flash-Lite (الأحدث)", "نفس حصة 3.5 Flash-Lite",
             ThinkingMode.MINIMAL, quotaGroup = "gemini-3.5-flash-lite"
         ),
@@ -82,10 +88,6 @@ object GeminiModels {
             ThinkingMode.LOW, autoFallback = true
         ),
         GeminiModel("gemini-3.5-flash", "Gemini 3.5 Flash", "بطيء جدًا (نحو 15 ث)", ThinkingMode.MINIMAL),
-        GeminiModel(
-            "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite", "مشغول غالبًا (503)",
-            ThinkingMode.UNKNOWN
-        ),
         GeminiModel(
             "gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash-Lite (معاينة)", "مشغول غالبًا (503)",
             ThinkingMode.UNKNOWN
@@ -119,7 +121,7 @@ object GeminiModels {
 
     /**
      * The model to use for a saved name. Blank and Gemini 2.x names (closed to new users) become the
-     * default. "gemini-3.5-flash" and "gemini-flash-latest" were the app's old defaults (the settings
+     * default. "gemini-3.5-flash", "gemini-flash-latest" and "gemini-3-flash-preview" were the app's old defaults (the settings
      * screen saved them on every pause, so they look like user choices) rather than deliberate picks, so
      * they are also replaced, but only until the settings have been saved once with this version
      * ([alreadyMigrated]); after that they are real choices and are kept.
@@ -130,7 +132,7 @@ object GeminiModels {
         else -> saved
     }
 
-    private val OLD_DEFAULTS = setOf("gemini-3.5-flash", "gemini-flash-latest")
+    private val OLD_DEFAULTS = setOf("gemini-3.5-flash", "gemini-flash-latest", "gemini-3-flash-preview")
 
     // ------------------------------------------------------------ fallback order
 
