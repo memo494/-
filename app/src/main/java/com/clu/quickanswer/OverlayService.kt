@@ -905,7 +905,10 @@ class OverlayService : Service() {
         scope.launch {
             val solved = withContext(Dispatchers.IO) {
                 try {
-                    solve(bmp, masks, bypass)
+                    solve(bmp, masks, bypass).also {
+                        // For "معايرة يدوية": not a screen auto mode found to be something else (settings, shade).
+                        if (!(fromAuto && ScreenImage.isNoQuestion(it.text))) LastCapture.set(bmp, masks)
+                    }
                 } catch (e: Exception) {
                     Solved("خطأ: ${e.javaClass.simpleName}", null, null, null, isAnswer = false)
                 } finally {

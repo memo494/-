@@ -237,6 +237,9 @@ class MainActivity : AppCompatActivity() {
                 .setNegativeButton("إلغاء", null)
                 .show()
         }
+        findViewById<Button>(R.id.calibrateButton).setOnClickListener {
+            startActivity(Intent(this, CalibrationActivity::class.java))
+        }
         findViewById<Button>(R.id.opusButton).setOnClickListener {
             claudeModelInput.setText("claude-opus-5-5")
         }

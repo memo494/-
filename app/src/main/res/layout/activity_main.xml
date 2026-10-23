@@ -262,6 +262,13 @@
             android:enabled="false"
             android:text="مسح القوالب" />
 
+        <Button
+            android:id="@+id/calibrateButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="معايرة يدوية (ارسم مربعات السؤال والخيارات)" />
+
         <CheckBox
             android:id="@+id/volumeKeyCheck"
             android:layout_width="match_parent"
