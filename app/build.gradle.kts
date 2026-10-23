@@ -53,8 +53,13 @@ android {
                 versionNameSuffix = "-beta"
             }
         }
+        // The build that is shared as Clu.apk: shrunk by R8 (the libraries' unused code goes) and
+        // signed like the debug build (the fixed key when there is one), so it installs over it.
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = if (cluKeystore != null) signingConfigs.getByName("clu") else signingConfigs.getByName("debug")
         }
     }
     compileOptions {
@@ -62,6 +67,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     packaging {
+        // The APK is shared as a file, so its download size is what counts: compressed native
+        // libraries (onnxruntime 33 MB, ML Kit 11 MB stored as-is by default) make it about half.
+        // Android unpacks them once at install time.
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources {
             excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/INDEX.LIST")
         }
