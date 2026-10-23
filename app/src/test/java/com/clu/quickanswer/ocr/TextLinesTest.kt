@@ -140,6 +140,28 @@ class TextLinesTest {
     }
 
     @Test
+    fun aBoundedBoxReadsOnlyInsideItself_aNeighbourIsNotAContinuation() {
+        // A line that ends a few px before the box edge, and a block of the game right after it (a
+        // keypad button, a note): unbounded that looks like the line going on, bounded it is ignored.
+        val c = Canvas(w, h, Canvas.WHITE)
+        strokes(c, 300, 600, box.right - 10, 630)
+        strokes(c, box.right + 8, 560, box.right + 90, 700)
+        assertTrue(TextLines.findDetailed(c.px, w, h, box).clipped)
+        val r = TextLines.findDetailed(c.px, w, h, box, bounded = true)
+        assertFalse(r.clipped)
+        val line = r.lines.single()
+        assertTrue("stays inside the box: $line", line.left >= box.left && line.right <= box.right)
+    }
+
+    @Test
+    fun aBoundedBoxStillSeesTheScreenEdge() {
+        val c = Canvas(w, h, Canvas.WHITE)
+        val edgeBox = PxRect(0, 500, 600, 800)
+        strokes(c, 0, 600, 400, 630)
+        assertTrue(TextLines.findDetailed(c.px, w, h, edgeBox, bounded = true).clipped)
+    }
+
+    @Test
     fun textInsideTheBoxIsNotClipped() {
         val c = Canvas(w, h, Canvas.WHITE)
         c.ink(300, 600, 780, 630)

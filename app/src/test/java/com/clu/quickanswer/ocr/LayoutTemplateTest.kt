@@ -64,6 +64,74 @@ class LayoutTemplateTest {
     }
 
     @Test
+    fun jsonRoundtrip_secondLookAndBounded() {
+        val g = grid()
+        val t = g.copy(altSignatures = g.signatures.map { RegionSignature(it.background / 2, it.uniformity) }, bounded = true)
+        assertTrue(t.isValid)
+        assertEquals(t, LayoutTemplate.fromJson(JSONObject(t.toJson().toString())))
+        // Older files have neither: one look, not bounded.
+        val old = JSONObject(g.toJson().toString()).apply { remove("sig2"); remove("bnd") }
+        val back = LayoutTemplate.fromJson(old)!!
+        assertEquals(null, back.altSignatures)
+        assertEquals(false, back.bounded)
+        // A second look must have one signature per region, like the first.
+        assertEquals(false, g.copy(altSignatures = g.signatures.drop(1)).isValid)
+    }
+
+    private val pic = RelRect(0.095f, 0.365f, 0.313f, 0.75f)
+
+    @Test
+    fun jsonRoundtrip_picture() {
+        val t = grid().copy(picture = pic)
+        assertTrue(t.isValid)
+        val back = LayoutTemplate.fromJson(JSONObject(t.toJson().toString()))
+        assertEquals(t, back)
+        assertEquals(pic, back!!.picture)
+        // Written as a rectangle like the others, under "pic".
+        assertEquals(4, t.toJson().getJSONArray("pic").length())
+    }
+
+    @Test
+    fun picture_isNullWhenMissingOrJsonNull_inOldFilesAndNewOnes() {
+        val g = grid()
+        assertNull(g.picture)
+        // A template without a picture writes an explicit null, which reads back as no picture.
+        assertTrue(g.toJson().has("pic") && g.toJson().isNull("pic"))
+        assertNull(LayoutTemplate.fromJson(JSONObject(g.toJson().toString()))!!.picture)
+        // Files written before the picture existed have no key at all.
+        val old = JSONObject(g.toJson().toString()).apply { remove("pic") }
+        val back = LayoutTemplate.fromJson(old)
+        assertNotNull(back)
+        assertNull(back!!.picture)
+        assertEquals(g, back)
+    }
+
+    @Test
+    fun picture_mustBeAValidRect() {
+        val g = grid()
+        assertTrue(g.copy(picture = null).isValid)
+        assertTrue(g.copy(picture = pic).isValid)
+        assertFalse(g.copy(picture = RelRect(0.5f, 0.1f, 0.4f, 0.2f)).isValid)
+        assertFalse(g.copy(picture = RelRect(0.1f, 0.1f, 1.2f, 0.2f)).isValid)
+        assertFalse(g.copy(picture = RelRect(Float.NaN, 0.1f, 0.5f, 0.2f)).isValid)
+        // Read from a file, a malformed one makes the whole template unreadable (fail closed).
+        assertNull(LayoutTemplate.fromJson(g.toJson().put("pic", JSONArray().put(0.1).put(0.1).put(0.5))))
+        assertNull(LayoutTemplate.fromJson(g.toJson().put("pic", "not a rect")))
+        assertNull(LayoutTemplate.fromJson(g.toJson().put("pic", JSONArray().put(0.5).put(0.1).put(0.4).put(0.2))))
+    }
+
+    @Test
+    fun picture_isNotARegion_andHasNoSignature() {
+        val g = grid()
+        val withPic = g.copy(picture = pic)
+        assertEquals(g.regions, withPic.regions)
+        assertEquals(g.signatures.size, withPic.regions.size)
+        assertTrue("valid with one signature per region, none for the picture", withPic.isValid)
+        // The numeric screen too.
+        assertTrue(numeric().copy(picture = pic).isValid)
+    }
+
+    @Test
     fun validTemplates() {
         assertTrue(grid().isValid)
         assertTrue(numeric().isValid)

@@ -195,20 +195,9 @@ object TemplateLearner {
     /** The options grouped into rows, top to bottom, each row in reading order (see [ordered]). */
     private fun rows(reply: LayoutReply): List<List<LayoutOption>> {
         if (reply.kind == LayoutKind.NUMERIC) return emptyList()
-        val rows = ArrayList<MutableList<LayoutOption>>()
-        for (option in reply.options.sortedBy { it.box.yMin }) {
-            val row = rows.firstOrNull { r -> r.any { sameRow(it.box, option.box) } }
-            if (row != null) row.add(option) else rows.add(mutableListOf(option))
+        return RegionGeometry.readingRows(reply.options, leftToRight = reply.language == "en") {
+            PxRect(it.box.xMin, it.box.yMin, it.box.xMax, it.box.yMax)
         }
-        val leftToRight = reply.language == "en"
-        return rows.map { row ->
-            if (leftToRight) row.sortedBy { it.box.xMin } else row.sortedByDescending { it.box.xMax }
-        }
-    }
-
-    private fun sameRow(a: Box1000, b: Box1000): Boolean {
-        val overlap = minOf(a.yMax, b.yMax) - maxOf(a.yMin, b.yMin)
-        return overlap >= 0.5 * minOf(a.yMax - a.yMin, b.yMax - b.yMin)
     }
 
     /**
@@ -276,14 +265,7 @@ object TemplateLearner {
         return template.takeIf { it.isValid }
     }
 
-    /** True when [a] and [b] share more than [MAX_OVERLAP] of the smaller one's area. */
-    private fun overlapsTooMuch(a: RelRect, b: RelRect): Boolean {
-        val w = minOf(a.right, b.right) - maxOf(a.left, b.left)
-        val h = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)
-        if (w <= 0f || h <= 0f) return false
-        val smaller = minOf((a.right - a.left) * (a.bottom - a.top), (b.right - b.left) * (b.bottom - b.top))
-        return w * h > MAX_OVERLAP * smaller
-    }
+    private fun overlapsTooMuch(a: RelRect, b: RelRect): Boolean = RegionGeometry.overlapsTooMuch(a, b, MAX_OVERLAP)
 
     /**
      * Whether [read] (what the device read with the new template) is what the model saw: both

@@ -20,11 +20,53 @@
             android:textSize="28sp"
             android:textStyle="bold" />
 
+        <TextView
+            style="@style/CluSectionHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="التشغيل" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
+
+        <Button
+            android:id="@+id/overlayButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="منح صلاحية الظهور فوق التطبيقات" />
+
+        <Button
+            android:id="@+id/startButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="تشغيل" />
+
+        <Button
+            android:id="@+id/stopButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="إيقاف" />
+
+        <TextView
+            style="@style/CluSectionHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="النموذج" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
+
         <RadioGroup
             android:id="@+id/providerGroup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="8dp"
             android:orientation="vertical">
 
             <RadioButton
@@ -39,6 +81,64 @@
                 android:layout_height="wrap_content"
                 android:text="Claude (مدفوع، أدق)" />
         </RadioGroup>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="مفتاح Gemini API"
+            android:textAlignment="viewStart" />
+
+        <EditText
+            android:id="@+id/apiKeyInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="الصق المفتاح هنا"
+            android:importantForAutofill="no"
+            android:inputType="textPassword"
+            android:layoutDirection="ltr"
+            android:textDirection="ltr"
+            android:textAlignment="viewStart" />
+
+        <TextView
+            android:id="@+id/keyLink"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autoLink="web"
+            android:text="احصل على مفتاح مجاني من: https://aistudio.google.com/apikey"
+            android:textAlignment="viewStart"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="نموذج Gemini"
+            android:textAlignment="viewStart" />
+
+        <Spinner
+            android:id="@+id/modelSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp" />
+
+        <TextView
+            android:id="@+id/modelIdText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layoutDirection="ltr"
+            android:textAlignment="viewStart"
+            android:textDirection="ltr"
+            android:textIsSelectable="true"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/refreshModelsButton"
+            style="?android:attr/buttonStyleSmall"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="تحديث قائمة النماذج"
+            android:textSize="12sp" />
 
         <LinearLayout
             android:id="@+id/claudeSection"
@@ -112,67 +212,20 @@
         </LinearLayout>
 
         <TextView
+            style="@style/CluSectionHeader"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="مفتاح Gemini API"
-            android:textAlignment="viewStart" />
+            android:text="القراءة والعرض" />
 
-        <EditText
-            android:id="@+id/apiKeyInput"
+        <View
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="الصق المفتاح هنا"
-            android:importantForAutofill="no"
-            android:inputType="textPassword"
-            android:layoutDirection="ltr"
-            android:textDirection="ltr"
-            android:textAlignment="viewStart" />
-
-        <TextView
-            android:id="@+id/keyLink"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:autoLink="web"
-            android:text="احصل على مفتاح مجاني من: https://aistudio.google.com/apikey"
-            android:textAlignment="viewStart"
-            android:textSize="13sp" />
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="نموذج Gemini"
-            android:textAlignment="viewStart" />
-
-        <Spinner
-            android:id="@+id/modelSpinner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="48dp" />
-
-        <TextView
-            android:id="@+id/modelIdText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layoutDirection="ltr"
-            android:textAlignment="viewStart"
-            android:textDirection="ltr"
-            android:textIsSelectable="true"
-            android:textSize="13sp" />
-
-        <Button
-            android:id="@+id/refreshModelsButton"
-            style="?android:attr/buttonStyleSmall"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="تحديث قائمة النماذج"
-            android:textSize="12sp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="8dp"
             android:text="مكان الإجابة"
             android:textAlignment="viewStart" />
 
@@ -213,45 +266,33 @@
             android:text="تحديد الجواب الصحيح بمربع أخضر" />
 
         <CheckBox
+            android:id="@+id/learnFromResultsCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="تعلّم من شاشة النتيجة (يصلّح الجواب الغلط بالبنك لحاله)" />
+
+        <CheckBox
             android:id="@+id/vibrateCheck"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="اهتزاز خفيف عند ظهور الجواب" />
 
-        <Button
-            android:id="@+id/clearMemoryButton"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="مسح الذاكرة" />
-
-        <LinearLayout
+        <TextView
+            style="@style/CluSectionHeader"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:text="زر الصوت" />
 
-            <Button
-                android:id="@+id/exportMemoryButton"
-                style="?android:attr/buttonBarButtonStyle"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="تصدير بنك الأسئلة" />
-
-            <Button
-                android:id="@+id/importMemoryButton"
-                style="?android:attr/buttonBarButtonStyle"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="استيراد بنك أسئلة" />
-        </LinearLayout>
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
 
         <CheckBox
             android:id="@+id/volumeKeyCheck"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="8dp"
             android:text="زر خفض الصوت = جواب (بدل لمس الفقاعة)" />
 
         <TextView
@@ -282,24 +323,93 @@
             android:layout_height="wrap_content"
             android:text="معلومات التطبيق" />
 
-        <Button
-            android:id="@+id/overlayButton"
+        <TextView
+            style="@style/CluSectionHeader"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="منح صلاحية الظهور فوق التطبيقات" />
+            android:text="بنك الأسئلة والقوالب" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
 
         <Button
-            android:id="@+id/startButton"
+            android:id="@+id/clearMemoryButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="مسح الذاكرة" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/exportMemoryButton"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="تصدير بنك الأسئلة" />
+
+            <Button
+                android:id="@+id/importMemoryButton"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="استيراد بنك أسئلة" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/templatesStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAlignment="viewStart"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/clearTemplatesButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:enabled="false"
+            android:text="مسح القوالب" />
+
+        <Button
+            android:id="@+id/calibrateButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="معايرة يدوية (ارسم مربعات السؤال والخيارات)" />
+
+        <TextView
+            style="@style/CluSectionHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="الإحصائيات" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
+
+        <TextView
+            android:id="@+id/statsText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="تشغيل" />
+            android:textAlignment="viewStart"
+            android:textSize="14sp" />
 
         <Button
-            android:id="@+id/stopButton"
-            android:layout_width="match_parent"
+            android:id="@+id/clearStatsButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="إيقاف" />
+            android:enabled="false"
+            android:text="مسح الإحصائيات" />
     </LinearLayout>
 </ScrollView>

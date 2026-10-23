@@ -1,6 +1,7 @@
 package com.clu.quickanswer
 
 import com.clu.quickanswer.ocr.ArabicText
+import com.clu.quickanswer.ocr.PictureRegion
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -20,6 +21,12 @@ import org.json.JSONObject
  *   numbers and the same negation words (see [Entry.guard]) and no single word is replaced by a
  *   different one (see [wordsCompatible]): "in 1990" and "in 1991", "the biggest planet" and "the
  *   smallest planet" are different questions. OCR noise is a letter or two, not another word.
+ * - A question that shows a picture is remembered with the picture's hash ([PictureRegion.hash]): the
+ *   same words and options with another picture are another question. Exact lookup needs the same hash;
+ *   failing that, the same words and options (not fuzzy text: the picture is what tells the question
+ *   apart) with a picture within [PictureRegion.SAME_PICTURE_MAX] bits are the same question, the
+ *   closest one winning. An entry with a picture and a lookup without one, or the other way round, never
+ *   match, and the fuzzy text lookup only looks at entries without a picture.
  * - At most [capacity] entries; the one least recently used or stored goes first. Nothing that
  *   [isValidEntry] refuses is kept, however it came in (answer, restored file, imported file).
  *
@@ -27,17 +34,29 @@ import org.json.JSONObject
  */
 class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
 
-    /** One remembered question. [key] identifies it for exact lookup and for [remove]. */
-    class Entry(val question: String, val options: List<String>, val numeric: Boolean, val answer: String) {
+    /**
+     * One remembered question. [key] identifies it for exact lookup and for [remove]. [picture] is the
+     * [PictureRegion.hash] of the picture the question showed, or null for a question without one.
+     */
+    class Entry(
+        val question: String,
+        val options: List<String>,
+        val numeric: Boolean,
+        val answer: String,
+        val picture: String? = null,
+    ) {
         private val questionKey = keyOf(question)
         private val optionKeys = if (numeric) emptyList() else options.map { keyOf(it) }.sorted()
 
         /** Questions with a different one of these are never the same question. */
         internal val guard: String = guardOf(question)
 
-        /** Same for every ordering of the options. */
-        val key: String =
+        /** What entries of the same question share, with any picture: the words, the numbers and the options. */
+        internal val textKey: String =
             (if (numeric) "N" else "M") + SEP + questionKey + SEP + guard + SEP + optionKeys.joinToString(SEP.toString())
+
+        /** Same for every ordering of the options. */
+        val key: String = textKey + SEP + (picture ?: "")
 
         /** The words of the question (normalised), for [wordsCompatible]. */
         internal val words: List<String> = wordsOf(question)
@@ -61,17 +80,22 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
 
     /**
      * The remembered answer for a question, or null. [options] are the option texts as read (any
-     * order), ignored when [numeric].
+     * order), ignored when [numeric]. [picture] is the [PictureRegion.hash] of the picture the question
+     * shows, null when it shows none (see the class comment).
      */
     @Synchronized
-    fun lookup(question: String, options: List<String>, numeric: Boolean): Hit? {
-        val probe = Entry(question, options, numeric, "")
+    fun lookup(question: String, options: List<String>, numeric: Boolean, picture: String? = null): Hit? {
+        if (!pictureOk(picture)) return null
+        val probe = Entry(question, options, numeric, "", picture)
         entries[probe.key]?.let { return Hit(it.answer, it.key, exact = true) }
         val qKey = keyOf(question)
         if (qKey.isEmpty()) return null
+        if (picture != null) return nearPicture(probe, picture)
         var best: Entry? = null
         var bestSim = QUESTION_SIMILARITY
         for (e in entries.values) {
+            // Another picture, or none of ours: the words alone say nothing about this question.
+            if (e.picture != null) continue
             if (e.numeric != numeric || e.optionSet != probe.optionSet || e.guard != probe.guard) continue
             // A similarity of 0.92 needs lengths within 8% of each other.
             val longest = maxOf(e.questionKeyLength, qKey.length)
@@ -88,14 +112,37 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
     }
 
     /**
+     * The entry of the same words and options as [probe] whose picture is the closest to [picture] and
+     * within [PictureRegion.SAME_PICTURE_MAX] bits of it (the most recently used of equally close ones),
+     * as an inexact hit; null when there is none. The caller holds the lock.
+     */
+    private fun nearPicture(probe: Entry, picture: String): Hit? {
+        var best: Entry? = null
+        var bestDistance = PictureRegion.SAME_PICTURE_MAX
+        for (e in entries.values) {
+            val p = e.picture ?: continue
+            if (e.textKey != probe.textKey) continue
+            val d = PictureRegion.distance(p, picture)
+            if (d <= bestDistance) {
+                best = e
+                bestDistance = d
+            }
+        }
+        val hit = best ?: return null
+        entries[hit.key] // touch
+        return Hit(hit.answer, hit.key, exact = false)
+    }
+
+    /**
      * Remembers [answer] (an option's text, or a number when [numeric]), replacing the entry for
      * the same question. Does nothing for what [isValidEntry] refuses: an empty question or answer,
      * options that cannot be told apart after normalising (the answer would be ambiguous), an
-     * answer that is not one of them or, for a numeric question, not a number.
+     * answer that is not one of them or, for a numeric question, not a number. [picture] is the
+     * [PictureRegion.hash] of the picture the question showed, or null.
      */
-    fun put(question: String, options: List<String>, numeric: Boolean, answer: String) {
-        if (!isValidEntry(question, options, numeric, answer)) return
-        val entry = Entry(question, if (numeric) emptyList() else options, numeric, answer.trim())
+    fun put(question: String, options: List<String>, numeric: Boolean, answer: String, picture: String? = null) {
+        if (!isValidEntry(question, options, numeric, answer) || !pictureOk(picture)) return
+        val entry = Entry(question, if (numeric) emptyList() else options, numeric, answer.trim(), picture)
         synchronized(this) {
             entries.remove(entry.key)
             entries[entry.key] = entry
@@ -122,7 +169,7 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
         for (e in entries.values) {
             arr.put(
                 JSONObject().put("q", e.question).put("o", JSONArray(e.options)).put("n", if (e.numeric) 1 else 0)
-                    .put("a", e.answer)
+                    .put("a", e.answer).also { o -> e.picture?.let { o.put("p", it) } }
             )
         }
         return JSONObject().put("v", 1).put("e", arr).toString()
@@ -148,8 +195,10 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
                     val question = o.getString("q")
                     val options = if (numeric) emptyList() else List(opts.length()) { opts.getString(it) }
                     val answer = o.getString("a")
-                    if (!isValidEntry(question, options, numeric, answer)) continue
-                    val e = Entry(question, options, numeric, answer.trim())
+                    // Optional: files written before pictures were remembered have no "p".
+                    val picture = if (o.isNull("p")) null else o.getString("p")
+                    if (!isValidEntry(question, options, numeric, answer) || !pictureOk(picture)) continue
+                    val e = Entry(question, options, numeric, answer.trim(), picture)
                     entries[e.key] = e
                     read++
                 } catch (_: Exception) {
@@ -222,6 +271,14 @@ class AnswerMemory(private val capacity: Int = DEFAULT_CAPACITY) {
             if (keys.any { it.isEmpty() } || keys.toSet().size != keys.size) return false
             return keys.any { it == keyOf(a) }
         }
+
+        /**
+         * Whether [picture] can tell an entry apart: none, or a non-empty hash. An empty one would have
+         * the key of an entry without a picture. What the hash is made of is not checked: a string that
+         * is no [PictureRegion.hash] is at distance [Int.MAX_VALUE] from every other, so it only ever
+         * matches itself.
+         */
+        private fun pictureOk(picture: String?): Boolean = picture == null || picture.isNotEmpty()
 
         /** The bytes of [input], or null when there are more than [limit] (it is not read further). */
         fun readAtMost(input: java.io.InputStream, limit: Int): ByteArray? {

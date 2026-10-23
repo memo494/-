@@ -157,6 +157,50 @@ class LayoutTemplates(private val capacity: Int = 60) {
         }
     }
 
+    /** What [merge] did: [added] templates are new; [skipped] were already known, invalid, or did not fit. */
+    class MergeResult(val added: Int, val skipped: Int)
+
+    /**
+     * Adds the templates of [json] (what [encode] produced, e.g. on another phone) without removing
+     * or changing any of yours. An incoming template is skipped when you have one with its id or
+     * the same layout (the rule [add] uses), when it is not valid, or when the store is full (your
+     * own templates always stay). Added templates keep their state and hits, with misses reset to 0.
+     * Returns null when [json] is not readable (not JSON, another version, no "templates" array).
+     * Calls [onChange] once when something was added. Never throws.
+     */
+    fun merge(json: String): MergeResult? {
+        val incoming = try {
+            val root = JSONObject(json)
+            if (root.optInt("version", VERSION) != VERSION) return null
+            root.getJSONArray("templates")
+        } catch (_: Throwable) {
+            // Not JSON, no "templates" array, or so deeply nested or big that the parser gave up.
+            return null
+        }
+        var added = 0
+        var skipped = 0
+        synchronized(this) {
+            for (i in 0 until incoming.length()) {
+                val t = try {
+                    incoming.getJSONObject(i).let { LayoutTemplate.fromJson(it) }
+                } catch (_: Exception) {
+                    null
+                }
+                // Room is checked last: an entry that is invalid or already known counts as that.
+                if (t == null || !t.isValid || templates.containsKey(t.id) ||
+                    templates.values.any { isSame(it, t) } || templates.size >= capacity
+                ) {
+                    skipped++
+                    continue
+                }
+                templates[t.id] = t.copy(misses = 0)
+                added++
+            }
+        }
+        if (added > 0) onChange?.invoke()
+        return MergeResult(added, skipped)
+    }
+
     /** The least recently used CANDIDATE, else the least recently used TRUSTED one (never [except]). */
     private fun evictionCandidate(except: String?): LayoutTemplate? {
         val others = templates.values.filter { it.id != except }

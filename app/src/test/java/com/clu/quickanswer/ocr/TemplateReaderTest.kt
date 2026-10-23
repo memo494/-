@@ -217,6 +217,32 @@ class TemplateReaderTest {
     }
 
     @Test
+    fun aSecondLookFits_andOnlyWhenItMatches() {
+        // The same layout in another state (the game greys its buttons while others play): a
+        // template may carry the signatures of both looks.
+        val dark = gridTemplate()
+        val (px, sw, sh) = screen()
+        for (i in px.indices) px[i] = (0xFF shl 24) or ((px[i] and 0xFEFEFE) shr 1) // the whole screen dimmed
+        assertFalse(TemplateReader.fits(dark, px, sw, sh))
+        val both = dark.copy(altSignatures = TemplateReader.signatures(dark, px, sw, sh))
+        assertTrue(TemplateReader.fits(both, px, sw, sh))
+        val (normal, nw, nh) = screen()
+        assertTrue("the first look still fits", TemplateReader.fits(both, normal, nw, nh))
+    }
+
+    @Test
+    fun doesNotFitWhenARegionsFrameIsMuchMoreUniformThanLearned() {
+        // Learned where the frame crossed two colours (a field over a board); on another screen of
+        // the same game the same place is plain (only the banner): that is not this screen.
+        val (learnedPx, sw, sh) = screen()
+        val r = grid[1].toPx(sw, sh)
+        for (y in r.top until r.bottom) for (x in r.left until r.left + r.width * 35 / 100) learnedPx[y * sw + x] = rgb(200, 180, 160)
+        val t = template(Arrangement.GRID, grid, null, Triple(learnedPx, sw, sh))
+        val (plain, pw, ph) = screen()
+        assertFalse(TemplateReader.fits(t, plain, pw, ph))
+    }
+
+    @Test
     fun anEmptyNumberFieldFitsATemplateLearnedWithDigitsInIt() {
         val t = template(Arrangement.NUMERIC, emptyList(), field, screen(numeric = true))
         val (px, sw, sh) = screen(numeric = true, flat = setOf(0))
