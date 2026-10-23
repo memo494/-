@@ -37,17 +37,29 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.clu.quickanswer.ocr.ArabicOcr
+import com.clu.quickanswer.ocr.ChoiceTouchGuard
 import com.clu.quickanswer.ocr.GameVisualLayout
 import com.clu.quickanswer.ocr.OptionWordDetector
 import com.clu.quickanswer.ocr.WordAnswerMatcher
+import com.clu.quickanswer.interaction.AnswerInteraction
+import com.clu.quickanswer.interaction.NumericEntryCheck
 import com.clu.quickanswer.ocr.ColorLayout
-import com.clu.quickanswer.ocr.ChoiceTouchGuard
 import com.clu.quickanswer.ocr.LatinOcr
+import com.clu.quickanswer.ocr.LayoutReplyParser
+import com.clu.quickanswer.ocr.LayoutTemplate
+import com.clu.quickanswer.ocr.LearningGate
+import com.clu.quickanswer.ocr.PictureRegion
 import com.clu.quickanswer.ocr.PxRect
 import com.clu.quickanswer.ocr.Question
+import com.clu.quickanswer.ocr.ResultConfirmer
+import com.clu.quickanswer.ocr.ResultReader
 import com.clu.quickanswer.ocr.ScreenFingerprint
 import com.clu.quickanswer.ocr.ScreenLayout
+import com.clu.quickanswer.ocr.TemplateLearner
 import com.clu.quickanswer.ocr.TemplateReader
+import com.clu.quickanswer.ocr.TemplateState
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -83,6 +95,16 @@ class OverlayService : Service() {
         private const val SIG_SIZE = 32
         private const val CHANGE_THRESHOLD = 6.0
         private const val STABLE_THRESHOLD = 2.0
+
+        // The result watch (see watchResult). None of these is measured on real captures yet: there
+        // are no screenshots of these games' result moment.
+        // How often it looks, and how long it keeps looking after the answer is shown.
+        private const val WATCH_INTERVAL_MS = 500L
+        private const val WATCH_MAX_MS = 20_000L
+        // It stops when the screen, leaving the option buttons out, differs from the question's by more
+        // than this (FrameSignature.diff). Half of CHANGE_THRESHOLD: the buttons are what differs most
+        // between two questions and are not compared, so the rest has to be held to a stricter limit.
+        private const val WATCH_SAME_SCREEN_DIFF = CHANGE_THRESHOLD / 2
         private const val LONG_PRESS_MS = 600L
         private const val PANEL_AUTO_HIDE_MS = 15_000L
         private const val PANEL_TOP_MARGIN_DP = 6
@@ -145,10 +167,12 @@ class OverlayService : Service() {
 
     private var autoMode = false
     private var autoJob: Job? = null
+    // The watch for the game's result screen after the last answer (see watchResult); one at a time.
+    private var watchJob: Job? = null
+    @Volatile private var busy = false
     private var touchPending = false
     private var touchEpoch = 0L
     private val touchAttempts = TouchAttemptGuard()
-    @Volatile private var busy = false
     private var lastSentSig: IntArray? = null
     private var prevTickSig: IntArray? = null
     // The answer provider for the settings it was made from (clientKey); see currentClient().
@@ -167,6 +191,9 @@ class OverlayService : Service() {
     private var ocr: ArabicOcr? = null
     private val latinOcrLock = Any()
     private val colorLayout = ColorLayout()
+
+    // When a layout request may go out in the background (see learnLayout).
+    private val learningGate = LearningGate()
     private var latinOcr: LatinOcr? = null
     @Volatile private var destroyed = false
 
@@ -214,6 +241,7 @@ class OverlayService : Service() {
         warmUp()
         AnswerStore.init(this)
         TemplateStore.init(this)
+        StatsStore.init(this)
         loadOcr()
         loadLatinOcr()
 
@@ -233,12 +261,9 @@ class OverlayService : Service() {
             // Runs on [handler] (the main thread). Android 15 QPR1+ stops the projection when the screen
             // locks; Android asks for consent again for every session, so offer a one-tap way back.
             override fun onStop() {
-                // Stop pending input now; onDestroy may be delivered after the next tap is due.
-                touchEpoch++
-                VolumeKeyService.cancelAnswer()
-                touchPending = false
                 if (stoppingByUs) return
                 stoppingByUs = true
+                cancelTouches()
                 showRestartNotification()
                 stopSelf()
             }
@@ -343,11 +368,7 @@ class OverlayService : Service() {
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
-        val wasTouching = touchPending
-        touchEpoch++
-        VolumeKeyService.cancelAnswer()
-        touchPending = false
-        if (wasTouching) setBusy(false)
+        cancelTouches()
         // New screen size: the bubble may now be off-screen (landscape -> portrait), so pull it
         // back in first, then re-measure the panel (max width depends on orientation) and re-place
         // it (it follows the bubble in NEXT_TO_BUBBLE mode). The centred preview is sized for the
@@ -875,7 +896,8 @@ class OverlayService : Service() {
     }
 
     private fun answerNow(trigger: AnswerTrigger = AnswerTrigger.BUBBLE) {
-        if (busy || touchPending) return
+        if (busy || touchPending || destroyed) return
+        stopResultWatch()
         hiddenAnswer.clear()
         if (panelAdded || preview != null) {
             // Remove the old answer (and the sent-image preview) first so they don't hide part of the question.
@@ -895,13 +917,19 @@ class OverlayService : Service() {
         }
         // In auto mode count this as the last frame sent, or the next tick would see the question as
         // "new", hide this answer and ask again.
-        // A new deliberate press permits a retry; continuous A scanning never replays a partial entry.
         touchAttempts.reset()
         sendFrame(bmp, if (autoMode) signature(bmp, ignoreRects()) else null, fromAuto = false, trigger = trigger)
     }
 
     private fun permitsTouch(trigger: AnswerTrigger): Boolean = trigger.permitsTouch(
         autoMode, Prefs.autoTouch(this), Prefs.volumeKey(this))
+
+    private fun cancelTouches() {
+        touchEpoch++
+        VolumeKeyService.cancelAnswer()
+        if (touchPending) setBusy(false)
+        touchPending = false
+    }
 
     /**
      * Sends [bmp] and shows the answer. A send that auto mode started on its own ([fromAuto]) shows
@@ -912,51 +940,188 @@ class OverlayService : Service() {
     private fun sendFrame(bmp: Bitmap, sig: IntArray?, fromAuto: Boolean,
                           trigger: AnswerTrigger = AnswerTrigger.AUTOMATIC) {
         setBusy(true)
+        // A new question: what the last one's result screen shows must not be taken for this one's.
+        stopResultWatch()
         val bypass = if (!fromAuto && SystemClock.uptimeMillis() - lastHitAt < CORRECTION_WINDOW_MS) lastHitKey else null
         val capturedW = bmp.width
         val capturedH = bmp.height
-        val started = SystemClock.uptimeMillis()
-        val masks = captureMasks.remove(bmp).orEmpty().map { PxRect(it.left, it.top, it.right, it.bottom) }
+        // Monotonic, so a clock change cannot give a negative time; includes reading, memory and the network.
+        val started = SystemClock.elapsedRealtime()
+        val maskRects = captureMasks.remove(bmp).orEmpty()
+        val masks = maskRects.map { PxRect(it.left, it.top, it.right, it.bottom) }
         val capturedEpoch = touchEpoch
+        val capturedWindow = VolumeKeyService.contextVersion()
         val touchRequested = permitsTouch(trigger)
+        // The question screen as the watch will compare it (see startResultWatch); [bmp] is gone after solve.
+        val watchBase = if (Prefs.learnFromResults(this)) {
+            try {
+                signature(bmp, maskRects)
+            } catch (t: Throwable) {
+                null
+            }
+        } else null
         scope.launch {
             val solved = withContext(Dispatchers.IO) {
                 try {
-                    solve(bmp, masks, bypass, touchRequested)
+                    solve(bmp, masks, bypass).let {
+                        if (touchRequested && it.isAnswer) prepareTouches(it, bmp, masks) else it
+                    }.also {
+                        // For "معايرة يدوية": not a screen auto mode found to be something else (settings, shade).
+                        if (!(fromAuto && ScreenImage.isNoQuestion(it.text))) LastCapture.set(bmp, masks)
+                    }
                 } catch (e: Throwable) {
-                    Solved("خطأ: ${e.javaClass.simpleName}", null, null, null, isAnswer = false)
+                    Solved(
+                        "خطأ: ${e.javaClass.simpleName}", null, null, null,
+                        isAnswer = false, source = AnswerSource.FAILED,
+                    )
                 } finally {
                     bmp.recycle()
                 }
             }
             if (sig != null) lastSentSig = sig
             setBusy(false)
-            if (fromAuto && ScreenImage.isNoQuestion(solved.text)) return@launch
+            if (fromAuto && ScreenImage.isNoQuestion(solved.text)) {
+                solved.learn?.let { dropLearning(it) }
+                return@launch
+            }
+            // After the not-a-quiz return above: a screen auto mode skipped is not a failed question.
+            StatsStore.record(solved.source, SystemClock.elapsedRealtime() - started)
             lastHitKey = solved.memoryKey
             lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
             shownImage = solved.image ?: shownImage
-            // Seconds and the model that answered, to see what makes an answer slow.
-            val secs = (SystemClock.uptimeMillis() - started) / 100 / 10.0
-            val via = if (solved.memoryKey != null) "" else {
-                client?.lastModel?.removePrefix("gemini-")?.removePrefix("claude-")?.let { " · $it" } ?: ""
-            }
-            val noTarget = touchRequested && solved.isAnswer && solved.touches == null &&
-                !ScreenImage.isNoQuestion(solved.text)
-            val status = if (noTarget) "\nتعذّر تحديد أزرار واضحة؛ لم يتم الضغط" else ""
-            showPanel(if (solved.isAnswer) "${solved.text}   ($secs ث$via)$status" else solved.text)
+            // The answer only: the owner found the time and model next to it distracting.
+            showPanel(if (touchRequested && solved.isAnswer && solved.touches == null)
+                "${solved.text}\n${solved.touchFailure ?: "لم أجد طريقة إدخال موثوقة لهذا الشكل"}" else solved.text)
             if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
             // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
             val rect = solved.rect
             if (rect != null && capturedW == screenW && capturedH == screenH && Prefs.highlightAnswer(this@OverlayService)) {
                 showHighlight(rect)
             }
-            if (touchRequested && permitsTouch(trigger) &&
-                solved.touches != null && capturedEpoch == touchEpoch &&
-                capturedW == screenW && capturedH == screenH
-            ) performAnswerTouches(solved, capturedW, capturedH, trigger)
+            // After the answer is on screen, never before it (decision 10).
+            solved.learn?.let { startLearning(it) }
+            // The game's result screen may show another option as the right one; skip it if the screen rotated.
+            val watch = solved.watch
+            if (watch != null && watchBase != null && capturedW == screenW && capturedH == screenH &&
+                Prefs.learnFromResults(this@OverlayService)
+            ) {
+                startResultWatch(watch, watchBase)
+            }
+            if (touchRequested && permitsTouch(trigger) && capturedEpoch == touchEpoch &&
+                capturedWindow == VolumeKeyService.contextVersion() &&
+                capturedW == screenW && capturedH == screenH && solved.touches != null) {
+                performAnswerTouches(solved, capturedW, capturedH, trigger)
+            }
         }
     }
 
+    /** Bind every answer source to the same interaction engine. All pixel/OCR work here is on IO. */
+    private fun prepareTouches(solved: Solved, bmp: Bitmap, masks: List<PxRect>): Solved {
+        return try {
+            val w = bmp.width
+            val h = bmp.height
+            val pixels = IntArray(w * h)
+            bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+            val request = solved.request
+            val q = request?.question
+            val picture = solved.pictureRect
+            fun overlaps(a: PxRect, b: PxRect) = a.left < b.right && b.left < a.right &&
+                a.top < b.bottom && b.top < a.bottom
+            if (picture != null && masks.any { overlaps(it, picture) }) {
+                return solved.copy(touchFailure = "الفقاعة تغطّي الصورة؛ أبعدها ثم اطلب الجواب")
+            }
+            if (request != null && q != null && !q.numeric) {
+                val banner = q.bannerRect ?: return solved
+                val words = q.optionTextRects.takeIf { it.size == q.options.size } ?: q.optionRects
+                if (!ChoiceTouchGuard.isReadyFromLayout(pixels, w, h, banner, q.optionRects, words)) {
+                    return solved.copy(touchFailure = "الأزرار غير جاهزة أو بعض الكتابة محجوب")
+                }
+                val plan = AnswerInteraction.plan(request, AnswerInteraction.Controls(w, h))
+                    ?: return solved.copy(touchFailure = "الإجابة لا تطابق خيارًا واضحًا؛ لم يتم الضغط")
+                return solved.copy(touches = plan.taps, guardRect = banner,
+                    guardStamp = fingerprint(bmp, banner, masks), ignoredRects = masks,
+                    choiceButtons = q.optionRects, choiceWords = words, choiceFromLayout = true,
+                    choiceStamps = words.mapNotNull { fingerprint(bmp, it, masks) },
+                    pictureStamp = picture?.let { fingerprint(bmp, it, masks) })
+            }
+            // Verified skin detectors are optional geometry adapters. A learned number field alone
+            // cannot authorize a guessed keypad; future adapters can supply other verified controls.
+            val visual = GameVisualLayout.detect(pixels, w, h)
+                ?.takeIf { it.kind != GameVisualLayout.Kind.CHOICE_GRID }
+            if (q?.numeric == true || request == null && visual != null) {
+                if (visual == null) return solved.copy(touchFailure = "لوحة الأرقام غير معروفة بعد؛ لم أكتب شيئًا")
+                val field = q?.numericField ?: visual.field ?: return solved
+                val numericRequest = request ?: AnswerInteraction.Request(
+                    Question("", emptyList(), emptyList(), true, 1f, numericField = field),
+                    solved.rawReply, solved.rawReply)
+                val plan = AnswerInteraction.plan(numericRequest, AnswerInteraction.Controls(
+                    w, h, visual.digits, visual.clear, visual.backspace, visual.submit))
+                    ?: return solved.copy(touchFailure = "الإدخال يدعم رقمًا من 1–4 خانات مع زر مسح واضح")
+                val banner = q?.bannerRect?.takeUnless { overlaps(it, field) } ?: visual.questionArea
+                return solved.copy(touches = plan.taps, guardRect = banner,
+                    guardStamp = fingerprint(bmp, banner, masks), ignoredRects = masks,
+                    numericLayout = visual, submitLast = visual.submit != null,
+                    expectedNumber = plan.number, fieldRect = field, fieldStamp = fingerprint(bmp, field, masks),
+                    pictureStamp = picture?.let { fingerprint(bmp, it, masks) })
+            }
+            if (request != null) return solved // never replace a rejected trusted reading with guessed positions
+            // Legacy fallback: independently read all four printed words; candidate/model boxes alone
+            // never authorize a touch. The original reply is retained even when display matching was fuzzy.
+            val choices = OptionWordDetector.detectChoices(pixels, w, h) ?: return solved
+            if (!ChoiceTouchGuard.isReady(pixels, w, h, choices.buttons, choices.words)) return solved
+            val printed = synchronized(ocrLock) { ocr?.readWords(bmp, choices.words) } ?: return solved
+            val printedOptions = printed.map { it.text }
+            val literal = printedOptions.singleOrNull {
+                AnswerInteraction.matchesChoice(solved.rawReply, it, printedOptions, indexRequested = false)
+            } ?: return solved
+            val target = WordAnswerMatcher.match(literal, printed) ?: return solved
+            val actions = TouchPlanner.plan(solved.rawReply, target, emptyMap(), null, w, h) ?: return solved
+            val region = ChoiceTouchGuard.contentArea(w, h, null, choices.buttons)
+            solved.copy(touches = actions, guardRect = region, guardStamp = fingerprint(bmp, region, masks),
+                choiceButtons = choices.buttons, choiceWords = choices.words,
+                choiceStamps = choices.words.mapNotNull { fingerprint(bmp, it, masks) }, ignoredRects = masks)
+        } catch (_: Throwable) { solved }
+    }
+
+    /** Fresh field readback finishes asynchronously; no model lock or native inference on the UI thread. */
+    private fun verifyEntry(solved: Solved, epoch: Long, complete: (Boolean) -> Unit) {
+        val expected = solved.expectedNumber
+        val field = solved.fieldRect
+        val initial = solved.fieldStamp
+        if (expected == null || field == null || initial == null || destroyed || epoch != touchEpoch) {
+            complete(false)
+            return
+        }
+        if (overlayRects().any { it.left < field.right && field.left < it.right &&
+                it.top < field.bottom && field.top < it.bottom }) { complete(false); return }
+        grabFrame()
+        val frame = lastFrame
+        val current = frame?.let { fingerprint(it, field, solved.ignoredRects) }
+        if (frame == null || current == null || !NumericEntryCheck.fieldChanged(initial, current)) {
+            complete(false)
+            return
+        }
+        val snapshot = try { frame.copy(Bitmap.Config.ARGB_8888, false) } catch (_: Throwable) { null }
+        if (snapshot == null) { complete(false); return }
+        scope.launch {
+            val matches = withContext(Dispatchers.IO) {
+                try {
+                    val layout = solved.numericLayout
+                    if (layout != null) {
+                        val pixels = IntArray(snapshot.width * snapshot.height)
+                        snapshot.getPixels(pixels, 0, snapshot.width, 0, 0, snapshot.width, snapshot.height)
+                        if (!GameVisualLayout.inputHasText(pixels, snapshot.width, snapshot.height, layout, field)) {
+                            return@withContext false
+                        }
+                    }
+                    val read = synchronized(ocrLock) { ocr?.readField(snapshot, field) }
+                    read != null && NumericEntryCheck.matches(expected, read.text, read.confidence, changed = true)
+                } catch (_: Throwable) { false }
+                finally { snapshot.recycle() }
+            }
+            complete(matches && !destroyed && epoch == touchEpoch)
+        }
+    }
 
     /** Preserve every question line, including its final word; input fields are outside [area]. */
     private fun fingerprint(bitmap: Bitmap, area: PxRect, ignored: List<PxRect> = emptyList()): IntArray? {
@@ -989,9 +1154,12 @@ class OverlayService : Service() {
         }
         touchPending = true
         val epoch = touchEpoch
+        val window = VolumeKeyService.contextVersion()
         var nextTap = 0
+        var entryRejected = false
         fun canContinue(): Boolean {
             if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
+                window != VolumeKeyService.contextVersion() ||
                 w != screenW || h != screenH || preview != null || projection == null
             ) return false
             return try {
@@ -1001,6 +1169,10 @@ class OverlayService : Service() {
                 if (frame.width != w || frame.height != h ||
                     fingerprint(frame, region, ignored)?.let { TouchFrameGuard.matches(stamp, it) } != true
                 ) return false
+                val picture = solved.pictureRect
+                if (picture != null && (solved.pictureStamp == null ||
+                    fingerprint(frame, picture, ignored)?.let { TouchFrameGuard.matches(solved.pictureStamp, it) } != true
+                )) return false
                 val obstruction = viewRect(bubble)
                 if (obstruction != null && boxes.any { r ->
                     r.left < obstruction.right && r.right > obstruction.left &&
@@ -1013,11 +1185,15 @@ class OverlayService : Service() {
                     if (numeric != null &&
                         !GameVisualLayout.stillVisible(pixels, w, h, numeric, boxes.getOrNull(nextTap - 1))
                     ) return false
+                    if (solved.choiceButtons.isNotEmpty()) {
+                        val ready = if (solved.choiceFromLayout) ChoiceTouchGuard.isReadyFromLayout(
+                            pixels, w, h, region, solved.choiceButtons, solved.choiceWords)
+                        else ChoiceTouchGuard.isReady(pixels, w, h, solved.choiceButtons, solved.choiceWords)
+                        if (!ready) return false
+                    }
                     if (solved.choiceButtons.isNotEmpty() &&
-                        !ChoiceTouchGuard.isReady(pixels, w, h, solved.choiceButtons, solved.choiceWords)
-                    ) return false
-                    if (solved.choiceButtons.isNotEmpty() &&
-                        (solved.choiceStamps.size != 4 || solved.choiceWords.size != 4 || solved.choiceWords.indices.any { index ->
+                        (solved.choiceStamps.size != solved.choiceButtons.size ||
+                            solved.choiceWords.size != solved.choiceButtons.size || solved.choiceWords.indices.any { index ->
                             fingerprint(frame, solved.choiceWords[index], ignored)?.let {
                                 TouchFrameGuard.matches(solved.choiceStamps[index], it)
                             } != true
@@ -1057,11 +1233,15 @@ class OverlayService : Service() {
                 setBusy(true)
                 val ok = VolumeKeyService.tapAnswer(boxes, solved.submitLast, canContinue = {
                     canContinue().also { if (it) nextTap++ }
-                }) { finished ->
+                }, beforeSubmit = { complete -> verifyEntry(solved, epoch) { allowed ->
+                    entryRejected = !allowed
+                    complete(allowed)
+                } }) { finished ->
                     if (destroyed || epoch != touchEpoch) return@tapAnswer
                     touchPending = false
                     setBusy(false)
-                    if (!finished) showPanel("توقف الإدخال؛ لم تُعَد الضغطات تلقائياً. تحقق من الشاشة")
+                    if (!finished) showPanel(if (entryRejected) "تعذّر التحقق من الرقم؛ لم يتم التأكيد"
+                        else "توقف الإدخال؛ لم تُعَد الضغطات تلقائياً. تحقق من الشاشة")
                 }
                 if (!ok) {
                     // A refused request sent no stroke. Accepted but cancelled runs stay consumed.
@@ -1079,13 +1259,22 @@ class OverlayService : Service() {
      * the picture "آخر صورة" shows, and the memory entry it came from (null if not from memory).
      * [isAnswer]: the text is an answer (from memory or the model), not an error or "no question";
      * only an answer gets a haptic tick (see [Reply.isAnswer]).
+     * [source]: which step produced it, for the statistics; no default, so a new path cannot forget it.
      */
-    private class Solved(
+    private data class Solved(
         val text: String,
         val rect: PxRect?,
         val image: Bitmap?,
         val memoryKey: String?,
         val isAnswer: Boolean,
+        val source: AnswerSource,
+        /** A screen to learn the layout of once the answer is shown (see [learnLayout]), or null. */
+        val learn: LearnFrame? = null,
+        /** What to watch the game's result screen for after this answer (see [watchResult]), or null. */
+        val watch: ResultWatch? = null,
+        val request: AnswerInteraction.Request? = null,
+        val rawReply: String = text,
+        val pictureRect: PxRect? = null,
         val touches: List<PxRect>? = null,
         val guardRect: PxRect? = null,
         val guardStamp: IntArray? = null,
@@ -1094,72 +1283,105 @@ class OverlayService : Service() {
         val choiceButtons: List<PxRect> = emptyList(),
         val choiceWords: List<PxRect> = emptyList(),
         val choiceStamps: List<IntArray> = emptyList(),
+        val choiceFromLayout: Boolean = false,
         val ignoredRects: List<PxRect> = emptyList(),
+        val pictureStamp: IntArray? = null,
+        val fieldRect: PxRect? = null,
+        val fieldStamp: IntArray? = null,
+        val expectedNumber: String? = null,
+        val touchFailure: String? = null,
     )
+
+    /**
+     * What a result watch needs: the multiple-choice [question] as read on the device (its option
+     * texts and buttons) and the [answer], the option's text that was shown for it.
+     */
+    private class ResultWatch(val question: Question, val answer: String)
+
+    /**
+     * A result watch for [answer] to [q], or null. Only for a multiple-choice question read on the
+     * device with a button for every option: the colour the game shows has to be tied to an option
+     * on the screen, and a number or a question that was not read has none.
+     */
+    private fun watchFor(q: Question?, answer: String): ResultWatch? =
+        if (q != null && !q.numeric && q.optionRects.size == q.options.size) ResultWatch(q, answer) else null
+
+    /**
+     * A copy of a screen no reader or template could read, kept to ask [client] for its layout in
+     * the background. [bitmap] is ours: [startLearning] or [dropLearning] recycles it.
+     */
+    private class LearnFrame(val bitmap: Bitmap, val masks: List<PxRect>, val fingerprint: String, val client: Answerer)
+
+    /**
+     * What the device read: [question] (null when nothing could be read), a [candidate] template's
+     * reading (only to be checked against the model's answer, never used to answer), the screen's
+     * [fingerprint] when templates were tried (null when [ColorLayout] took the screen), and
+     * whether some template [fits] the screen (then there is nothing new to learn). [picture] is the
+     * picture the question shows, only for a question a TRUSTED template read on a screen where it
+     * pins one (see [shownPicture]); null for everything else.
+     */
+    private class DeviceRead(
+        val question: Question?,
+        val candidate: Pair<String, Question>? = null,
+        val fingerprint: String? = null,
+        val fits: Boolean = false,
+        val picture: ShownPicture? = null,
+    )
+
+    /** The picture a question shows: where it is in the capture (pixels) and its [PictureRegion.hash]. */
+    private class ShownPicture(val rect: PxRect, val hash: String)
 
     /**
      * Answers the question on [bmp] (blocking; run off the main thread). [masks] are the places where
      * our own windows were painted black over it.
      * 1. Read it on the device. If that works: answer from memory when the question was seen before
      *    (unless it is [bypassKey], the answer being corrected), else ask the model with text only and
-     *    remember the answer. A question about a picture skips this: its words do not decide it.
+     *    remember the answer. A question about a picture skips this: its words do not decide it. When
+     *    the game's picture is shown (see [DeviceRead.picture]) the question is asked with the picture
+     *    cut out of the screen, and remembered per picture, whatever its words say (some name no picture:
+     *    "ما هو اسم الشخصية الخيالية الاتية ؟"); only when that cannot answer does the screenshot follow.
      * 2. Otherwise, or when the text answer cannot be used, send the screenshot as before. If the
      *    question was read, an image answer that names one of its options still gets the box and is
      *    remembered. A correction goes straight here: the text request would get the same reply again.
      */
-    private fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?, allowTouches: Boolean): Solved {
+    private fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?): Solved {
         val c = currentClient()
         val memory = AnswerStore.memory
-        val q = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else null
-        val wordsDecide = q != null && !QuestionPrompt.refersToPicture(q.questionText)
+        val read = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else DeviceRead(null)
+        val q = read.question
+        val picture = if (q != null) read.picture else null
         fun resolved(
-            r: AnswerParser.Resolved, image: Bitmap?, key: String? = null, memory: Boolean = false,
-            rawChoiceAnswer: String = r.answer, allowOptionIndex: Boolean = false,
-        ): Solved {
-            val keypad = if (q?.numeric == true) numericLayout(bmp) else null
-            val optionWords = q?.takeIf { !it.numeric }?.let { read ->
-                read.optionTextRects.takeIf { it.size == 4 } ?: read.optionRects
-            }.orEmpty()
-            val touches = q?.let { read ->
-                if (!allowTouches) return@let null
-                if (read.numeric && keypad == null) return@let null
-                if (!read.numeric && read.bannerRect == null) return@let null
-                if (!read.numeric &&
-                    (!ChoiceAnswerGuard.matches(rawChoiceAnswer, r.answer, read.options, allowOptionIndex) ||
-                        !choicesReady(bmp, read.optionRects, optionWords))
-                ) return@let null
-                // Prefer the OCR's actual word box over the whole button.
-                // The entire button remains the visible green highlight.
-                val textRect = r.rect?.let { button ->
-                    val i = read.optionRects.indexOf(button)
-                    if (i >= 0) read.optionTextRects.getOrNull(i) else null
-                }
-                val target = if (textRect != null &&
-                    textRect.left >= r.rect.left && textRect.top >= r.rect.top &&
-                    textRect.right <= r.rect.right && textRect.bottom <= r.rect.bottom
-                ) textRect else r.rect
-                TouchPlanner.plan(r.answer, target, keypad?.digits ?: read.digitKeys,
-                    keypad?.submit ?: read.numericSubmit, bmp.width, bmp.height,
-                    clear = keypad?.clear, backspace = keypad?.backspace, requireReset = read.numeric)
-            }
-            val region = if (touches == null) null else keypad?.questionArea ?: q?.let {
-                choiceGuardArea(bmp, it.bannerRect, it.optionRects)
-            }
-            return Solved(
-                if (memory) "⚡ ${r.answer}" else r.answer,
-                r.rect, image, key, isAnswer = true,
-                touches = touches, guardRect = region,
-                guardStamp = region?.let { fingerprint(bmp, it, masks) },
-                numericLayout = keypad, submitLast = keypad?.submit != null,
-                choiceButtons = if (touches != null && q?.numeric == false) q.optionRects else emptyList(),
-                choiceWords = optionWords,
-                choiceStamps = if (touches != null && q?.numeric == false) {
-                    optionWords.mapNotNull { fingerprint(bmp, it, masks) }
-                } else emptyList(),
-                ignoredRects = masks,
-            )
-        }
+            r: AnswerParser.Resolved, image: Bitmap?, source: AnswerSource,
+            reply: String = r.answer, indexRequested: Boolean = false,
+            key: String? = null,
+        ): Solved = Solved(
+            if (source == AnswerSource.MEMORY) "⚡ ${r.answer}" else r.answer,
+            r.rect, image, key, true, source,
+            watch = if (picture == null) watchFor(q, r.answer) else null,
+            request = q?.let { AnswerInteraction.Request(it, r.answer, reply, indexRequested,
+                literalAnswer = source == AnswerSource.MEMORY || source == AnswerSource.CALCULATOR) },
+            rawReply = reply, pictureRect = picture?.rect,
+        )
+        fun canRemember(r: AnswerParser.Resolved, reply: String, indexRequested: Boolean): Boolean =
+            q != null && (q.numeric || AnswerInteraction.matchesChoice(reply, r.answer, q.options, indexRequested))
+        // The cheapest rung of the answer ladder: arithmetic is computed here, before the memory and the model.
+        if (q != null) Calculator.answer(q)?.let { r -> return resolved(r, shownCopy(bmp), AnswerSource.CALCULATOR) }
+        // A shown picture decides the question, whatever its words say: never the text-only request.
+        val wordsDecide = q != null && picture == null && !QuestionPrompt.refersToPicture(q.questionText)
         var corrected: AnswerMemory.Hit? = null
+        if (q != null && picture != null) {
+            val hit = memory.lookup(q.questionText, q.options, q.numeric, picture.hash)
+            if (hit != null && hit.key == bypassKey) {
+                corrected = hit
+            } else {
+                if (hit != null) {
+                    AnswerParser.resolveStored(q, hit.answer)?.let { r ->
+                        return resolved(r, shownCopy(bmp), AnswerSource.MEMORY, reply = hit.answer, key = hit.key)
+                    }
+                }
+                askWithPicture(c, memory, q, picture, bmp)?.let { return it }
+            }
+        }
         if (q != null && wordsDecide) {
             val hit = memory.lookup(q.questionText, q.options, q.numeric)
             if (hit != null && hit.key == bypassKey) {
@@ -1167,65 +1389,32 @@ class OverlayService : Service() {
             } else {
                 if (hit != null) {
                     AnswerParser.resolveStored(q, hit.answer)?.let { r ->
-                        return resolved(r, shownCopy(bmp), hit.key, memory = true, rawChoiceAnswer = hit.answer)
+                        return resolved(r, shownCopy(bmp), AnswerSource.MEMORY, reply = hit.answer, key = hit.key)
                     }
                 }
                 val reply = c.answerText(QuestionPrompt.build(q))
                 when (reply.kind) {
                     Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
-                        if (q.numeric) memory.put(q.questionText, q.options, true, r.answer)
-                        else ChoiceAnswerGuard.rememberChoice(memory, q.questionText, reply.text, r.answer,
-                            q.options, allowOptionIndex = true)
-                        return resolved(r, shownCopy(bmp), rawChoiceAnswer = reply.text, allowOptionIndex = true)
+                        if (canRemember(r, reply.text, true)) memory.put(q.questionText, q.options, q.numeric, r.answer)
+                        return resolved(r, shownCopy(bmp), AnswerSource.TEXT, reply.text, indexRequested = true)
                     }
                     // Quota, key, region, no connection: the image request would fail the same way.
-                    Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false)
+                    Reply.Kind.ERROR -> return Solved(
+                        reply.text, null, null, null, isAnswer = false, source = AnswerSource.FAILED,
+                    )
                     Reply.Kind.EMPTY -> {}
                 }
             }
         }
-        // Screen words are localized from the screenshot, not guessed from
-        // option indices or normalized coordinates returned by the model.
-        val detectQuizImage = q == null
-        val autoTouchRequested = detectQuizImage && allowTouches
-        var choiceWords: List<PxRect>? = null
-        var choiceButtons: List<PxRect>? = null
-        var visual: GameVisualLayout.Detected? = null
-        if (detectQuizImage) {
-            try {
-                val pixels = IntArray(bmp.width * bmp.height)
-                bmp.getPixels(pixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-                visual = GameVisualLayout.detect(pixels, bmp.width, bmp.height)
-                if (visual == null || visual?.kind == GameVisualLayout.Kind.CHOICE_GRID) {
-                    val choices = OptionWordDetector.detectChoices(pixels, bmp.width, bmp.height)
-                    if (choices != null && ChoiceTouchGuard.isReady(pixels, bmp.width, bmp.height,
-                            choices.buttons, choices.words)
-                    ) {
-                        choiceWords = choices.words
-                        choiceButtons = choices.buttons
-                    }
-                }
-            } catch (_: Exception) { /* no geometry means no automatic tap */ }
-        }
-
         val firstImageReply = c.answer(bmp)
-        // A large animated HUD can fool the image model into missing an obvious
-        // central question. When real answer text/keypad is *visible*, retry on
-        // a tightly focused image with the overlay and HUD removed.
-        val imageReply = if (detectQuizImage &&
-            (choiceWords != null || visual != null) &&
-            firstImageReply.kind == Reply.Kind.ANSWER &&
-            ScreenImage.isNoQuestion(firstImageReply.text)
-        ) {
-            val zoom = ScreenImage.focusQuiz(bmp,
-                visual?.kind == GameVisualLayout.Kind.NUMERIC_WHITE)
+        val fallbackKind = if (q == null && firstImageReply.kind == Reply.Kind.ANSWER &&
+            ScreenImage.isNoQuestion(firstImageReply.text)) legacyVisibleKind(bmp) else null
+        val imageReply = if (fallbackKind != null) {
+            val focused = ScreenImage.focusQuiz(bmp, fallbackKind == GameVisualLayout.Kind.NUMERIC_WHITE)
             try {
-                val retry = c.answer(zoom)
-                if (retry.kind == Reply.Kind.ANSWER &&
-                    !ScreenImage.isNoQuestion(retry.text)) retry else firstImageReply
-            } finally {
-                zoom.recycle()
-            }
+                val retry = c.answer(focused)
+                if (retry.isAnswer) retry else firstImageReply
+            } finally { if (focused !== bmp) focused.recycle() }
         } else firstImageReply
         val text = imageReply.text
         // An error message is never matched against the options (or taken for a number).
@@ -1237,80 +1426,160 @@ class OverlayService : Service() {
                 AnswerParser.resolveImageAnswer(q, text)
             }
             if (r != null) {
-                if (wordsDecide && (q.numeric || ChoiceAnswerGuard.matches(text, r.answer, q.options, false))) {
+                if ((wordsDecide || picture != null) && canRemember(r, text, false)) {
                     // The entry that was corrected goes, but only if it was this question's own: a fuzzy hit
                     // belongs to another question, whose answer is still right for it.
                     if (corrected != null && corrected.exact) memory.remove(corrected.key)
-                    if (q.numeric) memory.put(q.questionText, q.options, true, r.answer)
-                    else ChoiceAnswerGuard.rememberChoice(memory, q.questionText, text, r.answer,
-                        q.options, allowOptionIndex = false)
+                    memory.put(q.questionText, q.options, q.numeric, r.answer, picture?.hash)
                 }
-                return resolved(r, c.lastSent, rawChoiceAnswer = text)
+                // Not for a question about a picture: the memory is never read for it (words do not decide it).
+                return resolved(r, c.lastSent, AnswerSource.IMAGE, text).copy(
+                    watch = if (wordsDecide) watchFor(q, r.answer) else null)
             }
         }
-        // For 2-column questions an option NUMBER is not sufficient.
-        // Read the actual four Arabic word regions and match the model's
-        // literal answer against them. No unique OCR agreement -> no tap.
-        if (autoTouchRequested && choiceWords != null && choiceButtons != null &&
-            imageReply.kind == Reply.Kind.ANSWER
-        ) {
-            val printed = synchronized(ocrLock) {
-                try { ocr?.readWords(bmp, choiceWords) } catch (_: Throwable) { null }
+        read.candidate?.let { (id, cq) ->
+            val check = CandidateCheck.judge(cq, imageReply.isAnswer, text)
+            val now = System.currentTimeMillis()
+            when (check.verdict) {
+                CandidateCheck.Verdict.CONFIRMED -> TemplateStore.templates.recordSuccess(id, now)
+                CandidateCheck.Verdict.REFUTED -> TemplateStore.templates.recordFailure(id, now)
+                CandidateCheck.Verdict.UNKNOWN -> {}
             }
-            val word = printed?.let { WordAnswerMatcher.match(text, it) }
-            if (word != null) {
-                val actions = TouchPlanner.plan(text, word, emptyMap(), null,
-                    bmp.width, bmp.height)
-                if (actions != null) {
-                    val guard = choiceGuardArea(bmp, null, choiceButtons)
-                    return Solved(text, word, c.lastSent, null, isAnswer = true,
-                        touches = actions, guardRect = guard,
-                        guardStamp = fingerprint(bmp, guard, masks),
-                        choiceButtons = choiceButtons, choiceWords = choiceWords,
-                        choiceStamps = choiceWords.mapNotNull { fingerprint(bmp, it, masks) },
-                        ignoredRects = masks)
-                }
+            // The answer came from the screenshot; the candidate only says where its button is.
+            check.resolved?.let { r ->
+                return Solved(r.answer, r.rect, c.lastSent, null, isAnswer = true, source = AnswerSource.IMAGE, rawReply = text)
             }
         }
-        // Numeric questions keep the dedicated verified keypad path.
-        // Never infer 2-column choice taps from model-supplied indices.
-        if (autoTouchRequested && visual != null &&
-            visual.kind != GameVisualLayout.Kind.CHOICE_GRID &&
-            imageReply.kind == Reply.Kind.ANSWER
-        ) {
-            val number = AnswerParser.numberOnly(text)
-            val actions = number?.let {
-                TouchPlanner.plan(it, null, visual.digits, visual.submit,
-                    bmp.width, bmp.height, clear = visual.clear, backspace = visual.backspace, requireReset = true)
-            }
-            if (actions != null) {
-                val guard = visual.questionArea
-                return Solved(text, null, c.lastSent, null, isAnswer = true,
-                    touches = actions, guardRect = guard,
-                    guardStamp = fingerprint(bmp, guard, masks),
-                    numericLayout = visual, submitLast = visual.submit != null, ignoredRects = masks)
-            }
-        }
-        return Solved(text, null, c.lastSent, null, imageReply.isAnswer)
+        val source = if (imageReply.isAnswer) AnswerSource.IMAGE else AnswerSource.FAILED
+        return Solved(
+            text, null, c.lastSent, null, imageReply.isAnswer, source,
+            learnFrameFor(read, bmp, masks, c, imageReply, text),
+        )
     }
 
-    private fun numericLayout(bitmap: Bitmap): GameVisualLayout.Detected? = try {
-        val pixels = IntArray(bitmap.width * bitmap.height)
-        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-        GameVisualLayout.detect(pixels, bitmap.width, bitmap.height)?.takeIf {
-            it.kind != GameVisualLayout.Kind.CHOICE_GRID
+    /**
+     * Asks the model the question of [q] together with its picture, cut out of [bmp] at [pic]. An answer
+     * that names an option (or is the number) is remembered for this picture and returned. An error
+     * (quota, key, region, no connection) is returned as the answer: the screenshot request would fail
+     * the same way. Null when the picture cannot answer (the client does not support it, the reply is
+     * empty, refused or not one of the options, the picture cannot be cut out): the screenshot decides.
+     */
+    private fun askWithPicture(c: Answerer, memory: AnswerMemory, q: Question, pic: ShownPicture, bmp: Bitmap): Solved? {
+        val crop = cropOf(bmp, pic.rect) ?: return null
+        try {
+            val reply = c.answerPicture(QuestionPrompt.buildPicture(q), crop)
+            when (reply.kind) {
+                Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
+                    if (q.numeric || AnswerInteraction.matchesChoice(reply.text, r.answer, q.options, true)) {
+                        memory.put(q.questionText, q.options, q.numeric, r.answer, pic.hash)
+                    }
+                    // "آخر صورة" shows the picture that was sent; the crop itself is recycled below.
+                    val shown = try {
+                        crop.copy(Bitmap.Config.ARGB_8888, false)
+                    } catch (t: Throwable) {
+                        null
+                    }
+                    return Solved(r.answer, r.rect, shown, null, isAnswer = true, source = AnswerSource.PICTURE,
+                        request = AnswerInteraction.Request(q, r.answer, reply.text, indexRequested = true),
+                        rawReply = reply.text, pictureRect = pic.rect)
+                }
+                Reply.Kind.ERROR -> return Solved(reply.text, null, null, null, isAnswer = false, source = AnswerSource.FAILED)
+                Reply.Kind.EMPTY -> {}
+            }
+            return null
+        } finally {
+            if (crop !== bmp) crop.recycle()
+        }
+    }
+
+    private fun legacyVisibleKind(bitmap: Bitmap): GameVisualLayout.Kind? = try {
+        val w = bitmap.width
+        val h = bitmap.height
+        val pixels = IntArray(w * h)
+        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+        val visual = GameVisualLayout.detect(pixels, w, h)
+        if (visual != null && visual.kind != GameVisualLayout.Kind.CHOICE_GRID) visual.kind else {
+            val choices = OptionWordDetector.detectChoices(pixels, w, h)
+            if (choices != null && ChoiceTouchGuard.isReady(pixels, w, h, choices.buttons, choices.words))
+                GameVisualLayout.Kind.CHOICE_GRID else null
         }
     } catch (_: Throwable) { null }
 
-    private fun choicesReady(bitmap: Bitmap, buttons: List<PxRect>, words: List<PxRect>): Boolean = try {
-        val pixels = IntArray(bitmap.width * bitmap.height)
-        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-        ChoiceTouchGuard.isReady(pixels, bitmap.width, bitmap.height, buttons, words)
-    } catch (_: Throwable) { false }
+    /** [rect] of [bmp], clamped to it; null when nothing is left or the crop cannot be made. The caller recycles it. */
+    private fun cropOf(bmp: Bitmap, rect: PxRect): Bitmap? {
+        val left = rect.left.coerceIn(0, bmp.width)
+        val top = rect.top.coerceIn(0, bmp.height)
+        val right = rect.right.coerceIn(0, bmp.width)
+        val bottom = rect.bottom.coerceIn(0, bmp.height)
+        if (right <= left || bottom <= top) return null
+        return try {
+            Bitmap.createBitmap(bmp, left, top, right - left, bottom - top)
+        } catch (t: Throwable) {
+            null
+        }
+    }
 
-    /** Include the pinned photo and all options, so an unchanged caption cannot reuse a different image. */
-    private fun choiceGuardArea(bitmap: Bitmap, banner: PxRect?, buttons: List<PxRect>): PxRect {
-        return ChoiceTouchGuard.contentArea(bitmap.width, bitmap.height, banner, buttons)
+    /**
+     * A copy of [bmp] to learn its layout from, or null. Only for a screen the templates were tried
+     * on (not the original game, which [ColorLayout] reads), that none of them fits, that the model
+     * answered (not an error or "no question"), and only when [learningGate] lets a request go.
+     */
+    private fun learnFrameFor(read: DeviceRead, bmp: Bitmap, masks: List<PxRect>, c: Answerer, reply: Reply, text: String): LearnFrame? {
+        val fp = read.fingerprint ?: return null
+        if (read.fits || read.question != null || !reply.isAnswer || ScreenImage.isNoQuestion(text)) return null
+        if (!learningGate.tryStart(fp, SystemClock.elapsedRealtime())) return null
+        val copy = try {
+            bmp.copy(Bitmap.Config.ARGB_8888, false)
+        } catch (t: Throwable) {
+            null
+        }
+        if (copy == null) {
+            learningGate.finish(fp, learned = false, now = SystemClock.elapsedRealtime())
+            return null
+        }
+        return LearnFrame(copy, masks, fp, c)
+    }
+
+    private fun startLearning(f: LearnFrame) {
+        scope.launch(Dispatchers.IO) {
+            var learned = false
+            try {
+                learned = learnLayout(f)
+            } catch (t: Throwable) {
+                // Background work: a failure only means nothing was learned this time.
+            } finally {
+                f.bitmap.recycle()
+                learningGate.finish(f.fingerprint, learned, SystemClock.elapsedRealtime())
+            }
+        }
+    }
+
+    private fun dropLearning(f: LearnFrame) {
+        f.bitmap.recycle()
+        learningGate.finish(f.fingerprint, learned = false, now = SystemClock.elapsedRealtime())
+    }
+
+    /**
+     * Asks the model where the question and options of [f] are, builds a CANDIDATE template from the
+     * reply, and keeps it only when reading the same screen with it gives what the model saw
+     * ([TemplateLearner.confirms]). Blocking: run on Dispatchers.IO. True when a template was kept.
+     */
+    private fun learnLayout(f: LearnFrame): Boolean {
+        val answer = f.client.layout(f.bitmap) ?: return false
+        val reply = LayoutReplyParser.parse(answer.text) ?: return false
+        val w = f.bitmap.width
+        val h = f.bitmap.height
+        val pixels = IntArray(w * h)
+        f.bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+        val now = System.currentTimeMillis()
+        val t = TemplateLearner.build(reply, answer.geometry, pixels, w, h, f.masks, UUID.randomUUID().toString(), now)
+            ?: return false
+        val layout = TemplateReader.layoutFor(t, pixels, w, h) ?: return false
+        val read = readWith(f.bitmap, pixels, w, h, ColorLayout.Result(layout, null), layout, f.masks, t.language)
+            ?: return false
+        if (!TemplateLearner.confirms(read, reply)) return false
+        TemplateStore.templates.add(t)
+        return true
     }
 
     /**
@@ -1323,23 +1592,23 @@ class OverlayService : Service() {
      * failures (missing library, out of memory) are Errors, not Exceptions: they must lead to the
      * screenshot path, never crash the service, hence Throwable.
      */
-    private fun readQuestion(bmp: Bitmap, masks: List<PxRect>): Question? {
+    private fun readQuestion(bmp: Bitmap, masks: List<PxRect>): DeviceRead {
         // Hardware bitmaps cannot be read pixel by pixel.
         var copy: Bitmap? = null
         try {
             val src = if (bmp.config == Bitmap.Config.HARDWARE) {
                 bmp.copy(Bitmap.Config.ARGB_8888, false).also { copy = it }
             } else bmp
-            if (src == null) return null
+            if (src == null) return DeviceRead(null)
             val w = src.width
             val h = src.height
             val pixels = IntArray(w * h)
             src.getPixels(pixels, 0, w, 0, 0, w, h)
             val inspected = colorLayout.inspect(pixels, w, h)
             val layout = inspected.layout ?: return readWithTemplates(src, pixels, w, h, masks)
-            return readWith(src, pixels, w, h, inspected, layout, masks, null)
+            return DeviceRead(readWith(src, pixels, w, h, inspected, layout, masks, null))
         } catch (t: Throwable) {
-            return null
+            return DeviceRead(null)
         } finally {
             copy?.recycle()
         }
@@ -1379,15 +1648,20 @@ class OverlayService : Service() {
 
     /**
      * Reads a screen that [ColorLayout] declined with a learned layout. Only TRUSTED templates are
-     * used to read: candidates are confirmed in step 2, when the cloud reply is compared with what
-     * was read. A template that does not fit the screen is not a failure (another mode or screen of
-     * the game), but a fitting template whose reading is declined is, and counts against it.
+     * used to read. A template that does not fit the screen is not a failure (another mode or screen
+     * of the game), but a fitting template whose reading is declined is, and counts against it.
+     *
+     * When no trusted template reads it, the first fitting CANDIDATE that reads it is returned as
+     * [DeviceRead.candidate]: it is checked against the model's answer ([CandidateCheck]), which is
+     * how candidates earn their way to TRUSTED.
      */
-    private fun readWithTemplates(src: Bitmap, pixels: IntArray, w: Int, h: Int, masks: List<PxRect>): Question? {
+    private fun readWithTemplates(src: Bitmap, pixels: IntArray, w: Int, h: Int, masks: List<PxRect>): DeviceRead {
         val fp = ScreenFingerprint.of(pixels, w, h, masks)
         val templates = TemplateStore.templates
-        for (t in templates.find(fp, null, trustedOnly = true)) {
+        var fits = false
+        for (t in templates.find(fp, null, trustedOnly = false)) {
             if (!TemplateReader.fits(t, pixels, w, h)) continue
+            fits = true
             val now = System.currentTimeMillis()
             val tl = TemplateReader.layoutFor(t, pixels, w, h)
             if (tl == null) {
@@ -1395,13 +1669,28 @@ class OverlayService : Service() {
                 continue
             }
             val q = readWith(src, pixels, w, h, ColorLayout.Result(tl, null), tl, masks, t.language)
-            if (q != null) {
-                templates.recordSuccess(t.id, now)
-                return q
+            if (q == null) {
+                templates.recordFailure(t.id, now)
+                continue
             }
-            templates.recordFailure(t.id, now)
+            // A candidate's reading is judged later, against the answer; only a trusted one answers.
+            if (t.state != TemplateState.TRUSTED) return DeviceRead(null, t.id to q, fp, fits = true)
+            templates.recordSuccess(t.id, now)
+            return DeviceRead(q, null, fp, fits = true, picture = shownPicture(t, pixels, w, h))
         }
-        return null
+        return DeviceRead(null, null, fp, fits)
+    }
+
+    /**
+     * The picture the question on this screen shows, when [t] says where its game pins one
+     * ([LayoutTemplate.picture]) and one is pinned now ([PictureRegion.isShown] on the right half of that
+     * rect, which is plain background otherwise). Null for a template without a picture rect, which is
+     * every template but the parchment grid, and for a question without a picture.
+     */
+    private fun shownPicture(t: LayoutTemplate, pixels: IntArray, w: Int, h: Int): ShownPicture? {
+        val rect = t.picture?.toPx(w, h) ?: return null
+        if (!PictureRegion.isShown(pixels, w, h, PictureRegion.detectArea(rect))) return null
+        return ShownPicture(rect, PictureRegion.hash(pixels, w, h, rect))
     }
 
     /**
@@ -1553,13 +1842,121 @@ class OverlayService : Service() {
         if (Prefs.highlightAnswer(this)) showHighlight(box.rect)
     }
 
+    private fun stopResultWatch() {
+        watchJob?.cancel()
+        watchJob = null
+    }
+
+    /**
+     * Starts watching the screen for the game's result of the question in [w] (replacing any watch
+     * before it). [base] is the question screen's luminance grid from before the answer, the
+     * reference for "still the same screen"; the option buttons are left out of it here, since they
+     * are exactly what the result changes.
+     */
+    private fun startResultWatch(w: ResultWatch, base: IntArray) {
+        stopResultWatch()
+        for (r in w.question.optionRects) {
+            FrameSignature.ignoreRect(base, SIG_SIZE, screenW, screenH, r.left, r.top, r.right, r.bottom)
+        }
+        watchJob = scope.launch {
+            try {
+                watchResult(w, base)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                // Learning is best effort: whatever went wrong, the answer already shown stands.
+            }
+        }
+    }
+
+    /**
+     * After an answer, quiz games colour the correct option for a moment. Every [WATCH_INTERVAL_MS],
+     * for at most [WATCH_MAX_MS], this reads the newest frame ([ResultReader.correctOption], on
+     * Dispatchers.Default) and, once the same option is green in two checks in a row
+     * ([ResultConfirmer]), makes the answer memory say what the game showed (see [learnFromResult]).
+     *
+     * It stops without learning when
+     * - the screen no longer looks like the question's: the screen, leaving the option buttons out,
+     *   moved on by more than [WATCH_SAME_SCREEN_DIFF] (a new question, another app), the screen was
+     *   rotated, or a frame cannot be read. A result screen of a game that changes more than the
+     *   buttons is then not learned from: declining is the safe side;
+     * - the options could not be judged in 3 checks in a row (covered by our own windows, see
+     *   [ResultConfirmer]).
+     * Our green box is not among the masks (it sits outside the buttons, and the reader samples only
+     * their interior); the bubble, the panel and the preview are, as the reader cannot see through them.
+     *
+     * Frames are grabbed on the main thread, as everywhere. In auto mode the tick takes the new frames
+     * and the watch only reads the one it kept: a frame taken here would be missing from the tick,
+     * which would then take the screen for unchanged and not send the next question. The kept frame
+     * is copied before the pixel work, because the next tick may recycle it.
+     */
+    private suspend fun watchResult(w: ResultWatch, base: IntArray) {
+        val q = w.question
+        val optionRects = q.optionRects.map { Rect(it.left, it.top, it.right, it.bottom) }
+        val confirmer = ResultConfirmer()
+        var pixels: IntArray? = null // one buffer for every check of this watch
+        val until = SystemClock.uptimeMillis() + WATCH_MAX_MS
+        while (SystemClock.uptimeMillis() < until) {
+            delay(WATCH_INTERVAL_MS)
+            if (!autoMode) grabFrame()
+            val frame = lastFrame ?: continue
+            if (frame.width != screenW || frame.height != screenH) return
+            val overlays = overlayRects()
+            val sig = try {
+                signature(frame, overlays + listOfNotNull(viewRect(highlight)) + optionRects)
+            } catch (t: Throwable) {
+                return
+            }
+            if (FrameSignature.diff(sig, base) > WATCH_SAME_SCREEN_DIFF) return
+            val masks = overlays.map { PxRect(it.left, it.top, it.right, it.bottom) }
+            val snapshot = try {
+                frame.copy(Bitmap.Config.ARGB_8888, false)
+            } catch (t: Throwable) {
+                null
+            } ?: return
+            val reading = try {
+                withContext(Dispatchers.Default) {
+                    try {
+                        val width = snapshot.width
+                        val height = snapshot.height
+                        val buffer = pixels?.takeIf { it.size == width * height }
+                            ?: IntArray(width * height).also { pixels = it }
+                        snapshot.getPixels(buffer, 0, width, 0, 0, width, height)
+                        val usable = ResultReader.optionsUsable(width, height, q.optionRects, masks)
+                        Pair(usable, ResultReader.correctOption(buffer, width, height, q.optionRects, masks))
+                    } catch (t: Throwable) {
+                        null
+                    }
+                }
+            } finally {
+                snapshot.recycle() // withContext has finished with it, also when this watch was cancelled
+            } ?: return
+            when (val step = confirmer.offer(reading.first, reading.second)) {
+                is ResultConfirmer.Step.Act -> {
+                    learnFromResult(w, step.index)
+                    return
+                }
+                ResultConfirmer.Step.GiveUp -> return
+                ResultConfirmer.Step.Wait -> {}
+            }
+        }
+    }
+
+    /**
+     * The game showed option [index] of the watched question as the correct one. When that is not
+     * the answer that was shown, the memory entry for the question is replaced with the game's: the
+     * game knows, the memory (or the model it came from) was wrong. When it is the same, nothing to do.
+     */
+    private fun learnFromResult(w: ResultWatch, index: Int) {
+        val q = w.question
+        val correct = q.options.getOrNull(index) ?: return
+        if (AnswerMemory.keyOf(correct) == AnswerMemory.keyOf(w.answer)) return
+        AnswerStore.memory.put(q.questionText, q.options, false, correct)
+    }
+
     private fun toggleAuto() {
+        cancelTouches()
         autoMode = !autoMode
-        val wasTouching = touchPending
-        touchEpoch++
-        VolumeKeyService.cancelAnswer()
-        touchPending = false
-        if (wasTouching) setBusy(false)
         if (autoMode) touchAttempts.reset()
         updateBubbleStyle()
         Toast.makeText(this, if (autoMode) "الوضع التلقائي: مفعّل" else "الوضع التلقائي: متوقف", Toast.LENGTH_SHORT).show()
@@ -1640,11 +2037,10 @@ class OverlayService : Service() {
         // projection.stop() below calls onStop(): that is our own stop, not one to offer a restart for.
         stoppingByUs = true
         destroyed = true
+        cancelTouches()
         volumeTrigger = null
-        touchEpoch++
-        VolumeKeyService.cancelAnswer()
-        touchPending = false
         autoJob?.cancel()
+        stopResultWatch()
         scope.cancel()
         handler.removeCallbacksAndMessages(null)
         hidePanel()

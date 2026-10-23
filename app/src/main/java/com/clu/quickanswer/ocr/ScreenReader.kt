@@ -110,6 +110,7 @@ class ScreenReader(
             optionRects = found.buttons,
             numeric = found.numeric,
             meanConfidence = confidence,
+            numericField = found.numericField,
             digitKeys = found.digitKeys,
             bannerRect = found.banner,
             numericSubmit = found.numericSubmit,

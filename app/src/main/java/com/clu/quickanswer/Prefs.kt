@@ -8,7 +8,7 @@ object Prefs {
     const val DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5"
 
     // Bumped when the meaning of the saved Gemini model changes (see GeminiModels.migrateSavedModel).
-    private const val MODEL_VERSION = 2
+    private const val MODEL_VERSION = 3
 
     private fun sp(c: Context) = c.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
@@ -51,6 +51,17 @@ object Prefs {
     /** Draw a green box around the right option on screen. Read at each answer. */
     fun highlightAnswer(c: Context): Boolean = sp(c).getBoolean("highlight_answer", true)
 
+    /**
+     * Watch the game's result screen after an answer and, when it colours a different option as
+     * correct than the one remembered, fix the answer memory (see [com.clu.quickanswer.ocr.ResultReader]).
+     * Read each time an answer is shown.
+     */
+    fun learnFromResults(c: Context): Boolean = sp(c).getBoolean("learn_from_results", true)
+
+    fun saveLearnFromResults(c: Context, on: Boolean) {
+        sp(c).edit().putBoolean("learn_from_results", on).apply()
+    }
+
     /** A short haptic tick when an answer is shown (not for errors). Read each time one is shown. */
     fun vibrateOnAnswer(c: Context): Boolean = sp(c).getBoolean("vibrate_on_answer", true)
 
@@ -70,6 +81,16 @@ object Prefs {
 
     fun saveVolumeKey(c: Context, on: Boolean) {
         sp(c).edit().putBoolean("volume_key", on).apply()
+    }
+
+    /**
+     * The welcome dialog (see MainActivity) was dismissed: it is shown once, on the first launch,
+     * and again after a rotation or a crash until the person has seen it.
+     */
+    fun welcomeShown(c: Context): Boolean = sp(c).getBoolean("welcome_shown", false)
+
+    fun saveWelcomeShown(c: Context) {
+        sp(c).edit().putBoolean("welcome_shown", true).apply()
     }
 
     fun saveReading(c: Context, smart: Boolean, highlight: Boolean) {
@@ -98,6 +119,12 @@ object Prefs {
     fun quotaState(c: Context): String = sp(c).getString("quota_state", "") ?: ""
     fun saveQuotaState(c: Context, state: String) {
         sp(c).edit().putString("quota_state", state).apply()
+    }
+
+    /** The [com.clu.quickanswer.ocr.BuiltinTemplates.VERSION] last merged into the template store, 0 if none. */
+    fun builtinTemplatesVersion(c: Context): Int = sp(c).getInt("builtin_templates_version", 0)
+    fun saveBuiltinTemplatesVersion(c: Context, version: Int) {
+        sp(c).edit().putInt("builtin_templates_version", version).apply()
     }
 
     /** Thinking options learned per model (see ThinkingMemory.encode). */

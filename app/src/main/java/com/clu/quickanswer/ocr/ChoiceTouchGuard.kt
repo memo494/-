@@ -13,6 +13,32 @@ import kotlin.math.sqrt
 object ChoiceTouchGuard {
     private data class Surface(val light: Int, val red: Int, val green: Int, val blue: Int)
 
+    /** A trusted reader/template supplies all regions; no game-wide coordinates or four-choice assumption. */
+    fun isReadyFromLayout(
+        argb: IntArray, width: Int, height: Int, question: PxRect,
+        buttons: List<PxRect>, words: List<PxRect>,
+    ): Boolean {
+        if (width < 200 || height < 200 || argb.size.toLong() < width.toLong() * height ||
+            buttons.size !in 2..8 || words.size != buttons.size) return false
+        fun valid(r: PxRect) = r.left >= 0 && r.top >= 0 && r.right <= width && r.bottom <= height &&
+            r.width >= 8 && r.height >= 8
+        if (!valid(question) || buttons.any { !valid(it) } || words.any { !valid(it) }) return false
+        // An embedded landscape screenshot in a tall image viewer is not a portrait quiz UI.
+        val top = minOf(question.top, buttons.minOf { it.top })
+        val bottom = maxOf(question.bottom, buttons.maxOf { it.bottom })
+        if (height > width && bottom - top < height * 0.55) return false
+        for (i in buttons.indices) {
+            val b = buttons[i]
+            val word = words[i]
+            if (b.width < 24 || b.height < 16 || b.width.toDouble() / b.height !in 1.0..40.0 ||
+                word.left < b.left || word.top < b.top || word.right > b.right || word.bottom > b.bottom ||
+                overlaps(question, b)) return false
+            if (buttons.drop(i + 1).any { overlaps(b, it) }) return false
+            if (inspect(argb, width, height, b, word, fromLayout = true) == null) return false
+        }
+        return true
+    }
+
     /** Include the pinned photo as well as the caption/options; keep the animated timer below it out. */
     fun contentArea(width: Int, height: Int, banner: PxRect?, buttons: List<PxRect>): PxRect {
         require(width > 0 && height > 0 && buttons.size == 4)
@@ -58,6 +84,7 @@ object ChoiceTouchGuard {
 
     private fun inspect(
         argb: IntArray, width: Int, height: Int, button: PxRect, word: PxRect,
+        fromLayout: Boolean = false,
     ): Surface? {
         // Inset enough to tolerate approximate button edges and avoid counting a dark bevel as
         // Arabic ink on a white button. Whole-button OCR fallback boxes are intentionally allowed.
@@ -89,8 +116,12 @@ object ChoiceTouchGuard {
             quantile(green, samples, 50), quantile(blue, samples, 50))
         val chroma = max(surface.red, max(surface.green, surface.blue)) -
             min(surface.red, min(surface.green, surface.blue))
-        val dark = surface.light in 20..175 && chroma <= 45
-        val white = surface.light >= 220 && chroma <= 35
+        // A filled green result must not become a new answer target. Other colours are allowed
+        // only on the reader-supplied path, with the same edge/contrast tests below.
+        if (fromLayout && surface.green >= 90 && surface.green - surface.red >= 40 &&
+            surface.green - surface.blue >= 30) return null
+        val dark = if (fromLayout) surface.light in 15..175 else surface.light in 20..175 && chroma <= 45
+        val white = if (fromLayout) surface.light > 175 else surface.light >= 220 && chroma <= 35
         if (!dark && !white) return null
         // Keep the trimmed range on the background side of the known text polarity. Long names
         // can cover 20–30% of the interior in ink; a symmetric 20–80% range would reject them.
@@ -124,9 +155,9 @@ object ChoiceTouchGuard {
                     val r = (pixel shr 16) and 255
                     val g = (pixel shr 8) and 255
                     val b = pixel and 255
-                    value >= max(205, surface.light + 75) &&
-                        max(r, max(g, b)) - min(r, min(g, b)) <= 70
-                } else value <= min(150, surface.light - 75)
+                    value >= max(if (fromLayout) 170 else 205, surface.light + 75) &&
+                        (fromLayout || max(r, max(g, b)) - min(r, min(g, b)) <= 70)
+                } else value <= min(if (fromLayout) 170 else 150, surface.light - 75)
                 if (!isInk) continue
                 ink++
                 firstX = min(firstX, x); lastX = max(lastX, x)

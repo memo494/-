@@ -187,8 +187,7 @@ object AnswerParser {
      */
     fun resolveImageAnswer(q: Question, reply: String): Resolved? {
         if (q.numeric) return null
-        // Image models can return a position ("2") instead of the option text.
-        // resolve() preserves the guard against ambiguous numeric option labels.
-        return resolve(q, reply)
+        // A screenshot's bare position cannot confirm a candidate layout or authorize a choice.
+        return matchLabelled(reply, q.options)?.let { option(q, it) }
     }
 }

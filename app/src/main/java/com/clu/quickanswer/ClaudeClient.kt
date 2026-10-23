@@ -41,6 +41,21 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
     override fun answerText(prompt: String): Reply = send(ClaudeApi.requestBody(model, prompt))
 
     /**
+     * A question already read on the device, with its picture (see [Answerer.answerPicture]): the
+     * picture and the prompt in one request, sent, retried and mapped to errors like the others.
+     * [lastSent] is the picture as sent.
+     */
+    override fun answerPicture(prompt: String, picture: Bitmap): Reply {
+        val prepared = try {
+            ScreenImage.preparePicture(picture)
+        } catch (e: Exception) {
+            return Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
+        }
+        lastSent = prepared.kept
+        return send(ClaudeApi.requestBody(model, prompt, prepared.base64))
+    }
+
+    /**
      * The screen's layout, for learning a template (see [Answerer.layout]): ONE request, without
      * [send]'s retry, so learning in the background never takes time from the answers. [lastSent]
      * and [lastModel] stay as they are. Null on any failure: a black screen, a status other than 2xx,

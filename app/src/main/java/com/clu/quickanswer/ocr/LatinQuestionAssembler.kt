@@ -60,7 +60,15 @@ object LatinQuestionAssembler {
             numeric = layout.numeric,
             // Text.Line.getConfidence() exists in ML Kit Text Recognition v2 and the bundled
             // model returns real values; the gate above already rejected unavailable (0) ones.
-            meanConfidence = overallMean
+            meanConfidence = overallMean,
+            bannerRect = layout.banner,
+            numericField = layout.numericField,
+            digitKeys = layout.digitKeys,
+            numericSubmit = layout.numericSubmit,
+            optionTextRects = layout.buttons.map { button ->
+                val words = linesInside(button, segments).map { it.rect }
+                PxRect(words.minOf { it.left }, words.minOf { it.top }, words.maxOf { it.right }, words.maxOf { it.bottom })
+            },
         )
     }
 

@@ -20,11 +20,53 @@
             android:textSize="28sp"
             android:textStyle="bold" />
 
+        <TextView
+            style="@style/CluSectionHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="التشغيل" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
+
+        <Button
+            android:id="@+id/overlayButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="منح صلاحية الظهور فوق التطبيقات" />
+
+        <Button
+            android:id="@+id/startButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="تشغيل" />
+
+        <Button
+            android:id="@+id/stopButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="إيقاف" />
+
+        <TextView
+            style="@style/CluSectionHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="النموذج" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
+
         <RadioGroup
             android:id="@+id/providerGroup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="8dp"
             android:orientation="vertical">
 
             <RadioButton
@@ -39,6 +81,64 @@
                 android:layout_height="wrap_content"
                 android:text="Claude (مدفوع، أدق)" />
         </RadioGroup>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="مفتاح Gemini API"
+            android:textAlignment="viewStart" />
+
+        <EditText
+            android:id="@+id/apiKeyInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="الصق المفتاح هنا"
+            android:importantForAutofill="no"
+            android:inputType="textPassword"
+            android:layoutDirection="ltr"
+            android:textDirection="ltr"
+            android:textAlignment="viewStart" />
+
+        <TextView
+            android:id="@+id/keyLink"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autoLink="web"
+            android:text="احصل على مفتاح مجاني من: https://aistudio.google.com/apikey"
+            android:textAlignment="viewStart"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="نموذج Gemini"
+            android:textAlignment="viewStart" />
+
+        <Spinner
+            android:id="@+id/modelSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp" />
+
+        <TextView
+            android:id="@+id/modelIdText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layoutDirection="ltr"
+            android:textAlignment="viewStart"
+            android:textDirection="ltr"
+            android:textIsSelectable="true"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/refreshModelsButton"
+            style="?android:attr/buttonStyleSmall"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="تحديث قائمة النماذج"
+            android:textSize="12sp" />
 
         <LinearLayout
             android:id="@+id/claudeSection"
@@ -112,67 +212,20 @@
         </LinearLayout>
 
         <TextView
+            style="@style/CluSectionHeader"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="مفتاح Gemini API"
-            android:textAlignment="viewStart" />
+            android:text="القراءة والعرض" />
 
-        <EditText
-            android:id="@+id/apiKeyInput"
+        <View
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="الصق المفتاح هنا"
-            android:importantForAutofill="no"
-            android:inputType="textPassword"
-            android:layoutDirection="ltr"
-            android:textDirection="ltr"
-            android:textAlignment="viewStart" />
-
-        <TextView
-            android:id="@+id/keyLink"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:autoLink="web"
-            android:text="احصل على مفتاح مجاني من: https://aistudio.google.com/apikey"
-            android:textAlignment="viewStart"
-            android:textSize="13sp" />
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="نموذج Gemini"
-            android:textAlignment="viewStart" />
-
-        <Spinner
-            android:id="@+id/modelSpinner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="48dp" />
-
-        <TextView
-            android:id="@+id/modelIdText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layoutDirection="ltr"
-            android:textAlignment="viewStart"
-            android:textDirection="ltr"
-            android:textIsSelectable="true"
-            android:textSize="13sp" />
-
-        <Button
-            android:id="@+id/refreshModelsButton"
-            style="?android:attr/buttonStyleSmall"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="تحديث قائمة النماذج"
-            android:textSize="12sp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="8dp"
             android:text="مكان الإجابة"
             android:textAlignment="viewStart" />
 
@@ -213,10 +266,79 @@
             android:text="تحديد الجواب الصحيح بمربع أخضر" />
 
         <CheckBox
+            android:id="@+id/learnFromResultsCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="تعلّم من شاشة النتيجة (يصلّح الجواب الغلط بالبنك لحاله)" />
+
+        <CheckBox
             android:id="@+id/vibrateCheck"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="اهتزاز خفيف عند ظهور الجواب" />
+
+        <TextView
+            style="@style/CluSectionHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="زر الصوت" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
+
+        <CheckBox
+            android:id="@+id/autoTouchCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="ضغط الإجابة عند لمس الفقاعة أو تشغيل A (خيارات أو رقم من 1–4 خانات)" />
+
+        <CheckBox
+            android:id="@+id/volumeKeyCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="خفض الصوت يحلّ ويضغط الإجابة أو يكتب الرقم، دون تشغيل A" />
+
+        <TextView
+            android:id="@+id/volumeKeyStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAlignment="viewStart"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/accessibilityButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="تفعيل زر الصوت (إمكانية الوصول)" />
+
+        <TextView
+            android:id="@+id/volumeKeyHelp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAlignment="viewStart"
+            android:textSize="12sp"
+            android:text="اضغط الزر أعلاه، ثم اختر «Clu: زر الصوت للإجابة» وفعّله. إذا كان المفتاح رماديًا ويقول «إعداد مقيّد»: اضغط زر «معلومات التطبيق» أدناه ← النقاط الثلاث (⋮) أعلى الشاشة ← «السماح بالإعدادات المقيّدة»، ثم ارجع وفعّله. على هواتف شاومي: من معلومات التطبيق اجعل «توفير البطارية» على «بلا قيود» وفعّل «التشغيل التلقائي» حتى لا يتوقف." />
+
+        <Button
+            android:id="@+id/appInfoButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="معلومات التطبيق" />
+
+        <TextView
+            style="@style/CluSectionHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="بنك الأسئلة والقوالب" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
 
         <Button
             android:id="@+id/clearMemoryButton"
@@ -247,73 +369,53 @@
                 android:text="استيراد بنك أسئلة" />
         </LinearLayout>
 
-        <CheckBox
-            android:id="@+id/autoTouchCheck"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="ضغط الإجابة عند لمس الفقاعة أو تشغيل A (خيارات أو رقم من 1–4 خانات)" />
-
         <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="يتطلب تفعيل خدمة إمكانية الوصول. اضغط مطولاً على الفقاعة لتشغيل A أو إيقافه. لن يلمس أي مكان إذا لم يتأكد من إحداثياته."
-            android:textAlignment="viewStart"
-            android:textSize="12sp" />
-
-        <CheckBox
-            android:id="@+id/volumeKeyCheck"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="زر خفض الصوت يحلّ ويضغط الإجابة أو يكتب الرقم، دون تشغيل A" />
-
-        <TextView
-            android:id="@+id/volumeKeyStatus"
+            android:id="@+id/templatesStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textAlignment="viewStart"
             android:textSize="13sp" />
 
         <Button
-            android:id="@+id/accessibilityButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="تفعيل زر الصوت (إمكانية الوصول)" />
-
-        <TextView
-            android:id="@+id/volumeKeyHelp"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textAlignment="viewStart"
-            android:textSize="12sp"
-            android:text="اضغط الزر أعلاه، ثم اختر «Clu: زر الصوت للإجابة» وفعّله. إذا كان المفتاح رماديًا ويقول «إعداد مقيّد»: اضغط زر «معلومات التطبيق» أدناه ← النقاط الثلاث (⋮) أعلى الشاشة ← «السماح بالإعدادات المقيّدة»، ثم ارجع وفعّله. على هواتف شاومي: من معلومات التطبيق اجعل «توفير البطارية» على «بلا قيود» وفعّل «التشغيل التلقائي» حتى لا يتوقف." />
-
-        <Button
-            android:id="@+id/appInfoButton"
+            android:id="@+id/clearTemplatesButton"
             style="?android:attr/buttonBarButtonStyle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="معلومات التطبيق" />
+            android:enabled="false"
+            android:text="مسح القوالب" />
 
         <Button
-            android:id="@+id/overlayButton"
+            android:id="@+id/calibrateButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="معايرة يدوية (ارسم مربعات السؤال والخيارات)" />
+
+        <TextView
+            style="@style/CluSectionHeader"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="منح صلاحية الظهور فوق التطبيقات" />
+            android:text="الإحصائيات" />
 
-        <Button
-            android:id="@+id/startButton"
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?android:attr/listDivider" />
+
+        <TextView
+            android:id="@+id/statsText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="تشغيل" />
+            android:textAlignment="viewStart"
+            android:textSize="14sp" />
 
         <Button
-            android:id="@+id/stopButton"
-            android:layout_width="match_parent"
+            android:id="@+id/clearStatsButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="إيقاف" />
+            android:enabled="false"
+            android:text="مسح الإحصائيات" />
     </LinearLayout>
 </ScrollView>

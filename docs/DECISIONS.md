@@ -28,3 +28,20 @@ one; mark an entry "superseded by N" when it changes.
    implementer may not change them. This removes back-and-forth and makes review objective.
 10. **Learning never slows an answer.** Layout requests run in the background after the answer is
     shown, rate-limited, only for screens with no fitting template.
+11. **A picture question is asked with its picture, and remembered per picture.** In the parchment
+    game many questions ask about a photo pinned at the left ("ما اسم الشخصية الخيالية الاتية ؟" names
+    no picture at all), so the words never decide them: the text-only request cannot see the photo, and
+    a memory keyed by words would return the answer of an earlier photo. A template may carry the
+    photo's rect (`picture`); the photo is present when the luma of the right half of that rect is not
+    plain (std >= 20, measured: plain parchment 4-11, photos 31-89; the left half is the dark sea when
+    there is none). The crop (long side 512, JPEG 80) goes with the text in one request, much smaller
+    and faster than the screenshot, and the answer is stored with a 16x16 average hash of the photo
+    (the same photo differs by a few bits, another one by about half). Only a TRUSTED template that
+    reads the question decides this; anything else behaves as before.
+12. **Interactions follow answer patterns, not game names.** One preparation step receives every
+    answer source after solving, preserving the raw reply, reader geometry and picture context.
+    Pure pattern planners currently cover 2–8 choices and verified integer keypads; image-only
+    position guesses never authorize taps. A numeric submit waits for asynchronous field readback,
+    so successful gesture callbacks alone cannot confirm a partially entered answer. Unsupported
+    patterns show the answer without guessed interaction; later patterns extend this boundary
+    rather than adding provider-specific tap logic. See `INTERACTIONS.md`.

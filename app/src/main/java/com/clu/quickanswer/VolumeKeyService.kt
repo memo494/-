@@ -40,10 +40,12 @@ class VolumeKeyService : AccessibilityService() {
         super.onServiceConnected()
         active?.takeIf { it !== this }?.taps?.cancel()
         windows = ForegroundWindowGuard(packageName)
+        contextGeneration++
         active = this
     }
 
     override fun onDestroy() {
+        contextGeneration++
         if (active === this) active = null
         taps.cancel()
         super.onDestroy()
@@ -51,10 +53,11 @@ class VolumeKeyService : AccessibilityService() {
 
     private fun tapSequence(
         boxes: List<PxRect>, submitLast: Boolean, canContinue: () -> Boolean,
+        beforeSubmit: ((Boolean) -> Unit) -> Unit,
         result: (Boolean) -> Unit,
     ): Boolean {
         if (Looper.myLooper() != Looper.getMainLooper() || active !== this) return false
-        return taps.start(boxes, submitLast, canContinue, result)
+        return taps.start(boxes, submitLast, canContinue, beforeSubmit, result)
     }
 
     private fun cancelSequence() {
@@ -76,24 +79,33 @@ class VolumeKeyService : AccessibilityService() {
         // An in-game window/focus event does not imply a different target app. Per-tap pixels
         // still verify the keypad/options; only a package change invalidates the app context here.
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            if (!::windows.isInitialized || windows.onWindow(event.packageName?.toString())) taps.cancel()
+            if (!::windows.isInitialized || windows.onWindow(event.packageName?.toString())) {
+                contextGeneration++
+                taps.cancel()
+            }
         }
     }
 
     override fun onInterrupt() {
+        contextGeneration++
         taps.cancel()
         if (::windows.isInitialized) windows.reset()
     }
 
     companion object {
         @Volatile private var active: VolumeKeyService? = null
+        @Volatile private var contextGeneration = 0L
+
+        /** Also invalidates a still-running model request when the foreground app changes. */
+        fun contextVersion(): Long = contextGeneration
 
         fun tapAnswer(
             boxes: List<PxRect>,
             submitLast: Boolean = false,
             canContinue: () -> Boolean = { true },
+            beforeSubmit: ((Boolean) -> Unit) -> Unit = { complete -> complete(true) },
             result: (Boolean) -> Unit,
-        ): Boolean = active?.tapSequence(boxes, submitLast, canContinue, result) ?: false
+        ): Boolean = active?.tapSequence(boxes, submitLast, canContinue, beforeSubmit, result) ?: false
 
         fun cancelAnswer() { active?.cancelSequence() }
 

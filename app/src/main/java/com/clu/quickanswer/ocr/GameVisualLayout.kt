@@ -26,6 +26,7 @@ object GameVisualLayout {
         val clear: PxRect? = null,
         /** Present only when the white skin's cyan erase key is visible. */
         val backspace: PxRect? = null,
+        val field: PxRect? = null,
     )
 
     private data class RGB(val r: Double, val g: Double, val b: Double) {
@@ -35,6 +36,28 @@ object GameVisualLayout {
     private const val BASE_H = 691f
 
     fun detect(argb: IntArray, width: Int, height: Int): Detected? = detectFrame(argb, width, height, null)
+
+    /** The gray pad's dark 0000 hint is not entered text; this adapter knows its gold digit state. */
+    fun inputHasText(argb: IntArray, width: Int, height: Int, detected: Detected, field: PxRect): Boolean {
+        if (field.left < 0 || field.top < 0 || field.right > width || field.bottom > height ||
+            field.width <= 0 || field.height <= 0 || argb.size.toLong() < width.toLong() * height) return false
+        if (detected.kind != Kind.NUMERIC_DARK) return detected.kind == Kind.NUMERIC_WHITE
+        var count = 0
+        var top = field.bottom
+        var bottom = field.top
+        for (y in field.top until field.bottom) for (x in field.left until field.right) {
+            val c = argb[y * width + x]
+            val r = (c shr 16) and 255
+            val g = (c shr 8) and 255
+            val b = c and 255
+            if (r >= 170 && g >= 90 && r - g >= 20 && g - b >= 30) {
+                count++
+                top = min(top, y)
+                bottom = max(bottom, y)
+            }
+        }
+        return count >= max(8, field.width * field.height / 500) && bottom - top >= max(4, field.height / 5)
+    }
 
     /** A just-released key may still be highlighted; every other surface must remain visible. */
     fun stillVisible(
@@ -207,6 +230,7 @@ object GameVisualLayout {
                     submit = if (visibleSubmit) rect(673 + dx, 486 + dy, 60, 17) else null,
                     // End before the keypad: a highlighted 1/4/7 key is not a changed question.
                     questionArea = rect(650 + dx, 291 + dy, 235, 63),
+                    field = rect(673 + dx, 394 + dy, 140, 34),
                     clear = if (darkKey(922 + dx, 504 + dy))
                         rect(922 + dx, 504 + dy, 18, 16) else null)
             }
@@ -250,6 +274,7 @@ object GameVisualLayout {
                     submit = rect(904 + dx, 518 + dy, 37, 38),
                     // Stop above the input field: entering digits must not change the question guard.
                     questionArea = rect(754 + dx, 98 + dy, 440, 70),
+                    field = rect(766 + dx, 217 + dy, 165, 43),
                     backspace = if (surface(966 + dx, 364 + dy, lightX, lightY) { p ->
                         p.r in 80.0..225.0 && p.g in 120.0..245.0 && p.b > 155.0 &&
                             p.g - p.r in 12.0..90.0 && p.b - p.g in 0.0..65.0

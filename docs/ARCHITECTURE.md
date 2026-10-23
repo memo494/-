@@ -18,11 +18,20 @@ capture (MediaProjection) ─► our own windows painted black = masks
   │
   ├─ question read: AnswerMemory.lookup → hit: answer at once ("⚡", no tokens)
   │                 miss: QuestionPrompt → Answerer.answerText (short text request) → remember
+  │    a question that SHOWS A PICTURE (template with `picture`, PictureRegion.isShown) is looked up and
+  │    remembered per picture (PictureRegion.hash), and asked with the picture only:
+  │    QuestionPrompt.buildPicture → Answerer.answerPicture (512 px crop, one request)
   │
   └─ not read (or text reply unusable): Answerer.answer(screenshot) (image request)
 ```
 
 The answer is shown in a panel; for a read multiple-choice question a green box marks the option.
+
+On the automatic-touch feature branch, one preparation step after `solve` binds every answer source
+to pure `interaction/AnswerInteraction` pattern planners. Reader/template geometry supplies choices;
+verified keypad adapters supply numeric controls. Live question/picture/option guards precede each
+stroke, and `TapSequence.beforeSubmit` waits for `NumericFieldReader`/`NumericEntryCheck` off the main
+thread before numeric confirmation. See `INTERACTIONS.md` for supported patterns and limits.
 
 ## Learning (in progress, see ROADMAP)
 
@@ -31,7 +40,8 @@ The answer is shown in a panel; for a read multiple-choice question a green box 
   (`ocr/LayoutLearning.kt`: `LayoutPrompt` → `LayoutReplyParser` → `TemplateLearner`), kept as
   CANDIDATE, confirmed by later answers, TRUSTED after 3 confirmations, demoted after 5 failures.
 - **Answer memory**: question + option set (order-free) → answer text; negations, numbers and
-  arithmetic signs must match too, so "is" never reuses the answer of "is not".
+  arithmetic signs must match too, so "is" never reuses the answer of "is not". A question with a
+  picture also needs the same picture (16x16 average hash, within 24 of 256 bits).
 
 ## Module map (`app/src/main/java/com/clu/quickanswer`)
 
@@ -43,7 +53,7 @@ The answer is shown in a panel; for a read multiple-choice question a green box 
 | Cloud models | `Answerer.kt` (interface, `Reply`), `GeminiClient.kt`, `GeminiModels.kt`, `GeminiQuota.kt`, `GeminiRuntime.kt`, `ClaudeClient.kt`, `ClaudeApi.kt` (pure, tested) |
 | Prompts and replies | `QuestionPrompt.kt`, `ScreenImage.kt` (image prompt, crop/scale), `AnswerParser.kt` |
 | Memory | `AnswerMemory.kt` (pure), `AnswerStore.kt` (file) |
-| Templates | `ocr/ScreenFingerprint.kt`, `ocr/TextLines.kt`, `ocr/LayoutTemplate.kt`, `ocr/TemplateReader.kt`, `ocr/LayoutTemplates.kt`, `TemplateStore.kt` (file), `ocr/LayoutLearning.kt` |
+| Templates | `ocr/ScreenFingerprint.kt`, `ocr/TextLines.kt`, `ocr/LayoutTemplate.kt`, `ocr/TemplateReader.kt`, `ocr/LayoutTemplates.kt`, `TemplateStore.kt` (file), `ocr/LayoutLearning.kt`, `ocr/PictureRegion.kt` (is a picture pinned, its hash) |
 | Arabic OCR | `ocr/ColorLayout.kt`, `ocr/ScreenReader.kt`, `ocr/LineRecognizer.kt`, `ocr/Ctc.kt`, `ocr/OrtCtcModel.kt`, `ocr/ArabicOcr.kt`, `ocr/ArabicText.kt`, `ocr/ImageOps.kt`, `ocr/OverlayCheck.kt`, assets `ocr/inference.onnx` + `dict.txt` |
 | English OCR | `ocr/LatinOcr.kt` (ML Kit, bundled), `ocr/LatinQuestionAssembler.kt` (pure) |
 | Small helpers | `FrameSignature.kt` (auto mode: did the screen change), `HiddenAnswer.kt`, `PanelPlacement.kt`, `Haptics.kt` |

@@ -38,12 +38,11 @@ jobs:
       # first: a failing test stops the build before a broken APK is published.
       - name: Unit tests
         run: ./gradlew testDebugUnitTest
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
-      - name: JVM unit tests
-        run: ./gradlew testDebugUnitTest
+      # The shared APK is the release build: compressed native libraries, same key, not shrunk.
+      - name: Build APK
+        run: ./gradlew assembleRelease
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Clu.apk
+        run: cp app/build/outputs/apk/release/app-release.apk Clu.apk
       - uses: actions/upload-artifact@v4
         with:
           name: Clu-apk

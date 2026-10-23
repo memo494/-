@@ -65,6 +65,23 @@ data class LayoutTemplate(
     val source: String,
     val createdAt: Long,
     val lastUsedAt: Long,
+    /**
+     * The signatures of a second look of the same screen, or null: a game that greys its buttons
+     * while the other players answer shows the same layout in other colours. [TemplateReader.fits]
+     * accepts either look.
+     */
+    val altSignatures: List<RegionSignature>? = null,
+    /**
+     * The regions cover the whole area where the game writes, so text is only looked for inside
+     * them: whatever is next to a region (a keypad, a note) is not a continuation of its text. True
+     * for measured templates; a learned one is not sure of its edges and keeps looking beyond them.
+     */
+    val bounded: Boolean = false,
+    /**
+     * Where the game shows the picture of a question that has one, or null when its questions have
+     * none. Not one of the [regions]: it has no signature and is never read as text.
+     */
+    val picture: RelRect? = null,
 ) {
     /** question, options in order, then the numeric field: the order of [signatures]. */
     val regions: List<RelRect> get() = listOf(question) + options + listOfNotNull(numericField)
@@ -80,8 +97,9 @@ data class LayoutTemplate(
             }
             if (!shapeOk) return false
             val all = regions
-            return all.all { it.isValid } && signatures.size == all.size &&
-                signatures.all { it.background in 0..255 && it.uniformity in 0f..1f }
+            fun ok(s: List<RegionSignature>) = s.size == all.size && s.all { it.background in 0..255 && it.uniformity in 0f..1f }
+            return all.all { it.isValid } && ok(signatures) && (altSignatures == null || ok(altSignatures)) &&
+                (picture == null || picture.isValid)
         }
 
     fun toJson(): JSONObject = JSONObject()
@@ -92,7 +110,7 @@ data class LayoutTemplate(
         .put("q", rectJson(question))
         .put("opts", JSONArray().also { a -> options.forEach { a.put(rectJson(it)) } })
         .put("num", numericField?.let { rectJson(it) } ?: JSONObject.NULL)
-        .put("sig", JSONArray().also { a -> signatures.forEach { a.put(JSONArray().put(it.background).put(it.uniformity.toDouble())) } })
+        .put("sig", sigJson(signatures))
         .put("lang", language ?: JSONObject.NULL)
         .put("state", state.name)
         .put("hits", hits)
@@ -100,12 +118,24 @@ data class LayoutTemplate(
         .put("src", source)
         .put("created", createdAt)
         .put("used", lastUsedAt)
+        .put("sig2", altSignatures?.let { sigJson(it) } ?: JSONObject.NULL)
+        .put("bnd", bounded)
+        .put("pic", picture?.let { rectJson(it) } ?: JSONObject.NULL)
 
     companion object {
         const val MIN_OPTIONS = 2
         const val MAX_OPTIONS = 8
 
         private fun rectJson(r: RelRect) = JSONArray().put(r.left.toDouble()).put(r.top.toDouble()).put(r.right.toDouble()).put(r.bottom.toDouble())
+
+        private fun sigJson(s: List<RegionSignature>) =
+            JSONArray().also { a -> s.forEach { a.put(JSONArray().put(it.background).put(it.uniformity.toDouble())) } }
+
+        private fun sigsOf(a: JSONArray) = List(a.length()) {
+            val s = a.getJSONArray(it)
+            require(s.length() == 2)
+            RegionSignature(s.getInt(0), s.getDouble(1).toFloat())
+        }
 
         private fun rectOf(a: JSONArray): RelRect {
             require(a.length() == 4)
@@ -127,11 +157,7 @@ data class LayoutTemplate(
                     question = rectOf(o.getJSONArray("q")),
                     options = List(optsJson.length()) { rectOf(optsJson.getJSONArray(it)) },
                     numericField = if (o.isNull("num")) null else rectOf(o.getJSONArray("num")),
-                    signatures = List(sigJson.length()) {
-                        val s = sigJson.getJSONArray(it)
-                        require(s.length() == 2)
-                        RegionSignature(s.getInt(0), s.getDouble(1).toFloat())
-                    },
+                    signatures = sigsOf(sigJson),
                     language = o.stringOrNull("lang"),
                     state = TemplateState.valueOf(o.getString("state")),
                     hits = o.getInt("hits"),
@@ -139,6 +165,11 @@ data class LayoutTemplate(
                     source = o.getString("src"),
                     createdAt = o.getLong("created"),
                     lastUsedAt = o.getLong("used"),
+                    // Both optional: files written before they existed have neither.
+                    altSignatures = if (!o.has("sig2") || o.isNull("sig2")) null else sigsOf(o.getJSONArray("sig2")),
+                    bounded = o.optBoolean("bnd", false),
+                    // Also optional: files written before pictures were known have no "pic".
+                    picture = if (!o.has("pic") || o.isNull("pic")) null else rectOf(o.getJSONArray("pic")),
                 )
                 if (t.isValid) t else null
             } catch (_: Exception) {

@@ -22,6 +22,7 @@ internal class TapSequence(
         const val SUBMIT_GAP_MS = 120L
         // A lost platform callback must not leave auto mode permanently busy or replay a digit.
         const val CALLBACK_TIMEOUT_MS = 750L
+        const val VERIFICATION_TIMEOUT_MS = 2_000L
         const val MAX_TAPS = 9 // four backspaces, four digits, then confirmation
     }
 
@@ -34,8 +35,10 @@ internal class TapSequence(
         val submitLast: Boolean,
         val canContinue: () -> Boolean,
         val result: (Boolean) -> Unit,
+        val beforeSubmit: ((Boolean) -> Unit) -> Unit,
     ) {
         var index = 0
+        var verified = false
     }
 
     private var active: Run? = null
@@ -44,12 +47,13 @@ internal class TapSequence(
         boxes: List<PxRect>,
         submitLast: Boolean = false,
         canContinue: () -> Boolean = { true },
+        beforeSubmit: ((Boolean) -> Unit) -> Unit = { complete -> complete(true) },
         result: (Boolean) -> Unit,
     ): Boolean {
         if (active != null || boxes.size !in 1..MAX_TAPS ||
             (submitLast && boxes.size < 2) || boxes.any { !valid(it) }
         ) return false
-        val run = Run(boxes.toList(), submitLast, canContinue, result)
+        val run = Run(boxes.toList(), submitLast, canContinue, result, beforeSubmit)
         active = run
         tap(run)
         return true
@@ -62,6 +66,20 @@ internal class TapSequence(
 
     private fun tap(run: Run) {
         if (active !== run) return
+        if (run.submitLast && run.index == run.boxes.lastIndex && !run.verified) {
+            var delivered = false
+            val verified: (Boolean) -> Unit = verify@{ allowed ->
+                if (active !== run || delivered) return@verify
+                delivered = true
+                if (!allowed) finish(run, false) else {
+                    run.verified = true
+                    tap(run)
+                }
+            }
+            try { run.beforeSubmit(verified) } catch (_: Throwable) { verified(false) }
+            if (!delivered && active === run) later(run, VERIFICATION_TIMEOUT_MS) { verified(false) }
+            return
+        }
         val allowed = try { run.canContinue() } catch (_: Exception) { false }
         // A guard can itself cancel the run (for example when capture stops).
         if (active !== run) return
