@@ -268,6 +268,38 @@ class MainActivity : AppCompatActivity() {
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         if (savedInstanceState == null) handleRestart(intent)
+        maybeShowWelcome()
+    }
+
+    /**
+     * Three steps for the first launch. Someone who already has a key (an update, not a first
+     * launch) does not need them, so for them it is only marked as seen. The flag is saved when the
+     * dialog is answered or cancelled, not when it is shown: a rotation that dismisses it would
+     * otherwise lose it unread.
+     */
+    private fun maybeShowWelcome() {
+        if (Prefs.welcomeShown(this)) return
+        if (Prefs.apiKey(this).isNotEmpty() || Prefs.claudeKey(this).isNotEmpty()) {
+            Prefs.saveWelcomeShown(this)
+            return
+        }
+        showRtl(
+            AlertDialog.Builder(this)
+                .setTitle("أهلًا بك في Clu")
+                .setMessage(
+                    "1) الصق مفتاح Gemini المجاني (الرابط تحت).\n" +
+                        "2) اضغط «منح صلاحية الظهور فوق التطبيقات».\n" +
+                        "3) اضغط «تشغيل» وبعدين المس الفقاعة أو زر خفض الصوت لما يطلع السؤال."
+                )
+                .setPositiveButton("يلا نبلّش") { _, _ -> Prefs.saveWelcomeShown(this) }
+                .setOnCancelListener { Prefs.saveWelcomeShown(this) }
+        )
+    }
+
+    /** Shows the dialog right-to-left whatever the phone's language: the screen itself is. */
+    private fun showRtl(builder: AlertDialog.Builder) {
+        val dialog = builder.show()
+        dialog.window?.decorView?.layoutDirection = View.LAYOUT_DIRECTION_RTL
     }
 
     override fun onNewIntent(intent: Intent) {

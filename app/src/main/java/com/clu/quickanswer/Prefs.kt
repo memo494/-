@@ -65,6 +65,16 @@ object Prefs {
         sp(c).edit().putBoolean("volume_key", on).apply()
     }
 
+    /**
+     * The welcome dialog (see MainActivity) was dismissed: it is shown once, on the first launch,
+     * and again after a rotation or a crash until the person has seen it.
+     */
+    fun welcomeShown(c: Context): Boolean = sp(c).getBoolean("welcome_shown", false)
+
+    fun saveWelcomeShown(c: Context) {
+        sp(c).edit().putBoolean("welcome_shown", true).apply()
+    }
+
     fun saveReading(c: Context, smart: Boolean, highlight: Boolean) {
         sp(c).edit().putBoolean("smart_reading", smart).putBoolean("highlight_answer", highlight).apply()
     }
