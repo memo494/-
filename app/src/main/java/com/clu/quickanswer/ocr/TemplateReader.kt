@@ -84,7 +84,9 @@ object TemplateReader {
         val now = signatures(t, argb, width, height)
         for ((stored, seen) in t.signatures.zip(now)) {
             if (abs(stored.background - seen.background) > SIGNATURE_TOLERANCE) return false
-            if (seen.uniformity < stored.uniformity - UNIFORMITY_SLACK) return false
+            // Both ways: a region that became much MORE uniform has lost what framed it too (the wood
+            // game's number field, seen on its choices screen, is plain banner where the board was).
+            if (abs(seen.uniformity - stored.uniformity) > UNIFORMITY_SLACK) return false
         }
         return true
     }

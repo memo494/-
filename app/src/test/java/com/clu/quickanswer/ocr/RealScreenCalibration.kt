@@ -84,10 +84,14 @@ class RealScreenCalibration {
         ),
         Pattern(
             "builtin-wood-numeric", Arrangement.NUMERIC,
-            question = PxRect(640, 60, 1910, 268), options = emptyList(), field = PxRect(665, 280, 1247, 428),
+            // The field reaches down onto the wooden board under it: that is what the choices screen of
+            // this game lacks (there the banner goes on and the first button starts), see TemplateReader.fits.
+            question = PxRect(650, 50, 2000, 300), options = emptyList(), field = PxRect(1066, 310, 1646, 540),
             shots = listOf(
                 Shot("32bf9a60", listOf(PxRect(125, 320, 318, 515))),
                 Shot("ccb68b52", listOf(PxRect(110, 420, 298, 610))),
+                Shot("fb826bf9", listOf(PxRect(128, 325, 320, 516))),
+                Shot("c4bf6833", listOf(PxRect(110, 422, 300, 612))),
             ),
         ),
     )
@@ -149,6 +153,16 @@ class RealScreenCalibration {
                 }
                 println("$name ~ ${t.id}: dist=${"%.2f".format(d)} fits=$fits layout=${lr.outcome} sigs=$sigs $read")
             }
+        }
+        // The original game's choice screen is ColorLayout's, not a template's: it must read without one.
+        for ((name, masks) in listOf("d1c6e924" to listOf(PxRect(141, 406, 333, 598), PxRect(1293, 734, 1551, 911)))) {
+            val img = load(dir!!, name)
+            for (m in listOf(masks, emptyList())) {
+                val r = OcrFixtures.reader.analyze(img.argb, img.width, img.height, m)
+                println("$name (ColorLayout, masks=${m.size}): ${r.question?.let { "Q='${it.questionText}' O=${it.options}" } ?: r.failure}")
+            }
+            val fp = ScreenFingerprint.of(img.argb, img.width, img.height, masks)
+            for (t in built) println("$name ~ ${t.id}: dist=${"%.2f".format(ScreenFingerprint.distance(t.fingerprint, fp))} fits=${TemplateReader.fits(t, img.argb, img.width, img.height)}")
         }
         if (System.getenv("CLU_WRITE_BUILTIN") == "1") {
             val out = File("src/main/assets/templates/builtin.json")
