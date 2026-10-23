@@ -274,6 +274,18 @@ class AnswerStatsTest {
         assertEquals(1, s.today(d1).total)
     }
 
+    @Test
+    fun restore_refusesAbsurdNumbers_andCountsSaturate() {
+        val s = AnswerStats()
+        // 2^31-1 questions of one source would overflow the total; it is a corrupt file.
+        assertTrue(s.restore("""{"v":1,"all":{"TEXT":[2147483647,5],"IMAGE":[2,9223372036854775807]},"days":{}}"""))
+        assertEquals(0, s.allTime().total)
+        // The largest count believed stays there however many answers come.
+        assertTrue(s.restore("""{"v":1,"all":{"TEXT":[100000000,0]},"days":{}}"""))
+        s.record(TEXT, 10, d1)
+        assertEquals(100_000_000, s.allTime().count[TEXT])
+    }
+
     // ---- clear / onChange --------------------------------------------------------------------
 
     @Test
