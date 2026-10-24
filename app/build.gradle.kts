@@ -58,6 +58,10 @@ android {
         // break something only a phone would show. Turn both on (rules in proguard-rules.pro) to
         // get the 27.7 MB build instead of about 34 MB.
         release {
+            if (System.getenv("CI_BETA_BUILD") == "true") {
+                applicationIdSuffix = ".beta"
+                versionNameSuffix = "-beta"
+            }
             isMinifyEnabled = false
             isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

@@ -3,6 +3,7 @@ package com.clu.quickanswer
 import android.graphics.Bitmap
 import android.util.Base64
 import com.clu.quickanswer.ocr.SentGeometry
+import com.clu.quickanswer.ocr.PxRect
 import java.io.ByteArrayOutputStream
 
 /** Image preparation and prompt shared by every answer provider. */
@@ -25,18 +26,23 @@ object ScreenImage {
     fun isNoQuestion(reply: String): Boolean = reply.trim().trimEnd('.', '!', '،', ' ') == NO_QUESTION
 
     const val PROMPT =
-        "You see a phone screenshot. Read the question(s) on it, including any images, " +
-            "diagrams or answer options. Reply with ONLY the final answer, in the same " +
-            "language as the question: for multiple choice give the option letter/number " +
-            "and its text; otherwise the short answer (number, word or phrase). No " +
-            "explanation, no reasoning, no preamble. For a question asking for a number or " +
-            "quantity, answer with digits only: your best single number estimate (the " +
-            "typical or most recent real value), even if the exact number varies. " +
-            "Ignore scores, player names, " +
-            "timers, buttons and number keypads; they are not part of the question. If " +
-            "there are several questions, put " +
-            "each answer on its own line, numbered. If no question is visible, reply " +
-            "exactly: " + NO_QUESTION
+        "You are reading a landscape Arabic trivia game screenshot. The game question is " +
+            "printed prominently in the central parchment/card, sometimes with an image, " +
+            "and may use dark buttons, translucent gray buttons, or a number keypad. " +
+            "Ignore any floating AI bubble, black notification saying 'لا يوجد سؤال', " +
+            "scoreboard, chat, timer, and the text on side panels. " +
+            "If the central question asks for a number, give ONLY the numeric answer " +
+            "using ASCII digits 0-9, preferably 1 to 4 digits when possible; " +
+            "do not include a sentence, units, or the key number you tapped. " +
+            "For multiple-choice questions, return ONLY the exact printed " +
+            "Arabic words of the correct answer as they appear inside its " +
+            "answer button (for example: 'سبونج بوب' or 'القلب'). " +
+            "Do NOT return the option position, index, letter, coordinates or " +
+            "an explanation. For a numeric keypad question return ONLY digits. " +
+            "If the question is clearly visible, " +
+            "never reply that there is no question. If the answer cannot be determined " +
+            "from the image, reply exactly 'غير متأكد'. " +
+            "Only if there is genuinely no central quiz question, reply exactly: " + NO_QUESTION
 
     /**
      * Null if the capture is black; otherwise the JPEG (base64) to send and the bitmap to show, with
@@ -49,6 +55,29 @@ object ScreenImage {
         val cropped = cropToContent(bitmap)
         val geometry = SentGeometry(bitmap.width, bitmap.height, cropped.top, cropped.bottom)
         return encode(cropped.bitmap, maxSide, quality, geometry)
+    }
+
+    /**
+     * Fallback image for a visible quiz that was misclassified as "no question".
+     * Zoom in on the parchment and answer controls, excluding the scoreboard,
+     * avatars, side cards, and our notification across the top.
+     *
+     * This crop is ONLY for model recognition. Screen coordinates and safety
+     * fingerprints always use the uncropped original capture.
+     */
+    fun focusQuiz(bitmap: Bitmap, whiteKeypad: Boolean): Bitmap {
+        val bounds = focusQuizBounds(bitmap.width, bitmap.height, whiteKeypad)
+        return Bitmap.createBitmap(bitmap, bounds.left, bounds.top, bounds.width, bounds.height)
+    }
+
+    /** The question's photo is pinned on the left; never crop away the evidence it asks about. */
+    fun focusQuizBounds(width: Int, height: Int, whiteKeypad: Boolean): PxRect {
+        require(width >= 2 && height >= 2)
+        val left = (width * 0.05f).toInt().coerceIn(0, width - 2)
+        val right = (width * 0.78f).toInt().coerceIn(left + 1, width)
+        val top = if (whiteKeypad) 0 else (height * 0.23f).toInt()
+        val bottom = (height * 0.94f).toInt().coerceIn(top + 1, height)
+        return PxRect(left, top, right, bottom)
     }
 
     /** Rows/columns sampled from a small copy; "dark" = luminance below 40. */

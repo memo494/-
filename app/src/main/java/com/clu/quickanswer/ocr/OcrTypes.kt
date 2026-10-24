@@ -26,6 +26,8 @@ class ScreenLayout(
     val numericField: PxRect?,
     val questionLines: List<PxRect>,
     val optionLines: List<List<PxRect>>,
+    val digitKeys: Map<Char, PxRect> = emptyMap(),
+    val numericSubmit: PxRect? = null,
 ) {
     val numeric: Boolean get() = numericField != null
 }
@@ -47,4 +49,10 @@ data class Question(
     val optionRects: List<PxRect>,
     val numeric: Boolean,
     val meanConfidence: Float,
+    val digitKeys: Map<Char, PxRect> = emptyMap(),
+    val bannerRect: PxRect? = null,
+    val numericSubmit: PxRect? = null,
+    val optionTextRects: List<PxRect> = emptyList(),
+    val numericField: PxRect? = null,
+    val questionTextRects: List<PxRect> = emptyList(),
 )

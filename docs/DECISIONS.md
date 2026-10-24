@@ -38,3 +38,22 @@ one; mark an entry "superseded by N" when it changes.
     and faster than the screenshot, and the answer is stored with a 16x16 average hash of the photo
     (the same photo differs by a few bits, another one by about half). Only a TRUSTED template that
     reads the question decides this; anything else behaves as before.
+12. **Interactions follow answer patterns, not game names.** One preparation step receives every
+    answer source after solving, preserving the raw reply, reader geometry and picture context.
+    Pure pattern planners currently cover 2–8 choices and verified integer keypads; image-only
+    position guesses never authorize taps. A numeric submit waits for asynchronous field readback,
+    so successful gesture callbacks alone cannot confirm a partially entered answer. Unsupported
+    patterns show the answer without guessed interaction; later patterns extend this boundary
+    rather than adding provider-specific tap logic. See `INTERACTIONS.md`.
+13. **Measured picture-request speed overrides the crop transport in decision 11.** Main's
+    `ea6d15f` reports 5.5 s for cropped-picture requests versus 2.4 s for whole screenshots on the
+    owner's phone. Picture questions therefore keep picture-specific lookup/hash/guards but send
+    the screenshot on a memory miss. The cropped provider API remains available; it is not the
+    active service path. Result watching also retains that update's option-only pixel buffer.
+14. **Do not clear numeric input automatically.** The owner requested removal of the pre-answer
+    clear/backspace presses because they delay entry. The service now proves the field empty from
+    pixels before planning and immediately before the first digit. Gray zero hints count as empty;
+    gold zeroes or other existing input do not. Only a verified empty field sets `fieldIsEmpty=true`;
+    the service sends digits and optional submit, with neither reset controls nor reset delays.
+    Occupied or unknown fields stop unchanged. Legacy reset planning/sequencing APIs remain for
+    compatibility with their original contract tests; the application no longer calls those modes.
