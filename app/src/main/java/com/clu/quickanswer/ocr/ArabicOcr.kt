@@ -12,6 +12,7 @@ import android.graphics.Bitmap
  */
 class ArabicOcr private constructor(
     private val model: OrtCtcModel,
+    private val lines: ParallelLines,
     private val reader: ScreenReader,
     private val lineRecognizer: LineRecognizer,
 ) : AutoCloseable {
@@ -69,19 +70,33 @@ class ArabicOcr private constructor(
         return NumericFieldReader(lineRecognizer).read(pixels, bitmap.width, bitmap.height, field, ink)
     }
 
-    override fun close() = model.close()
+    override fun close() {
+        lines.close()
+        model.close()
+    }
 
     companion object {
         const val MODEL_ASSET = "ocr/inference.onnx"
         const val DICTIONARY_ASSET = "ocr/dict.txt"
 
-        fun create(context: Context, threads: Int = 4): ArabicOcr {
+        /** Lines of one screen read at once; a question has 1-3 lines and 2-4 options. */
+        private const val PARALLEL_LINES = 4
+
+        /**
+         * Reads [PARALLEL_LINES] lines at once, each inference with 2 threads or its share of the
+         * cores. Measured on the game's screenshots (4 cores, OcrPipelineTest with CLU_OCR_THREADS /
+         * CLU_OCR_LINES): recognising took 55-98 ms instead of 70-183 ms with 1 line x 4 threads, the
+         * longest screens about half; the text read is identical.
+         */
+        fun create(context: Context): ArabicOcr {
             val assets = context.applicationContext.assets
             val modelBytes = assets.open(MODEL_ASSET).use { it.readBytes() }
             val dictionary = assets.open(DICTIONARY_ASSET).bufferedReader(Charsets.UTF_8).use { it.readText() }
-            val model = OrtCtcModel(modelBytes, threads)
+            val cores = Runtime.getRuntime().availableProcessors()
+            val model = OrtCtcModel(modelBytes, threads = maxOf(2, cores / PARALLEL_LINES))
+            val lines = ParallelLines(PARALLEL_LINES)
             val recognizer = LineRecognizer(model, LineRecognizer.parseDictionary(dictionary))
-            return ArabicOcr(model, ScreenReader(recognizer), recognizer)
+            return ArabicOcr(model, lines, ScreenReader(recognizer, lineBatch = lines), recognizer)
         }
     }
 }
