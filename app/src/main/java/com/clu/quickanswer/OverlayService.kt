@@ -964,6 +964,10 @@ class OverlayService : Service() {
         val capturedEpoch = touchEpoch
         val capturedWindow = VolumeKeyService.contextVersion()
         val touchRequested = permitsTouch(trigger)
+        val retryAttempt = sig?.let { autoRetry.begin(it) }
+        fun requestIsCurrent() = !destroyed && capturedEpoch == touchEpoch &&
+            capturedWindow == VolumeKeyService.contextVersion() &&
+            capturedW == screenW && capturedH == screenH
         // The question screen as the watch will compare it (see startResultWatch); [bmp] is gone after solve.
         val watchBase = if (Prefs.learnFromResults(this)) {
             try {
@@ -998,8 +1002,9 @@ class OverlayService : Service() {
                 }
                 if (sig != null) {
                     lastSentSig = sig
-                    autoRetry.record(sig, !solved.isAnswer || touchRequested && solved.touches == null,
-                        SystemClock.uptimeMillis())
+                    if (requestIsCurrent()) retryAttempt?.resolved(solved.isAnswer, touchRequested,
+                        solved.touches != null, SystemClock.uptimeMillis())
+                    else retryAttempt?.cancel()
                 }
                 if (fromAuto && ScreenImage.isNoQuestion(solved.text)) {
                     solved.learn?.let { dropLearning(it) }
@@ -1031,20 +1036,24 @@ class OverlayService : Service() {
                 if (touchRequested && permitsTouch(trigger) && capturedEpoch == touchEpoch &&
                     capturedWindow == VolumeKeyService.contextVersion() &&
                     capturedW == screenW && capturedH == screenH && solved.touches != null) {
-                    performAnswerTouches(solved, capturedW, capturedH, trigger)
+                    performAnswerTouches(solved, capturedW, capturedH, trigger, retryAttempt)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
                 if (sig != null) {
                     lastSentSig = sig
-                    // A gesture may already have started; never retry partial input automatically.
-                    autoRetry.record(sig, !touchPending, SystemClock.uptimeMillis())
+                    // Once handed off, touch execution alone decides whether a stroke could have begun.
+                    if (!touchPending && requestIsCurrent())
+                        retryAttempt?.finish(retryable = true, SystemClock.uptimeMillis())
                 }
                 if (!destroyed) try { showPanel("تعذّرت المحاولة؛ يمكنك طلب الإجابة من جديد") } catch (_: Throwable) { }
             } finally {
                 // Touch execution owns busy until its own finally block. All other exits release it.
-                if (!touchPending) setBusy(false)
+                if (!touchPending) {
+                    retryAttempt?.cancel()
+                    setBusy(false)
+                }
             }
         }
     }
@@ -1229,19 +1238,22 @@ class OverlayService : Service() {
         return TouchFrameMask.apply(stamp, PxRect(left, top, right, bottom), ignored)
     }
 
-    private fun performAnswerTouches(solved: Solved, w: Int, h: Int, trigger: AnswerTrigger) {
-        val boxes = solved.touches ?: return
-        val stamp = solved.guardStamp ?: return
-        val region = solved.guardRect ?: return
-        if (!TouchFrameGuard.usable(stamp)) return
+    private fun performAnswerTouches(solved: Solved, w: Int, h: Int, trigger: AnswerTrigger,
+                                     retryAttempt: AutoAnswerRetry.Attempt?) {
+        fun notStarted() { retryAttempt?.finish(retryable = true, SystemClock.uptimeMillis()) }
+        val boxes = solved.touches ?: return notStarted()
+        val stamp = solved.guardStamp ?: return notStarted()
+        val region = solved.guardRect ?: return notStarted()
+        if (!TouchFrameGuard.usable(stamp)) return notStarted()
         if (touchPending || !VolumeKeyService.isEnabled(this)) {
             if (!VolumeKeyService.isEnabled(this)) showPanel("فعّل خدمة إمكانية الوصول لتشغيل اللمس التلقائي")
-            return
+            return notStarted()
         }
         touchPending = true
         val epoch = touchEpoch
         val window = VolumeKeyService.contextVersion()
         var nextTap = 0
+        var mayHaveDispatched = false
         var entryRejected = false
         var cancelReason = "توقف الإدخال؛ تحقق من الشاشة"
         fun blocked(reason: String): Boolean { cancelReason = reason; return false }
@@ -1321,9 +1333,15 @@ class OverlayService : Service() {
                         showPanel("${solved.text}\n$cancelReason")
                         return@withTimeout
                     }
-                    if (!touchAttempts.tryBegin(stamp, w, h)) return@withTimeout
+                    if (!touchAttempts.tryBegin(stamp, w, h)) {
+                        // This question already had an accepted run; it must not be replayed.
+                        mayHaveDispatched = true
+                        return@withTimeout
+                    }
                     setBusy(true)
                     val finished = suspendCancellableCoroutine<Boolean> { continuation ->
+                        // If the platform throws after accepting input, its outcome is uncertain.
+                        mayHaveDispatched = true
                         val accepted = VolumeKeyService.tapAnswer(boxes, solved.submitLast, canContinue = {
                             continuation.isActive && canContinue().also { if (it) nextTap++ }
                         }, beforeSubmit = { complete -> verifyEntry(solved, epoch) { allowed ->
@@ -1332,6 +1350,7 @@ class OverlayService : Service() {
                         } }) { if (continuation.isActive) continuation.resume(it) }
                         if (!accepted) {
                             // A refused request sent no stroke. Accepted runs stay consumed.
+                            mayHaveDispatched = false
                             touchAttempts.reset()
                             cancelReason = "خدمة اللمس غير جاهزة أو مشغولة"
                             if (continuation.isActive) continuation.resume(false)
@@ -1351,13 +1370,20 @@ class OverlayService : Service() {
                     showPanel("تعذّر إكمال اللمس؛ جاهز للسؤال التالي")
                 } catch (_: Throwable) { }
             } finally {
-                if (epoch == touchEpoch) {
-                    // Invalidate any late readback before releasing the next request.
-                    touchEpoch++
-                    try { VolumeKeyService.cancelAnswer() } finally {
-                        touchPending = false
-                        touchJob = null
-                        setBusy(false)
+                try {
+                    if (!destroyed && epoch == touchEpoch && window == VolumeKeyService.contextVersion() &&
+                        permitsTouch(trigger) && w == screenW && h == screenH) {
+                        retryAttempt?.finish(retryable = !mayHaveDispatched, SystemClock.uptimeMillis())
+                    } else retryAttempt?.cancel()
+                } finally {
+                    if (epoch == touchEpoch) {
+                        // Invalidate any late readback before releasing the next request.
+                        touchEpoch++
+                        try { VolumeKeyService.cancelAnswer() } finally {
+                            touchPending = false
+                            touchJob = null
+                            setBusy(false)
+                        }
                     }
                 }
             }
