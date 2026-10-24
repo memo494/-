@@ -11,6 +11,11 @@ on:
         default: false
   pull_request:
     branches: [main]
+  # One-time production build following PR #1 merge. Remove after success.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/android.yml'
 
 permissions:
   contents: write
@@ -30,7 +35,7 @@ jobs:
       # Fixed signing key from the CLU_KEYSTORE_B64 secret (base64 of a PKCS12 keystore), so updates
       # install over the previous version. Without the secret the default debug key is used.
       - name: Restore signing key
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         env:
           CLU_KEYSTORE_B64: ${{ secrets.CLU_KEYSTORE_B64 }}
         run: |
@@ -57,7 +62,7 @@ jobs:
       # build is started by hand (Actions -> Android CI -> Run workflow). A release with a large APK
       # on every push filled the account with releases and may have tripped GitHub's abuse checks.
       - name: Publish release
-        if: github.event_name == 'workflow_dispatch' && !inputs.beta
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.beta)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
