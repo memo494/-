@@ -15,12 +15,16 @@ package com.clu.quickanswer.ocr
  * - the mean per-character confidence is under [minConfidence], over everything and over the
  *   question alone (clean options must not hide a garbled question).
  *
+ * Every question and option line is recognised in one [LineBatch] before the checks run, so
+ * [lineBatch] can read them side by side; the checks and their order are the same either way.
+ *
  * Stateless apart from the models it was given, so it is safe to share between threads.
  */
 class ScreenReader(
     private val recognizer: LineRecognizer,
     private val layout: ColorLayout = ColorLayout(),
     private val minConfidence: Float = DEFAULT_MIN_CONFIDENCE,
+    private val lineBatch: LineBatch = LineBatch.SEQUENTIAL,
 ) {
 
     /** Everything one [analyze] call found, for logging and tests. [question] is null when [failure] is set. */
@@ -62,7 +66,12 @@ class ScreenReader(
         if (found.questionLines.isEmpty()) return fail("no question text lines")
         if (coveredByOverlay(found, masks)) return fail("an overlay window covers the question")
 
-        val qLines = dropStrayTrailingLines(found.questionLines.map { recognizer.recognize(argb, width, height, it) })
+        val rects = found.questionLines + found.optionLines.flatten()
+        val read = lineBatch.recognize(rects.map { rect -> { recognizer.recognize(argb, width, height, rect) } })
+        var next = found.questionLines.size
+        val optionRead = found.optionLines.map { regions -> read.subList(next, next + regions.size).also { next += regions.size } }
+
+        val qLines = dropStrayTrailingLines(read.subList(0, found.questionLines.size))
         val questionText = joinLines(qLines)
         if (questionText.isEmpty()) return fail("question unreadable", qLines)
         if (ArabicText.key(questionText).length < MIN_QUESTION_CHARS || wordCount(questionText) < MIN_QUESTION_WORDS) {
@@ -76,7 +85,7 @@ class ScreenReader(
         val oLines = ArrayList<List<RecognizedLine>>()
         val options = ArrayList<String>()
         for ((i, _) in found.buttons.withIndex()) {
-            val lines = found.optionLines[i].map { recognizer.recognize(argb, width, height, it) }
+            val lines = optionRead[i]
             oLines.add(lines)
             val text = joinLines(lines)
             // A button without readable text is not skipped: the option that cannot be read could be

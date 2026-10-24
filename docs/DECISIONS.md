@@ -57,3 +57,11 @@ one; mark an entry "superseded by N" when it changes.
     the service sends digits and optional submit, with neither reset controls nor reset delays.
     Occupied or unknown fields stop unchanged. Legacy reset planning/sequencing APIs remain for
     compatibility with their original contract tests; the application no longer calls those modes.
+15. **The Arabic lines of a screen are read side by side; the model stays fp32.** `ScreenReader`
+    hands every question and option line to one `LineBatch`; the app reads 4 at once
+    (`ParallelLines`), each inference on 2 threads. Same text and confidences as one by one
+    (`OcrPipelineTest.linesReadSideBySide_readExactlyWhatOneByOneReads`); on 4 cores recognising
+    S1/S2/S3 took 55/64/98 ms instead of 70/115/183 ms. An int8 copy of the model (onnxruntime
+    dynamic quantisation) was measured and rejected: with the convolutions quantised it read
+    "سورة طله" for "سورة طه" (S2 fails) and was 2-3x slower on x86; with only MatMul quantised it was
+    no faster and misread a question letter. Re-measure on an ARM phone before revisiting.
