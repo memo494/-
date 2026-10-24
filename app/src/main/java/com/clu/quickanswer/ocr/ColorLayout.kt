@@ -76,6 +76,7 @@ class ColorLayout {
 
         val options = if (field != null) emptyList() else belowBanner
         val optionLines = options.map { textLines(argb, width, height, it, 0.04f, 0.96f, 0.12f, 0.88f, unit) }
+        val numericKeys = if (field != null) NumericKeypad.detect(field, regions.keys) else emptyMap()
         return Result(
             ScreenLayout(
                 banner = banner,
@@ -83,6 +84,8 @@ class ColorLayout {
                 numericField = field,
                 questionLines = questionLines,
                 optionLines = optionLines,
+                digitKeys = numericKeys,
+                numericSubmit = if (numericKeys.size == 10) NumericSubmit.detect(argb, width, height, numericKeys) else null,
             ),
             null,
         )

@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var templatesStatus: TextView
     private lateinit var clearTemplatesButton: Button
     private lateinit var volumeKeyCheck: CheckBox
+    private lateinit var autoTouchCheck: CheckBox
     private lateinit var volumeKeyStatus: TextView
     private lateinit var statsText: TextView
     private lateinit var clearStatsButton: Button
@@ -201,6 +202,9 @@ class MainActivity : AppCompatActivity() {
         templatesStatus = findViewById(R.id.templatesStatus)
         clearTemplatesButton = findViewById(R.id.clearTemplatesButton)
         volumeKeyCheck = findViewById(R.id.volumeKeyCheck)
+        autoTouchCheck = findViewById(R.id.autoTouchCheck)
+        autoTouchCheck.isChecked = Prefs.autoTouch(this)
+        autoTouchCheck.setOnCheckedChangeListener { _, enabled -> Prefs.saveAutoTouch(this, enabled) }
         volumeKeyStatus = findViewById(R.id.volumeKeyStatus)
         volumeKeyCheck.isChecked = Prefs.volumeKey(this)
         findViewById<Button>(R.id.accessibilityButton).setOnClickListener {
@@ -380,7 +384,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateVolumeKeyStatus() {
         volumeKeyStatus.text = if (VolumeKeyService.isEnabled(this)) {
-            "✓ زر الصوت مفعّل: اضغط خفض الصوت أثناء عمل الفقاعة"
+            "✓ خفض الصوت يحلّ ويضغط الإجابة أثناء عمل الفقاعة، دون تشغيل A"
         } else {
             "زر الصوت غير مفعّل بعد في إمكانية الوصول"
         }

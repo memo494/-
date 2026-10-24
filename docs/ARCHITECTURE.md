@@ -19,13 +19,22 @@ capture (MediaProjection) ─► our own windows painted black = masks
   ├─ question read: AnswerMemory.lookup → hit: answer at once ("⚡", no tokens)
   │                 miss: QuestionPrompt → Answerer.answerText (short text request) → remember
   │    a question that SHOWS A PICTURE (template with `picture`, PictureRegion.isShown) is looked up and
-  │    remembered per picture (PictureRegion.hash), and asked with the picture only:
-  │    QuestionPrompt.buildPicture → Answerer.answerPicture (512 px crop, one request)
+  │    remembered per picture (PictureRegion.hash). A miss asks with the whole screenshot:
+  │    measured faster on the owner's phone than a cropped-picture request (decision 13)
   │
   └─ not read (or text reply unusable): Answerer.answer(screenshot) (image request)
 ```
 
 The answer is shown in a panel; for a read multiple-choice question a green box marks the option.
+
+On the automatic-touch feature branch, one preparation step after `solve` binds every answer source
+to pure `interaction/AnswerInteraction` pattern planners. Reader/template geometry supplies choices;
+verified keypad adapters supply numeric controls. Live question/picture/option guards precede each
+stroke, and `TapSequence.beforeSubmit` waits for `NumericFieldReader`/`NumericEntryCheck` off the main
+thread before numeric confirmation. `NumericFieldInk` proves the field empty before direct typing:
+the service sends digits and optional confirmation only, never clear/backspace. Occupied/unknown
+fields stop without modification. An independent four-row white-button fallback reads options when
+whole-question OCR fails. See `INTERACTIONS.md` for supported patterns and limits.
 
 ## Learning (in progress, see ROADMAP)
 

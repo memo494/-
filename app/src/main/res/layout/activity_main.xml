@@ -289,11 +289,17 @@
             android:background="?android:attr/listDivider" />
 
         <CheckBox
+            android:id="@+id/autoTouchCheck"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="ضغط الإجابة عند لمس الفقاعة أو تشغيل A (خيارات أو رقم من 1–4 خانات)" />
+
+        <CheckBox
             android:id="@+id/volumeKeyCheck"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="زر خفض الصوت = جواب (بدل لمس الفقاعة)" />
+            android:text="خفض الصوت يحلّ ويضغط الإجابة أو يكتب الرقم، دون تشغيل A" />
 
         <TextView
             android:id="@+id/volumeKeyStatus"

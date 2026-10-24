@@ -13,6 +13,7 @@ import android.graphics.Bitmap
 class ArabicOcr private constructor(
     private val model: OrtCtcModel,
     private val reader: ScreenReader,
+    private val lineRecognizer: LineRecognizer,
 ) : AutoCloseable {
 
     /**
@@ -34,11 +35,39 @@ class ArabicOcr private constructor(
     }
 
     /**
+     * OCR the word rectangles found from actual bright text pixels. This is
+     * separate from the strict question detector, including a mixed-language
+     * question whose independently detected options remain readable.
+     */
+    fun readWords(bitmap: Bitmap, words: List<PxRect>): List<WordAnswerMatcher.Candidate> {
+        if (words.size !in 2..8) return emptyList()
+        val src = if (bitmap.config == Bitmap.Config.HARDWARE) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
+        try {
+            val width = src.width
+            val height = src.height
+            val argb = IntArray(width * height)
+            src.getPixels(argb, 0, width, 0, 0, width, height)
+            return words.map { region ->
+                val line = lineRecognizer.recognize(argb, width, height, region)
+                WordAnswerMatcher.Candidate(line.text, region, line.confidence)
+            }
+        } finally {
+            if (src !== bitmap) src.recycle()
+        }
+    }
+    /**
      * Like [read], for a caller that already holds the screenshot's pixels ([argb], row-major, [width] x
      * [height]) and ran [ColorLayout.inspect] on them ([inspected]): nothing is copied or analysed again.
      */
     fun read(argb: IntArray, width: Int, height: Int, inspected: ColorLayout.Result, masks: List<PxRect>): Question? =
         reader.read(argb, width, height, masks, inspected)
+
+    /** A visible numeric field, read off the main thread under the same model lock as questions. */
+    fun readField(bitmap: Bitmap, field: PxRect, ink: NumericFieldReader.Ink = NumericFieldReader.Ink.AUTO): RecognizedLine {
+        val pixels = IntArray(bitmap.width * bitmap.height)
+        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        return NumericFieldReader(lineRecognizer).read(pixels, bitmap.width, bitmap.height, field, ink)
+    }
 
     override fun close() = model.close()
 
@@ -52,7 +81,7 @@ class ArabicOcr private constructor(
             val dictionary = assets.open(DICTIONARY_ASSET).bufferedReader(Charsets.UTF_8).use { it.readText() }
             val model = OrtCtcModel(modelBytes, threads)
             val recognizer = LineRecognizer(model, LineRecognizer.parseDictionary(dictionary))
-            return ArabicOcr(model, ScreenReader(recognizer))
+            return ArabicOcr(model, ScreenReader(recognizer), recognizer)
         }
     }
 }
