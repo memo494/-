@@ -170,7 +170,7 @@ object GameVisualLayout {
     private inline fun centredOffset(
         allKeys: (Int, Int) -> Boolean,
         /** Null: no wide search. Stricter than [allKeys], because more of the screen is tried. */
-        allKeysWide: ((Int, Int) -> Boolean)?,
+        noinline allKeysWide: ((Int, Int) -> Boolean)?,
     ): Pair<Int, Int>? {
         var near: Pair<Int, Int>? = null
         for (dy in -NEAR_SHIFT..NEAR_SHIFT step NEAR_STEP) for (dx in -NEAR_SHIFT..NEAR_SHIFT step NEAR_STEP) {
