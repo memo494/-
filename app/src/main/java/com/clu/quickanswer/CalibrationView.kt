@@ -24,13 +24,13 @@ class CalibrationView(
     context: Context,
     private val bitmap: Bitmap,
     private val boxes: CalibrationBoxes,
-    private val onBoxDrawn: (added: Boolean) -> Unit,
     /**
      * A tap (not a drag) at picture pixel (x, y): the screen decides what it means in the current
      * mode (a key read under the tap, a field or button grown from it). Returns whether it placed a
      * box; false lets the view do nothing.
      */
     private val onTap: (x: Int, y: Int) -> Boolean = { _, _ -> false },
+    private val onBoxDrawn: (added: Boolean) -> Unit,
 ) : View(context) {
 
     var mode: Mode = Mode.QUESTION
