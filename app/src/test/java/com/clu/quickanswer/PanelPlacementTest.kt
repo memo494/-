@@ -397,4 +397,19 @@ class PanelPlacementTest {
         assertEquals(4, PanelPlacement.maxLines(side, "1. ب\n2. صح\n3. 42"))
         assertEquals(8, PanelPlacement.maxLines(top, (1..12).joinToString("\n") { "$it. أ" }))
     }
+
+    @Test
+    fun autoHideMs_growsWithTheLines_untilTheCap() {
+        assertEquals(15_000L, PanelPlacement.autoHideMs("القلب"))
+        assertEquals(23_000L, PanelPlacement.autoHideMs("1. أ\n\n2. ب\n3. ج"))
+        assertEquals(45_000L, PanelPlacement.autoHideMs((1..20).joinToString("\n") { "$it. أ" }))
+        assertEquals(15_000L, PanelPlacement.autoHideMs(""))
+    }
+
+    @Test
+    fun maxLines_isCappedLowerInLandscape() {
+        val twelve = (1..12).joinToString("\n") { "$it. أ" }
+        assertEquals(5, PanelPlacement.maxLines(PanelPlacement.Mode.TOP, twelve, landscape = true))
+        assertEquals(8, PanelPlacement.maxLines(PanelPlacement.Mode.TOP, twelve))
+    }
 }

@@ -167,7 +167,7 @@ class FrameSignatureTest {
     }
 
     private val tickMs = FrameSignature.TICK_MS
-    private val panelMs = 15_000L // the answer panel hides itself after this long (OverlayService.PANEL_AUTO_HIDE_MS)
+    private val panelMs = 15_000L // the answer panel hides itself after this long (PanelPlacement.AUTO_HIDE_BASE_MS)
 
     /**
      * The service's autoTick, one call per [FrameSignature.TICK_MS] of simulated time (everything

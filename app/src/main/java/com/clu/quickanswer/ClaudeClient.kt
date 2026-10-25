@@ -27,14 +27,14 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
         private set
 
     /** The model's answer for the screenshot, or a short Arabic error message. Never throws. */
-    override fun answer(bitmap: Bitmap): Reply {
+    override fun answer(bitmap: Bitmap, prompt: ImagePrompt): Reply {
         val prepared = try {
             ScreenImage.prepare(bitmap) ?: return Reply.error(ScreenImage.BLACK_SCREEN)
         } catch (e: Exception) {
             return Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
         }
         lastSent = prepared.kept
-        return send(ClaudeApi.requestBody(model, ScreenImage.PROMPT, prepared.base64))
+        return send(ClaudeApi.requestBody(model, prompt.text, prepared.base64))
     }
 
     /** A question already read on the device: text only, no image. */

@@ -54,4 +54,13 @@ class CandidateCheckTest {
             assertNull(r.resolved)
         }
     }
+
+    @Test fun repliesThatAreNotASingleAnswerSayNothing() {
+        for (text in listOf("1. أحمد شوقي\n2. عمر خيرت", "أحمد شوقي + عمر خيرت", "1-ب، 2-أ", "غير متأكد", "غير متأكد.")) {
+            val r = CandidateCheck.judge(mcq, true, text)
+            assertEquals(text, CandidateCheck.Verdict.UNKNOWN, r.verdict)
+            assertNull(r.resolved)
+        }
+        assertEquals(CandidateCheck.Verdict.REFUTED, CandidateCheck.judge(mcq, true, "أم كلثوم").verdict)
+    }
 }

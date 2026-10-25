@@ -212,4 +212,29 @@ class AnswerParserTest {
         val again = OcrFixtures.reader.read(s3.argb, s3.width, s3.height)!!
         assertEquals(r3.answer, memory.lookup(again.questionText, again.options.shuffled(), again.numeric)?.answer)
     }
+
+    @Test
+    fun numberOnly_readsArabicIndicDigits() {
+        assertEquals("123", AnswerParser.numberOnly("١٢٣"))
+    }
+
+    @Test
+    fun resolveImageAnswer_ignoresALoneFirstLabel() {
+        val q = mcqOf("أ", "ب", "القلب", "د")
+        assertEquals("القلب", AnswerParser.resolveImageAnswer(q, "1. القلب")?.answer)
+        assertEquals(q.optionRects[2], AnswerParser.resolveImageAnswer(q, "1. القلب")?.rect)
+    }
+
+    @Test
+    fun stripLoneFirstLabel_onlyStripsASingleLine() {
+        assertEquals("42", AnswerParser.numberOnly(AnswerParser.stripLoneFirstLabel("1) 42")))
+        assertEquals("1. أ\n2. ب", AnswerParser.stripLoneFirstLabel("1. أ\n2. ب"))
+        assertEquals("2. أ", AnswerParser.stripLoneFirstLabel("2. أ"))
+    }
+
+    @Test
+    fun resolve_aMismatchedLabelIsStillDeclined() {
+        val centuries = mcqOf("القرن 1", "القرن 2", "القرن 3", "القرن 4")
+        assertNull(AnswerParser.resolve(centuries, "3) القرن 2"))
+    }
 }
