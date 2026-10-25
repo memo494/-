@@ -1099,11 +1099,13 @@ class OverlayService : Service() {
                 val field = visual.field ?: q?.numericField ?: return solved
                 val ink = if (visual.kind == GameVisualLayout.Kind.NUMERIC_DARK)
                     NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.LIGHT
-                when (NumericFieldInk.inspect(pixels, w, h, field, ink).state) {
+                val sample = NumericFieldInk.inspect(pixels, w, h, field, ink)
+                when (sample.state) {
                     NumericFieldInk.State.FILLED -> return solved.copy(touchFailure =
                         "الخانة فيها إدخال سابق؛ لم أمسحه ولم أضف عليه")
+                    // The code tells a phone's failure apart without a debugger (see Sample.why).
                     NumericFieldInk.State.UNKNOWN -> return solved.copy(touchFailure =
-                        "لم أتحقق أن الخانة فارغة؛ لم أكتب أو أمسح شيئًا")
+                        "لم أتحقق أن الخانة فارغة؛ لم أكتب أو أمسح شيئًا (${sample.why})")
                     NumericFieldInk.State.EMPTY -> Unit
                 }
                 val numericRequest = request ?: AnswerInteraction.Request(

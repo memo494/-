@@ -3,10 +3,16 @@ package com.clu.quickanswer.ocr
 /** Pixel evidence for direct entry: unknown/occupied fields never authorize appending or erasing. */
 object NumericFieldInk {
     enum class State { EMPTY, FILLED, UNKNOWN }
-    data class Sample(val state: State, val pixels: IntArray = intArrayOf(), val width: Int = 0, val height: Int = 0)
+    /**
+     * [why] is a short code for an UNKNOWN result, shown with the refusal so a failure on a phone can
+     * be told apart from a screenshot: "bounds", "bg<median luma>", "edge", "ink<count>x<height>"
+     * (with the ink's box), or "" otherwise.
+     */
+    data class Sample(val state: State, val pixels: IntArray = intArrayOf(), val width: Int = 0, val height: Int = 0,
+                      val why: String = "")
 
     fun inspect(argb: IntArray, width: Int, height: Int, field: PxRect, ink: NumericFieldReader.Ink): Sample {
-        val unknown = Sample(State.UNKNOWN)
+        val unknown = Sample(State.UNKNOWN, why = "bounds")
         if (width <= 0 || height <= 0 || argb.size.toLong() < width.toLong() * height ||
             field.left < 0 || field.top < 0 || field.right > width || field.bottom > height ||
             field.width < 8 || field.height < 8 || ink == NumericFieldReader.Ink.AUTO) return unknown
@@ -20,7 +26,7 @@ object NumericFieldInk {
         var seen = 0
         val background = (0..255).first { seen += histogram[it]; seen > light.size / 2 }
         if (ink == NumericFieldReader.Ink.GOLD && background !in 15..140 ||
-            ink == NumericFieldReader.Ink.LIGHT && background < 220) return unknown
+            ink == NumericFieldReader.Ink.LIGHT && background < 220) return Sample(State.UNKNOWN, why = "bg$background")
         val mask = BooleanArray(light.size) { i ->
             if (ink == NumericFieldReader.Ink.GOLD)
                 NumericFieldReader.isGold(argb[(field.top + i / w) * width + field.left + i % w])
@@ -51,7 +57,7 @@ object NumericFieldInk {
                     }
                 }
                 val frame = !goesInside && (right - left + 1 >= w * 0.6 || bottom - top + 1 >= h * 0.8)
-                if (touches && !frame) return unknown
+                if (touches && !frame) return Sample(State.UNKNOWN, why = "edge")
                 if (frame || tail <= 2) for (i in 0 until tail) mask[queue[i]] = false
             }
         }
@@ -66,7 +72,8 @@ object NumericFieldInk {
         val glyphHeight = bottom - top + 1
         if (count < 8 || glyphHeight < maxOf(4, h / 5) || left <= 0 || right >= w - 1 ||
             top <= 0 || bottom >= h - 1 || right - left + 1 > glyphHeight * 5 ||
-            (top..bottom).any { rows[it] == 0 }) return unknown
+            (top..bottom).any { rows[it] == 0 }) return Sample(State.UNKNOWN,
+                why = "ink${count}x$glyphHeight@$left,$top-$right,$bottom/${w}x$h")
         val pad = maxOf(2, glyphHeight / 4)
         val cropW = right - left + 1 + pad * 2; val cropH = glyphHeight + 4
         val clean = IntArray(cropW * cropH) { -1 }
