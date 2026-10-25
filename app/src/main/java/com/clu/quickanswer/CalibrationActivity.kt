@@ -18,6 +18,7 @@ import com.clu.quickanswer.ocr.LatinOcr
 import com.clu.quickanswer.ocr.LayoutTemplate
 import com.clu.quickanswer.ocr.ManualTemplate
 import com.clu.quickanswer.ocr.PxRect
+import com.clu.quickanswer.ocr.RegionSnap
 import com.clu.quickanswer.ocr.TemplateReader
 import java.util.UUID
 import kotlin.concurrent.thread
@@ -41,7 +42,6 @@ class CalibrationActivity : AppCompatActivity() {
     private lateinit var hint: TextView
     private lateinit var saveButton: Button
     private lateinit var autoButton: Button
-    private var detecting = false
     private val modeButtons = LinkedHashMap<Mode, Button>()
     private var mode = Mode.QUESTION
     private var saving = false
@@ -62,6 +62,7 @@ class CalibrationActivity : AppCompatActivity() {
         requestedOrientation = if (landscape) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         setContentView(buildUi(capture.bitmap, landscape))
         selectMode(Mode.QUESTION)
+        readGlyphs() // ready by the time the keys are reached
     }
 
     override fun onDestroy() {
@@ -108,6 +109,11 @@ class CalibrationActivity : AppCompatActivity() {
             keyRow.addView(b, weighted())
         }
         val actionRow = if (landscape) modeRow else row()
+        // Zooms where the user last worked (the middle at first); after the deepest step, back out.
+        actionRow.addView(barButton("🔍 تكبير") {
+            val x = view.lastTouchX; val y = view.lastTouchY
+            if (x.isNaN()) view.zoomStep() else view.zoomStep(x, y)
+        }, weighted())
         actionRow.addView(barButton("تراجع") { if (boxes.undo()) boxesChanged() }, weighted())
         actionRow.addView(barButton("مسح الكل") { boxes.clear(); boxesChanged() }, weighted())
         saveButton = barButton("حفظ") { save() }
@@ -120,7 +126,7 @@ class CalibrationActivity : AppCompatActivity() {
         root.addView(keyRow, wrapWidth())
         if (actionRow !== modeRow) root.addView(actionRow, wrapWidth())
 
-        view = CalibrationView(this, bmp, boxes) { added ->
+        view = CalibrationView(this, bmp, boxes, onTap = ::tapped) { added ->
             if (!added) Toast.makeText(this, if (mode == Mode.KEY) "رسمت المفاتيح العشرة كلها"
                 else "الحد الأقصى ${LayoutTemplate.MAX_OPTIONS} خيارات", Toast.LENGTH_SHORT).show()
             // The first box is the question; the buttons come next.
@@ -148,11 +154,11 @@ class CalibrationActivity : AppCompatActivity() {
     private fun boxesChanged() {
         val what = when (mode) {
             Mode.QUESTION -> "ارسم مربعًا حول كتابة السؤال بس (كل سطوره)، بدون الأزرار والخانة"
-            Mode.OPTION -> "ارسم مربعًا حول كل زر جواب (الزر كله) — الخيارات: ${boxes.options.size}"
-            Mode.FIELD -> "ارسم مربعًا حول خانة كتابة الرقم، وهي فاضية"
-            Mode.KEY -> boxes.nextKey?.let { "اضغط على مفتاح الرقم $it — أو «اكتشاف المفاتيح تلقائيًا»" }
+            Mode.OPTION -> "اضغط على كل زر جواب (أو ارسم مربعًا حوله) — الخيارات: ${boxes.options.size}"
+            Mode.FIELD -> "اضغط على خانة الرقم وهي فاضية (أو ارسم مربعًا حولها)"
+            Mode.KEY -> boxes.nextKey?.let { "اضغط على أي مفتاح وبيعرف رقمه لحاله (الناقص: ${(0..9).filter { d -> boxes.keyAt[d] == null }.joinToString("، ")})" }
                 ?: "المفاتيح العشرة جاهزة ✓ — تأكد إنه كل رقم فوق مفتاحه، وبعدين زر التأكيد"
-            Mode.SUBMIT -> "اضغط على زر التأكيد إذا اللعبة فيها واحد، ثم احفظ"
+            Mode.SUBMIT -> "اضغط على زر التأكيد إذا اللعبة فيها واحد، ثم احفظ — «🔍 تكبير» إذا صغير"
         }
         hint.text = what
         view.invalidate()
@@ -236,37 +242,86 @@ class CalibrationActivity : AppCompatActivity() {
         }
     }
 
+    /** The words OCR read on the capture, read once in the background when the screen opens. */
+    @Volatile private var glyphs: List<KeypadFinder.Glyph>? = null
+    private var reading = false
+    private var detectWhenRead = false
+
     /**
-     * Reads the capture's digits with on-device OCR (no network) and proposes the ten keys
-     * ([KeypadFinder]). Off the main thread; the bitmap is copied first because the activity may
-     * recycle its own while ML Kit still reads.
+     * Reads the capture with on-device OCR (no network) once, off the main thread: the bitmap is
+     * copied first because the activity may recycle its own while ML Kit still reads. [then] runs
+     * on the main thread once the words are there.
+     */
+    private fun readGlyphs(then: (() -> Unit)? = null) {
+        if (glyphs != null) { then?.invoke(); return }
+        if (then != null) detectWhenRead = true
+        if (reading) return
+        val bmp = bitmap ?: return
+        val copy = try { bmp.copy(Bitmap.Config.ARGB_8888, false) } catch (_: Throwable) { null } ?: return
+        reading = true
+        thread(isDaemon = true, name = "calibration-ocr") {
+            val read = try { LatinOcr().use { it.glyphs(copy) } } catch (_: Throwable) { emptyList() } finally { copy.recycle() }
+            runOnUiThread {
+                glyphs = read
+                reading = false
+                if (!isDestroyed && detectWhenRead) { detectWhenRead = false; detectKeys() }
+            }
+        }
+    }
+
+    /**
+     * Proposes the keys from the digits printed on them ([KeypadFinder]): all ten when they are
+     * all read, otherwise the ones that are (the user taps the rest, each tap set to the digit
+     * under it).
      */
     private fun detectKeys() {
         val bmp = bitmap ?: return
-        if (detecting) return
-        val copy = try { bmp.copy(Bitmap.Config.ARGB_8888, false) } catch (_: Throwable) { null } ?: return toast(DETECT_FAILED)
-        detecting = true
-        autoButton.isEnabled = false
-        toast(DETECTING)
-        thread(isDaemon = true, name = "calibration-keys") {
-            val keys = try {
-                LatinOcr().use { KeypadFinder.find(it.glyphs(copy), copy.width, copy.height) }
-            } catch (_: Throwable) {
-                null
-            } finally {
-                copy.recycle()
+        val read = glyphs
+        if (read == null) {
+            toast(DETECTING)
+            readGlyphs { detectKeys() }
+            return
+        }
+        val all = KeypadFinder.find(read, bmp.width, bmp.height)
+        if (all != null && boxes.setKeys(all)) {
+            toast(DETECTED)
+            selectMode(if (boxes.submit == null) Mode.SUBMIT else Mode.KEY)
+            return
+        }
+        val some = KeypadFinder.partial(read, bmp.width, bmp.height)
+        if (some == null) {
+            toast(DETECT_FAILED)
+            selectMode(Mode.KEY)
+            return
+        }
+        for ((d, r) in some.withIndex()) if (r != null && boxes.keyAt[d] == null) boxes.setKey(d, r)
+        val missing = (0..9).filter { boxes.keyAt[it] == null }
+        toast(DETECTED_SOME + missing.joinToString("، "))
+        selectMode(Mode.KEY)
+    }
+
+    /**
+     * A tap on the picture: in "keys" the digit printed under it gets its key (any order); for the
+     * field, an answer button or the confirm button, the control under it is grown from its colour
+     * ([RegionSnap]). False when nothing could be found, and the view then places a plain box.
+     */
+    private fun tapped(x: Int, y: Int): Boolean {
+        val bmp = bitmap ?: return false
+        return when (mode) {
+            Mode.KEY -> {
+                val hit = glyphs?.let { KeypadFinder.digitAt(it, bmp.width, bmp.height, x, y) } ?: return false
+                boxes.setKey(hit.first, hit.second)
+                if (boxes.nextKey == null && boxes.submit == null) selectMode(Mode.SUBMIT)
+                true
             }
-            runOnUiThread {
-                detecting = false
-                if (isDestroyed) return@runOnUiThread
-                autoButton.isEnabled = true
-                if (keys == null || !boxes.setKeys(keys)) {
-                    toast(DETECT_FAILED)
-                } else {
-                    toast(DETECTED)
-                    selectMode(if (boxes.submit == null) Mode.SUBMIT else Mode.KEY)
-                }
+            Mode.FIELD, Mode.OPTION, Mode.SUBMIT -> {
+                val pixels = try {
+                    IntArray(bmp.width * bmp.height).also { bmp.getPixels(it, 0, bmp.width, 0, 0, bmp.width, bmp.height) }
+                } catch (_: Throwable) { return false }
+                val rect = RegionSnap.around(pixels, bmp.width, bmp.height, x, y) ?: return false
+                boxes.add(mode, rect)
             }
+            Mode.QUESTION -> false
         }
     }
 
@@ -323,6 +378,7 @@ class CalibrationActivity : AppCompatActivity() {
         const val SAVE_FAILED = "تعذّر الحفظ"
         const val DETECTING = "عم بدوّر على الأرقام…"
         const val DETECTED = "لقيت المفاتيح العشرة ✓ — راجعها، وإذا في غلط اضغط تراجع"
+        const val DETECTED_SOME = "لقيت جزء من المفاتيح ✓ — اضغط على الباقي: "
         const val DETECT_FAILED = "ما قدرت ألاقي لوحة أرقام كاملة؛ اضغط على المفاتيح بإيدك من 0 لـ 9"
         const val QUESTION_OVER_BUTTONS = "مربع السؤال لازم يكون حول كتابة السؤال بس، مش حول الأزرار أو الخانة — اضغط «السؤال» وارسمه من جديد"
         const val KEYS_INCOMPLETE = "لازم ترسم مفاتيح الأرقام العشرة كلها (0 لـ 9)، أو تمسحها"

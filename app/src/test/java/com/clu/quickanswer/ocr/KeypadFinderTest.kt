@@ -72,4 +72,19 @@ class KeypadFinderTest {
         assertNull(KeypadFinder.find(phonePad + second, w, h))
         assertNull(KeypadFinder.find(emptyList(), w, h))
     }
+
+    @Test fun aPartialPadGivesTheDigitsThatWereRead() {
+        val some = KeypadFinder.partial(phonePad.filterNot { it.text == "5" || it.text == "0" }, w, h)!!
+        assertNull(some[5])
+        assertNull(some[0])
+        assertEquals(1495 to 457, centre(some[1]!!))
+        assertNull(KeypadFinder.partial(phonePad.take(2), w, h))
+    }
+
+    @Test fun aTapOnAKeySetsTheDigitPrintedOnIt() {
+        val (digit, key) = KeypadFinder.digitAt(phonePad, w, h, 1611 + 20, 571 - 15)!!
+        assertEquals(5, digit)
+        assertEquals(1611 to 571, centre(key))
+        assertNull(KeypadFinder.digitAt(phonePad, w, h, 300, 300))
+    }
 }
