@@ -56,6 +56,50 @@ object GameVisualLayout {
         return count >= max(8, field.width * field.height / 500) && bottom - top >= max(4, field.height / 5)
     }
 
+    /**
+     * The inside of the dark skin's number field, where digits are drawn, measured on this capture,
+     * or null when no dark field is found around [field]. [field] comes from the reference geometry
+     * and, on a card drawn off the reference, reaches into the field's gold rim (25 Oct 2026, owner's
+     * phone: "ink373x30", rim arcs taken for typed digits, so nothing was ever typed). The dark wood
+     * is found near [field] (rows over 40% dark, columns over 25% dark), then [INTERIOR_INSET] is
+     * left out on every side: the rim and the pill's rounded ends. Digits are centred well inside.
+     */
+    fun fieldInterior(argb: IntArray, width: Int, height: Int, field: PxRect): PxRect? {
+        if (width <= 0 || height <= 0 || argb.size.toLong() < width.toLong() * height ||
+            field.width < 16 || field.height < 16) return null
+        val left = max(0, field.left - field.width / 6)
+        val right = min(width, field.right + field.width / 6)
+        val top = max(0, field.top - field.height / 2)
+        val bottom = min(height, field.bottom + field.height / 2)
+        fun dark(c: Int): Boolean {
+            val r = (c shr 16) and 255; val g = (c shr 8) and 255; val b = c and 255
+            return (r * 299 + g * 587 + b * 114) / 1000 < 120 && max(r, max(g, b)) - min(r, min(g, b)) < 60
+        }
+        var t = -1; var bt = -1
+        for (y in top until bottom) {
+            var n = 0
+            for (x in left until right) if (dark(argb[y * width + x])) n++
+            if (n > (right - left) * 0.4) { if (t < 0) t = y; bt = y + 1 }
+        }
+        var l = -1; var rt = -1
+        for (x in left until right) {
+            var n = 0
+            for (y in top until bottom) if (dark(argb[y * width + x])) n++
+            if (n > (bottom - top) * 0.25) { if (l < 0) l = x; rt = x + 1 }
+        }
+        if (t < 0 || l < 0) return null
+        val w = rt - l
+        val h = bt - t
+        // The field found must be about the size expected; anything else is not this field.
+        if (w < field.width / 2 || w > field.width * 2 || h < field.height / 2 || h > field.height * 2) return null
+        val inside = PxRect(l + (w * INTERIOR_INSET).toInt(), t + (h * INTERIOR_INSET).toInt(),
+            rt - (w * INTERIOR_INSET).toInt(), bt - (h * INTERIOR_INSET).toInt())
+        return inside.takeIf { it.width >= 16 && it.height >= 16 }
+    }
+
+    /** Share of the dark field left out on each side: its gold rim and rounded ends (about 12%). */
+    private const val INTERIOR_INSET = 0.15f
+
     /** A coloured parchment/shadow can fit sparse samples; an actual gold button has its own rim. */
     fun hasSubmitControl(argb: IntArray, width: Int, height: Int, detected: Detected): Boolean {
         val button = detected.submit ?: return false
