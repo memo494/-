@@ -1057,6 +1057,9 @@ class OverlayService : Service() {
 
     /** Bind every answer source to the same interaction engine. All pixel/OCR work here is on IO. */
     private fun prepareTouches(solved: Solved, bmp: Bitmap, masks: List<PxRect>): Solved {
+        // A short code on every refusal that had no message of its own, so a phone report names the
+        // step that declined instead of the generic sentence (see the panel text in solve()).
+        fun quiet(code: String) = solved.copy(touchFailure = "لم أجد طريقة إدخال موثوقة لهذا الشكل ($code)")
         return try {
             val w = bmp.width
             val h = bmp.height
@@ -1071,7 +1074,7 @@ class OverlayService : Service() {
                 return solved.copy(touchFailure = "الفقاعة تغطّي الصورة؛ أبعدها ثم اطلب الجواب")
             }
             if (request != null && q != null && !q.numeric) {
-                val banner = q.bannerRect ?: return solved
+                val banner = q.bannerRect ?: return quiet("banner")
                 val words = q.optionTextRects.takeIf { it.size == q.options.size } ?: q.optionRects
                 if (!ChoiceTouchGuard.isReadyFromLayout(pixels, w, h, banner, q.optionRects, words)) {
                     return solved.copy(touchFailure = "الأزرار غير جاهزة أو بعض الكتابة محجوب")
@@ -1100,7 +1103,7 @@ class OverlayService : Service() {
                     if (visual.kind == GameVisualLayout.Kind.NUMERIC_DARK)
                         GameVisualLayout.fieldInterior(pixels, w, h, it) ?: it else it
                 }
-                val field = measured ?: q?.numericField ?: return solved
+                val field = measured ?: q?.numericField ?: return quiet("field")
                 val ink = if (visual.kind == GameVisualLayout.Kind.NUMERIC_DARK)
                     NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.LIGHT
                 val sample = NumericFieldInk.inspect(pixels, w, h, field, ink)
@@ -1126,20 +1129,36 @@ class OverlayService : Service() {
                     expectedNumber = plan.number, fieldRect = field, fieldStamp = fingerprint(bmp, field, masks),
                     pictureStamp = picture?.let { fingerprint(bmp, it, masks) })
             }
-            if (request != null) return solved // never replace a rejected trusted reading with guessed positions
+            if (request != null) return quiet("read") // never replace a rejected trusted reading with guessed positions
             // A mixed Arabic/Latin question may fail both question readers while every option is clear.
             // Geometry is detected again from the visible banner/buttons; candidate/model boxes are not used.
             // This fallback initially supports the four-row example. Two remaining white rows on
             // a red/green result screen must not be mistaken for a fresh two-option question.
-            val stack = ColorLayout().inspect(pixels, w, h).layout?.takeIf { !it.numeric && it.buttons.size == 4 }
+            val inspected = ColorLayout().inspect(pixels, w, h).layout
+            val stack = inspected?.takeIf { !it.numeric && it.buttons.size == 4 }
             val stackWords = stack?.let { PrintedChoiceTouch.regions(it, pixels, w, h) }
+            // Which step of the four-row path declined, for the code shown with the refusal.
+            var stackCode = when {
+                inspected == null -> "s0"
+                stack == null -> "s${inspected.buttons.size}${if (inspected.numeric) "n" else ""}"
+                stack.questionLines.isEmpty() -> "sq"
+                stackWords == null -> "sw"
+                else -> "s4"
+            }
             if (stack != null && stack.questionLines.isNotEmpty() && stackWords != null) {
                 val words = stackWords
-                if (ChoiceTouchGuard.isReadyFromLayout(pixels, w, h, stack.banner, stack.buttons, words)) {
+                if (!ChoiceTouchGuard.isReadyFromLayout(pixels, w, h, stack.banner, stack.buttons, words)) stackCode = "sr"
+                else {
                     val printed = synchronized(ocrLock) { ocr?.readWords(bmp, words) }.orEmpty()
                     val independent = PrintedChoiceTouch.request(stack, printed, solved.rawReply)
                     val plan = independent?.let { AnswerInteraction.plan(it, AnswerInteraction.Controls(w, h)) }
                     val region = independent?.question?.let { questionRegion(it, pixels, w, h) }
+                    stackCode = when {
+                        independent == null -> "sm:" + printed.joinToString("|") { it.text }.take(60)
+                        plan == null -> "sp"
+                        region == null -> "sg"
+                        else -> "s"
+                    }
                     if (plan != null && region != null) return solved.copy(touches = plan.taps,
                         guardRect = region, guardStamp = fingerprint(bmp, region, masks), ignoredRects = masks,
                         choiceButtons = stack.buttons, choiceWords = words, choiceFromLayout = true,
@@ -1148,15 +1167,15 @@ class OverlayService : Service() {
             }
             // Legacy fallback: independently read all four printed words; candidate/model boxes alone
             // never authorize a touch. The original reply is retained even when display matching was fuzzy.
-            val choices = OptionWordDetector.detectChoices(pixels, w, h) ?: return solved
-            if (!ChoiceTouchGuard.isReady(pixels, w, h, choices.buttons, choices.words)) return solved
-            val printed = synchronized(ocrLock) { ocr?.readWords(bmp, choices.words) } ?: return solved
+            val choices = OptionWordDetector.detectChoices(pixels, w, h) ?: return quiet(stackCode)
+            if (!ChoiceTouchGuard.isReady(pixels, w, h, choices.buttons, choices.words)) return quiet("$stackCode,ready")
+            val printed = synchronized(ocrLock) { ocr?.readWords(bmp, choices.words) } ?: return quiet("$stackCode,ocr")
             val printedOptions = printed.map { it.text }
             val literal = printedOptions.singleOrNull {
                 AnswerInteraction.matchesChoice(solved.rawReply, it, printedOptions, indexRequested = false)
-            } ?: return solved
-            val target = WordAnswerMatcher.match(literal, printed) ?: return solved
-            val actions = TouchPlanner.plan(solved.rawReply, target, emptyMap(), null, w, h) ?: return solved
+            } ?: return quiet("$stackCode,match:" + printedOptions.joinToString("|").take(60))
+            val target = WordAnswerMatcher.match(literal, printed) ?: return quiet("$stackCode,word")
+            val actions = TouchPlanner.plan(solved.rawReply, target, emptyMap(), null, w, h) ?: return quiet("$stackCode,plan")
             val content = ChoiceTouchGuard.stableContent(pixels, w, h, choices.buttons) ?: return solved.copy(
                 touchFailure = "لم أجد نص السؤال كاملًا للتحقق قبل اللمس")
             if (content.picture != null && TouchFrameMask.obscuresPicture(content.picture, masks)) return solved.copy(
@@ -1165,7 +1184,7 @@ class OverlayService : Service() {
                 choiceButtons = choices.buttons, choiceWords = choices.words,
                 choiceStamps = choices.words.mapNotNull { fingerprint(bmp, it, masks) }, ignoredRects = masks,
                 pictureRect = content.picture, pictureStamp = content.picture?.let { fingerprint(bmp, it, masks) })
-        } catch (_: Throwable) { solved }
+        } catch (e: Throwable) { quiet("err:" + e.javaClass.simpleName) }
     }
 
     /** Use measured question ink, not a banner that can also contain an animated badge. */
