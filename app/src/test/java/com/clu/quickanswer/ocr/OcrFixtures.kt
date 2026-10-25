@@ -11,7 +11,9 @@ class TestImage(val name: String, val argb: IntArray, val width: Int, val height
  * model from the app's assets (an onnxruntime session is expensive, so it is built once per JVM).
  *
  * Set the environment variable CLU_OCR_MODEL to the path of another .onnx file (for example the
- * int8 variant) to run the whole suite on it instead of the shipped fp32 model.
+ * int8 variant) to run the whole suite on it instead of the shipped fp32 model. CLU_OCR_THREADS
+ * (threads per inference, default 4) and CLU_OCR_LINES (lines read at once, default 1) time other
+ * settings of the runtime on the same screenshots.
  */
 object OcrFixtures {
 
@@ -24,11 +26,19 @@ object OcrFixtures {
         LineRecognizer.parseDictionary(File(assetPath("dict.txt")).readText(Charsets.UTF_8))
     }
 
-    val model: OrtCtcModel by lazy { OrtCtcModel(File(modelPath).readBytes(), threads = 4) }
+    private fun envInt(name: String, default: Int): Int = System.getenv(name)?.toIntOrNull()?.takeIf { it > 0 } ?: default
+
+    val threads: Int = envInt("CLU_OCR_THREADS", 4)
+
+    val parallelLines: Int = envInt("CLU_OCR_LINES", 1)
+
+    val model: OrtCtcModel by lazy { OrtCtcModel(File(modelPath).readBytes(), threads = threads) }
 
     val recognizer: LineRecognizer by lazy { LineRecognizer(model, dictionary) }
 
-    val reader: ScreenReader by lazy { ScreenReader(recognizer) }
+    val reader: ScreenReader by lazy {
+        ScreenReader(recognizer, lineBatch = if (parallelLines > 1) ParallelLines(parallelLines) else LineBatch.SEQUENTIAL)
+    }
 
     fun image(name: String): TestImage {
         val stream = OcrFixtures::class.java.getResourceAsStream("/ocr/$name.jpg")

@@ -48,7 +48,7 @@ class OcrPipelineTest {
 
     private fun log(label: String, img: TestImage, run: Run, truthQ: String, truthOptions: List<String>) {
         val q = run.reading.question
-        val tag = "[OCR ${OcrFixtures.modelLabel} $label ${img.width}x${img.height}]"
+        val tag = "[OCR ${OcrFixtures.modelLabel} t${OcrFixtures.threads}x${OcrFixtures.parallelLines} $label ${img.width}x${img.height}]"
         println("$tag layout %.0f ms + recognise %.0f ms = %.0f ms, confidence %s".format(
             run.layoutMs, run.recMs, run.layoutMs + run.recMs, q?.meanConfidence?.let { "%.3f".format(it) } ?: "n/a (${run.reading.failure})"))
         if (q == null) return
@@ -93,6 +93,23 @@ class OcrPipelineTest {
 
     @Test
     fun s3_landscapeMultipleChoice_isReadWithFourOptions() = checkMultipleChoice("S3", S3_Q, S3_OPTIONS)
+
+    @Test
+    fun linesReadSideBySide_readExactlyWhatOneByOneReads() {
+        val sequential = ScreenReader(OcrFixtures.recognizer)
+        ParallelLines(4).use { batch ->
+            val parallel = ScreenReader(OcrFixtures.recognizer, lineBatch = batch)
+            for (name in listOf("s1", "s2", "s3")) {
+                val img = OcrFixtures.image(name)
+                val a = sequential.analyze(img.argb, img.width, img.height)
+                val b = parallel.analyze(img.argb, img.width, img.height)
+                assertEquals(name, a.failure, b.failure)
+                assertEquals(name, a.questionLines.map { it.text }, b.questionLines.map { it.text })
+                assertEquals(name, a.optionLines.map { l -> l.map { it.text } }, b.optionLines.map { l -> l.map { it.text } })
+                assertEquals(name, a.question?.meanConfidence, b.question?.meanConfidence)
+            }
+        }
+    }
 
     @Test
     fun s1_numericQuestion_isDetectedAndItsQuestionRead() {
