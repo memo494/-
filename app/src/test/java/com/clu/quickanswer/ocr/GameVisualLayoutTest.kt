@@ -63,7 +63,7 @@ class GameVisualLayoutTest {
         val detected = GameVisualLayout.detect(px, w, h)!!
         assertEquals(GameVisualLayout.Kind.NUMERIC_DARK, detected.kind)
         assertEquals(('0'..'9').toSet(), detected.digits.keys)
-        for ((digit, centre) in "1234567890".zip(rows)) {
+        for ((digit, centre) in "1234567890".toList().zip(rows)) {
             val key = detected.digits.getValue(digit)
             assertEquals("digit $digit x", (centre.first + sx).toFloat(), key.centerX, 4f)
             assertEquals("digit $digit y", (centre.second + sy).toFloat(), key.centerY, 4f)
