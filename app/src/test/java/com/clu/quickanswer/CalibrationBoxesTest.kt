@@ -12,6 +12,27 @@ import org.junit.Test
 class CalibrationBoxesTest {
     private fun r(i: Int) = PxRect(10 * i, 10 * i, 10 * i + 5, 10 * i + 5)
 
+    @Test fun keysAreDrawnZeroToNine_thenTheConfirmButton() {
+        val b = CalibrationBoxes()
+        assertEquals('0', b.nextKey)
+        repeat(10) { assertTrue(b.add(Mode.KEY, r(it))) }
+        assertNull(b.nextKey)
+        assertFalse(b.add(Mode.KEY, r(11)))
+        assertEquals(r(7), b.keys[7])
+        assertTrue(b.add(Mode.SUBMIT, r(12)))
+        assertTrue(b.add(Mode.SUBMIT, r(13)))
+        assertEquals(r(13), b.submit)
+        assertTrue(b.undo())
+        assertEquals(r(12), b.submit)
+        assertTrue(b.undo())
+        assertNull(b.submit)
+        assertTrue(b.undo())
+        assertEquals('9', b.nextKey)
+        b.clear()
+        assertTrue(b.isEmpty)
+        assertTrue(b.keys.isEmpty())
+    }
+
     @Test fun aNewQuestionOrFieldReplacesTheOldOne() {
         val b = CalibrationBoxes()
         assertTrue(b.add(Mode.QUESTION, r(1)))

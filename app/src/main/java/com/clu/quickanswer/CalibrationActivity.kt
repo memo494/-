@@ -96,6 +96,13 @@ class CalibrationActivity : AppCompatActivity() {
             modeButtons[m] = b
             modeRow.addView(b, weighted())
         }
+        // The pad of a number game: its keys and its confirm button (see CalibratedKeypad).
+        val keyRow = if (landscape) modeRow else row()
+        for ((m, label) in listOf(Mode.KEY to "مفاتيح الأرقام", Mode.SUBMIT to "زر التأكيد")) {
+            val b = barButton(label) { selectMode(m) }
+            modeButtons[m] = b
+            keyRow.addView(b, weighted())
+        }
         val actionRow = if (landscape) modeRow else row()
         actionRow.addView(barButton("تراجع") { if (boxes.undo()) boxesChanged() }, weighted())
         actionRow.addView(barButton("مسح الكل") { boxes.clear(); boxesChanged() }, weighted())
@@ -103,12 +110,17 @@ class CalibrationActivity : AppCompatActivity() {
         saveButton.setBackgroundColor(SAVE_COLOR)
         actionRow.addView(saveButton, weighted())
         root.addView(modeRow, wrapWidth())
+        if (keyRow !== modeRow) root.addView(keyRow, wrapWidth())
         if (actionRow !== modeRow) root.addView(actionRow, wrapWidth())
 
         view = CalibrationView(this, bmp, boxes) { added ->
-            if (!added) Toast.makeText(this, "الحد الأقصى ${LayoutTemplate.MAX_OPTIONS} خيارات", Toast.LENGTH_SHORT).show()
+            if (!added) Toast.makeText(this, if (mode == Mode.KEY) "رسمت المفاتيح العشرة كلها"
+                else "الحد الأقصى ${LayoutTemplate.MAX_OPTIONS} خيارات", Toast.LENGTH_SHORT).show()
             // The first box is the question; the buttons come next.
             if (added && mode == Mode.QUESTION && boxes.options.isEmpty() && boxes.numericField == null) selectMode(Mode.OPTION)
+            // After the field, the keys of its pad; after the tenth key, the confirm button.
+            if (added && mode == Mode.FIELD && boxes.keys.isEmpty()) selectMode(Mode.KEY)
+            if (added && mode == Mode.KEY && boxes.nextKey == null && boxes.submit == null) selectMode(Mode.SUBMIT)
             boxesChanged()
         }
         root.addView(view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -127,7 +139,10 @@ class CalibrationActivity : AppCompatActivity() {
         val what = when (mode) {
             Mode.QUESTION -> "ارسم مربعًا حول السؤال (كل سطوره)"
             Mode.OPTION -> "ارسم مربعًا حول كل زر جواب (الزر كله) — الخيارات: ${boxes.options.size}"
-            Mode.FIELD -> "ارسم مربعًا حول خانة كتابة الرقم"
+            Mode.FIELD -> "ارسم مربعًا حول خانة كتابة الرقم، وهي فاضية"
+            Mode.KEY -> boxes.nextKey?.let { "ارسم مربعًا حول مفتاح الرقم $it" }
+                ?: "رسمت المفاتيح العشرة ✓ — ارسم زر التأكيد إذا اللعبة فيها واحد"
+            Mode.SUBMIT -> "ارسم مربعًا حول زر التأكيد (اختياري)، ثم احفظ"
         }
         hint.text = what
         view.invalidate()
@@ -156,12 +171,20 @@ class CalibrationActivity : AppCompatActivity() {
         }
         val options = boxes.options.toList()
         val field = boxes.numericField
+        val keys = boxes.keys.toList()
+        val submit = boxes.submit
+        // Half a pad would type some digits and not others: all ten or none.
+        if (keys.isNotEmpty() && keys.size != 10) {
+            toast(KEYS_INCOMPLETE)
+            return
+        }
         val masks = masks
         saving = true
         saveButton.isEnabled = false
         thread(isDaemon = true, name = "calibration-save") {
             val t = try {
-                ManualTemplate.build(question, options, field, pixels, w, h, masks, UUID.randomUUID().toString(), System.currentTimeMillis())
+                ManualTemplate.build(question, options, field, pixels, w, h, masks, UUID.randomUUID().toString(),
+                    System.currentTimeMillis(), keys, submit)
             } catch (_: Throwable) {
                 return@thread finishSave(SAVE_FAILED)
             }
@@ -238,5 +261,6 @@ class CalibrationActivity : AppCompatActivity() {
         const val ALREADY_KNOWN = "هاي الشاشة إلها قالب من قبل"
         const val SAVED = "تم الحفظ ✓ — رح يستعمله من السؤال الجاي"
         const val SAVE_FAILED = "تعذّر الحفظ"
+        const val KEYS_INCOMPLETE = "لازم ترسم مفاتيح الأرقام العشرة كلها (0 لـ 9)، أو تمسحها"
     }
 }

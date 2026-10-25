@@ -14,7 +14,13 @@ import kotlin.math.roundToInt
 class CalibrationBoxes {
 
     /** What the next box drawn is. */
-    enum class Mode { QUESTION, OPTION, FIELD }
+    enum class Mode {
+        QUESTION, OPTION, FIELD,
+        /** The next number key, 0 first then 1..9 ([nextKey]); see [com.clu.quickanswer.ocr.CalibratedKeypad]. */
+        KEY,
+        /** The game's confirm button for a typed number; a new one replaces the old one. */
+        SUBMIT,
+    }
 
     /** One step to undo: the [mode] drawn and what it replaced ([previous], for the question and the field). */
     private class Step(val mode: Mode, val previous: PxRect?)
@@ -23,13 +29,23 @@ class CalibrationBoxes {
         private set
     var numericField: PxRect? = null
         private set
+    var submit: PxRect? = null
+        private set
     private val drawn = ArrayList<PxRect>()
+    private val drawnKeys = ArrayList<PxRect>()
+
+    /** The number keys drawn so far, index = digit. */
+    val keys: List<PxRect> get() = drawnKeys
+
+    /** The digit the next [Mode.KEY] box is for, or null when all ten are drawn. */
+    val nextKey: Char? get() = if (drawnKeys.size < 10) '0' + drawnKeys.size else null
     private val history = ArrayList<Step>()
 
     /** The options in the order they were drawn. */
     val options: List<PxRect> get() = drawn
 
-    val isEmpty: Boolean get() = question == null && numericField == null && drawn.isEmpty()
+    val isEmpty: Boolean get() = question == null && numericField == null && drawn.isEmpty() &&
+        drawnKeys.isEmpty() && submit == null
 
     /**
      * Adds [rect] as a [mode] box: a question or a number field replaces the one already there,
@@ -50,6 +66,15 @@ class CalibrationBoxes {
                 history.add(Step(mode, null))
                 drawn.add(rect)
             }
+            Mode.KEY -> {
+                if (nextKey == null) return false
+                history.add(Step(mode, null))
+                drawnKeys.add(rect)
+            }
+            Mode.SUBMIT -> {
+                history.add(Step(mode, submit))
+                submit = rect
+            }
         }
         return true
     }
@@ -61,6 +86,8 @@ class CalibrationBoxes {
             Mode.QUESTION -> question = step.previous
             Mode.FIELD -> numericField = step.previous
             Mode.OPTION -> drawn.removeAt(drawn.size - 1)
+            Mode.KEY -> drawnKeys.removeAt(drawnKeys.size - 1)
+            Mode.SUBMIT -> submit = step.previous
         }
         return true
     }
@@ -69,6 +96,8 @@ class CalibrationBoxes {
         question = null
         numericField = null
         drawn.clear()
+        drawnKeys.clear()
+        submit = null
         history.clear()
     }
 
