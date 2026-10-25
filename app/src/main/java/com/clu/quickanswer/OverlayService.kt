@@ -116,8 +116,6 @@ class OverlayService : Service() {
         private const val LONG_PRESS_MS = 600L
         private const val PANEL_AUTO_HIDE_MS = 15_000L
         private const val PANEL_TOP_MARGIN_DP = 6
-        private const val PANEL_TOP_MAX_LINES = 2
-        private const val PANEL_BUBBLE_MAX_LINES = 4
         private const val PREVIEW_AUTO_CLOSE_MS = 20_000L
         // An answer that auto mode hid is brought back only if it still has this long to live.
         private const val HIDDEN_ANSWER_MIN_LEFT_MS = 1_000L
@@ -612,7 +610,7 @@ class OverlayService : Service() {
         hideHighlight() // the box of the answer before marks nothing now
         panelMode = Prefs.panelMode(this)
         val p = panel ?: createPanelView().also { panel = it }
-        p.maxLines = if (panelMode == PanelPlacement.Mode.TOP) PANEL_TOP_MAX_LINES else PANEL_BUBBLE_MAX_LINES
+        p.maxLines = PanelPlacement.maxLines(panelMode, text)
         p.text = text
         measurePanel(p)
         val params = panelParams ?: WindowManager.LayoutParams(

@@ -386,4 +386,15 @@ class PanelPlacementTest {
         // A box as wide as the screen with a panel as tall as the rest: only a side could do, none fits.
         assertNull(PanelPlacement.moveOffBox(PxRect(0, 0, 1000, 2600), PxRect(0, 600, 1220, 800), portW, portH, gap))
     }
+
+    @Test
+    fun maxLines_keepsOneAnswerSmall_andGivesEachListedAnswerALine() {
+        val top = PanelPlacement.Mode.TOP
+        val side = PanelPlacement.Mode.NEXT_TO_BUBBLE
+        assertEquals(2, PanelPlacement.maxLines(top, "القلب"))
+        assertEquals(4, PanelPlacement.maxLines(side, "القلب"))
+        assertEquals(3, PanelPlacement.maxLines(top, "1. ب\n2. صح\n\n3. 42\n"))
+        assertEquals(4, PanelPlacement.maxLines(side, "1. ب\n2. صح\n3. 42"))
+        assertEquals(8, PanelPlacement.maxLines(top, (1..12).joinToString("\n") { "$it. أ" }))
+    }
 }

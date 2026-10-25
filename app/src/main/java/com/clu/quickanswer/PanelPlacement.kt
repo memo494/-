@@ -38,6 +38,21 @@ object PanelPlacement {
         screenW * (if (screenW > screenH) TOP_LANDSCAPE_WIDTH_PERCENT else TOP_PORTRAIT_WIDTH_PERCENT) / 100
 
     const val TOP_LANDSCAPE_WIDTH_PERCENT = 60
+
+    /**
+     * How many lines the panel shows for [text] in [mode]: 2 at the top and 4 next to the bubble
+     * keep a single answer small, but a reply with one answer per line (a screen with several
+     * questions) gets a line for each, up to [MAX_LIST_LINES], instead of losing the last ones.
+     */
+    fun maxLines(mode: Mode, text: String): Int {
+        val base = if (mode == Mode.TOP) TOP_MAX_LINES else BUBBLE_MAX_LINES
+        val lines = text.trim().lines().count { it.isNotBlank() }
+        return maxOf(base, minOf(lines, MAX_LIST_LINES))
+    }
+
+    const val TOP_MAX_LINES = 2
+    const val BUBBLE_MAX_LINES = 4
+    const val MAX_LIST_LINES = 8
     const val TOP_PORTRAIT_WIDTH_PERCENT = 90
 
     /** Widest the panel may be in the given [mode]. */

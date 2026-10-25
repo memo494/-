@@ -65,3 +65,12 @@ one; mark an entry "superseded by N" when it changes.
     dynamic quantisation) was measured and rejected: with the convolutions quantised it read
     "سورة طله" for "سورة طه" (S2 fails) and was 2-3x slower on x86; with only MatMul quantised it was
     no faster and misread a question letter. Re-measure on an ARM phone before revisiting.
+16. **The screenshot prompt is for any screen, not one game.** Build-61 had rewritten
+    `ScreenImage.PROMPT` for the landscape parchment game only ("Only if there is genuinely no central
+    quiz question..."), which invites "لا يوجد سؤال" on apps, websites, documents and worksheets. The prompt now
+    names any screen and language and gives one answer rule per kind of question (choice and
+    true/false: the printed words; number: ASCII digits only; blank, matching, open question; one
+    numbered line per question). The two rules the games depend on are kept and tested
+    (`ScreenImageTest`). The on-device readers still read only known layouts; every other screen is
+    answered from the screenshot. The panel gets a line per listed answer, up to 8
+    (`PanelPlacement.maxLines`).

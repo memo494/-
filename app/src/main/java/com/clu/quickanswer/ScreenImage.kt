@@ -25,24 +25,37 @@ object ScreenImage {
     /** True when [reply] is the model's "no question on screen" reply (ignoring spaces and a final full stop). */
     fun isNoQuestion(reply: String): Boolean = reply.trim().trimEnd('.', '!', '،', ' ') == NO_QUESTION
 
+    /**
+     * The screenshot prompt for any screen: a game, an app, a website, a document, a worksheet or a
+     * photo of a page, in any language. The answer rules still suit the games: a choice is answered
+     * with its printed text (matched against the options that were read, see
+     * [AnswerParser.resolveImageAnswer]) and a number with digits only.
+     */
     const val PROMPT =
-        "You are reading a landscape Arabic trivia game screenshot. The game question is " +
-            "printed prominently in the central parchment/card, sometimes with an image, " +
-            "and may use dark buttons, translucent gray buttons, or a number keypad. " +
-            "Ignore any floating AI bubble, black notification saying 'لا يوجد سؤال', " +
-            "scoreboard, chat, timer, and the text on side panels. " +
-            "If the central question asks for a number, give ONLY the numeric answer " +
-            "using ASCII digits 0-9, preferably 1 to 4 digits when possible; " +
-            "do not include a sentence, units, or the key number you tapped. " +
-            "For multiple-choice questions, return ONLY the exact printed " +
-            "Arabic words of the correct answer as they appear inside its " +
-            "answer button (for example: 'سبونج بوب' or 'القلب'). " +
-            "Do NOT return the option position, index, letter, coordinates or " +
-            "an explanation. For a numeric keypad question return ONLY digits. " +
-            "If the question is clearly visible, " +
-            "never reply that there is no question. If the answer cannot be determined " +
-            "from the image, reply exactly 'غير متأكد'. " +
-            "Only if there is genuinely no central quiz question, reply exactly: " + NO_QUESTION
+        "You see a phone screenshot. It can be any screen: a quiz game, an app, a website, " +
+            "a document, an exam or worksheet, or a photo of a page; portrait or landscape, " +
+            "in Arabic, English or any other language. Find the question(s) on it, including " +
+            "any picture, diagram, table, graph or equation they depend on, and answer them. " +
+            "Ignore our floating bubble, any black notification saying '" + NO_QUESTION + "', " +
+            "scores, player names, timers, chat, ads, menus, navigation bars and number keypads. " +
+            "Reply with ONLY the final answer, in the language of the question, no explanation, " +
+            "no reasoning, no preamble. By kind of question: " +
+            "multiple choice, true/false or yes/no: the exact printed words of the correct " +
+            "option as written on the screen (for example: 'سبونج بوب', 'صح' or 'Paris'), not " +
+            "its letter, number or position; if the options have no words (pictures only), name " +
+            "its label or place, for example 'B' or 'الصورة الثانية'. " +
+            "Several correct options: their printed words separated by ' + '. " +
+            "A number, a calculation or a keypad: ONLY the number in ASCII digits 0-9, no words " +
+            "or units; for an estimate give your best single number (the typical or most recent " +
+            "real value). " +
+            "Fill in the blank: only the missing word(s). " +
+            "Matching or ordering: compact pairs or the order, for example '1-ب، 2-أ، 3-ج'. " +
+            "Any other question: the shortest correct answer, a word, a phrase or one short " +
+            "sentence. " +
+            "If there are several questions, put each answer on its own line, numbered as on " +
+            "the screen. If a question is visible, never reply that there is none: give your " +
+            "best answer, and reply exactly 'غير متأكد' only when it cannot be read. " +
+            "If no question is visible at all, reply exactly: " + NO_QUESTION
 
     /**
      * Null if the capture is black; otherwise the JPEG (base64) to send and the bitmap to show, with

@@ -31,6 +31,25 @@ class ScreenImageTest {
     }
 
     @Test
+    fun prompt_isForAnyScreen_notOnlyTheGames() {
+        val p = ScreenImage.PROMPT
+        for (screen in listOf("app", "website", "document", "worksheet", "portrait", "any other language")) {
+            assertTrue(screen, p.contains(screen))
+        }
+        assertFalse(p.contains("parchment"))
+    }
+
+    @Test
+    fun prompt_keepsTheAnswerRulesTheGamesNeed() {
+        val p = ScreenImage.PROMPT
+        // A choice is matched against the options read on the device, a number goes to the keypad.
+        assertTrue(p.contains("exact printed words of the correct option"))
+        assertTrue(p.contains("ONLY the number in ASCII digits 0-9"))
+        assertTrue(p.contains("each answer on its own line"))
+        assertTrue(p.contains("Ignore our floating bubble"))
+    }
+
+    @Test
     fun scaledSize_fitsTheLongSideAndKeepsTheShape() {
         assertEquals(512 to 256, ScreenImage.scaledSize(1024, 512, 512))
         assertEquals(256 to 512, ScreenImage.scaledSize(512, 1024, 512))
