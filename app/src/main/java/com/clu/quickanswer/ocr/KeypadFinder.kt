@@ -40,12 +40,59 @@ object KeypadFinder {
 
     /** The ten keys, index = digit, or null when no single pad is on the capture ([width] x [height]). */
     fun find(glyphs: List<Glyph>, width: Int, height: Int): List<PxRect>? {
-        if (width <= 0 || height <= 0) return null
-        val digits = glyphs.flatMap { split(it) }.filter {
+        val best = groups(glyphs, width, height)
+        val full = best.filter { members -> members.size == 10 && members.map { it.first }.toSet().size == 10 }
+        val pad = full.singleOrNull() ?: return null
+        val keys = pad.sortedBy { it.first }.map { (_, box) -> keyBox(box, width, height) }
+        // Two proposed keys on top of each other cannot both be tapped right.
+        for (i in keys.indices) for (j in i + 1 until keys.size) if (overlap(keys[i], keys[j])) return null
+        return keys
+    }
+
+    /**
+     * The keys that could be read when not all ten could (a digit OCR missed, a key hidden): the
+     * group with the most different digits, at least [MIN_PARTIAL], each digit once (index = digit,
+     * null where unknown). The user taps the rest. Null when nothing pad-like is there.
+     */
+    fun partial(glyphs: List<Glyph>, width: Int, height: Int): List<PxRect?>? {
+        val group = groups(glyphs, width, height)
+            .filter { members -> members.map { it.first }.toSet().size == members.size }
+            .maxByOrNull { it.size }
+            ?.takeIf { it.size >= MIN_PARTIAL } ?: return null
+        val keys = arrayOfNulls<PxRect>(10)
+        for ((digit, box) in group) keys[digit - '0'] = keyBox(box, width, height)
+        return keys.toList()
+    }
+
+    /**
+     * The digit printed nearest the tap at ([x], [y]) and its key box, or null when no digit is
+     * within [TAP_REACH] glyph heights: a tap on a key sets THAT digit, in any order.
+     */
+    fun digitAt(glyphs: List<Glyph>, width: Int, height: Int, x: Int, y: Int): Pair<Int, PxRect>? {
+        val near = digits(glyphs, width, height).minByOrNull { (_, b) ->
+            hypot((b.centerX - x).toDouble(), (b.centerY - y).toDouble())
+        } ?: return null
+        val d = hypot((near.second.centerX - x).toDouble(), (near.second.centerY - y).toDouble())
+        if (d > TAP_REACH * near.second.height) return null
+        return (near.first - '0') to keyBox(near.second, width, height)
+    }
+
+    /** At least this many different digits read for a partial pad to be proposed. */
+    private const val MIN_PARTIAL = 4
+
+    /** A tap this many digit heights from a digit's centre is still on its key. */
+    private const val TAP_REACH = 1.3
+
+    private fun digits(glyphs: List<Glyph>, width: Int, height: Int): List<Pair<Char, PxRect>> =
+        if (width <= 0 || height <= 0) emptyList() else glyphs.flatMap { split(it) }.filter {
             it.second.height >= MIN_GLYPH && it.second.width > 0 &&
                 it.second.left >= 0 && it.second.top >= 0 && it.second.right <= width && it.second.bottom <= height
         }
-        if (digits.size < 10) return null
+
+    /** Connected groups of neighbouring, similar-sized digits. */
+    private fun groups(glyphs: List<Glyph>, width: Int, height: Int): List<List<Pair<Char, PxRect>>> {
+        val digits = digits(glyphs, width, height)
+        if (digits.isEmpty()) return emptyList()
         // Connected groups of neighbouring, similar-sized digits.
         val group = IntArray(digits.size) { it }
         fun root(i: Int): Int {
@@ -61,14 +108,7 @@ object KeypadFinder {
                 NEIGHBOUR_HEIGHTS * max(a.height, b.height)
             if (ratio <= MAX_HEIGHT_RATIO && near) group[root(i)] = root(j)
         }
-        val pads = digits.indices.groupBy { root(it) }.values
-            .map { members -> members.map { digits[it] } }
-            .filter { members -> members.size == 10 && members.map { it.first }.toSet().size == 10 }
-        val pad = pads.singleOrNull() ?: return null
-        val keys = pad.sortedBy { it.first }.map { (_, box) -> square(box, width, height) }
-        // Two proposed keys on top of each other cannot both be tapped right.
-        for (i in keys.indices) for (j in i + 1 until keys.size) if (overlap(keys[i], keys[j])) return null
-        return keys
+        return digits.indices.groupBy { root(it) }.values.map { members -> members.map { digits[it] } }
     }
 
     /**
@@ -93,7 +133,8 @@ object KeypadFinder {
         else -> null
     }
 
-    private fun square(box: PxRect, width: Int, height: Int): PxRect {
+    /** The key box proposed for a digit read at [box]: a square centred on it. */
+    fun keyBox(box: PxRect, width: Int, height: Int): PxRect {
         // By height only: a digit is taller than wide, and a piece of a split run has no width of its own.
         val side = box.height * KEY_SIDE_HEIGHTS
         val half = side / 2f

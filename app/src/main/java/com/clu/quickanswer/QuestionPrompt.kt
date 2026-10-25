@@ -42,7 +42,9 @@ object QuestionPrompt {
             sb.append(
                 "This is a quiz question whose answer is a number. Reply with ONLY digits (0-9): your " +
                     "best single number estimate (the typical or most recent real value), even if the " +
-                    "exact number varies. No words, no units, no explanation.\n"
+                    "exact number varies. The game's field takes a whole number of at most 4 digits " +
+                    "(0-9999), so give the value in the unit that fits it (litre to millilitres: 1000). " +
+                    "No words, no units, no explanation.\n"
             )
         } else {
             sb.append(

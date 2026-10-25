@@ -23,7 +23,13 @@ class CalibrationBoxes {
     }
 
     /** One step to undo: the [mode] drawn and what it replaced ([previous], for the question and the field). */
-    private class Step(val mode: Mode, val previous: PxRect?, val previousKeys: List<PxRect>? = null)
+    private class Step(
+        val mode: Mode,
+        val previous: PxRect?,
+        val previousKeys: List<PxRect?>? = null,
+        /** For one key: which digit it was, so undo puts back that digit's earlier box. */
+        val digit: Int = -1,
+    )
 
     var question: PxRect? = null
         private set
@@ -32,20 +38,24 @@ class CalibrationBoxes {
     var submit: PxRect? = null
         private set
     private val drawn = ArrayList<PxRect>()
-    private val drawnKeys = ArrayList<PxRect>()
+    /** Index = digit; a key can be set in any order (a tap is matched to the digit printed on it). */
+    private val keySlots = arrayOfNulls<PxRect>(10)
 
-    /** The number keys drawn so far, index = digit. */
-    val keys: List<PxRect> get() = drawnKeys
+    /** Each digit's key (index = digit), null where not set yet. */
+    val keyAt: List<PxRect?> get() = keySlots.toList()
 
-    /** The digit the next [Mode.KEY] box is for, or null when all ten are drawn. */
-    val nextKey: Char? get() = if (drawnKeys.size < 10) '0' + drawnKeys.size else null
+    /** The keys set so far, in digit order; all ten, index = digit, once [nextKey] is null. */
+    val keys: List<PxRect> get() = keySlots.filterNotNull()
+
+    /** The lowest digit with no key yet, or null when all ten are set. */
+    val nextKey: Char? get() = keySlots.indexOfFirst { it == null }.takeIf { it >= 0 }?.let { '0' + it }
     private val history = ArrayList<Step>()
 
     /** The options in the order they were drawn. */
     val options: List<PxRect> get() = drawn
 
     val isEmpty: Boolean get() = question == null && numericField == null && drawn.isEmpty() &&
-        drawnKeys.isEmpty() && submit == null
+        keySlots.all { it == null } && submit == null
 
     /**
      * Adds [rect] as a [mode] box: a question or a number field replaces the one already there,
@@ -67,9 +77,9 @@ class CalibrationBoxes {
                 drawn.add(rect)
             }
             Mode.KEY -> {
-                if (nextKey == null) return false
-                history.add(Step(mode, null))
-                drawnKeys.add(rect)
+                val digit = nextKey?.let { it - '0' } ?: return false
+                history.add(Step(mode, null, digit = digit))
+                keySlots[digit] = rect
             }
             Mode.SUBMIT -> {
                 history.add(Step(mode, submit))
@@ -85,9 +95,16 @@ class CalibrationBoxes {
      */
     fun setKeys(found: List<PxRect>): Boolean {
         if (found.size != 10) return false
-        history.add(Step(Mode.KEY, null, drawnKeys.toList()))
-        drawnKeys.clear()
-        drawnKeys.addAll(found)
+        history.add(Step(Mode.KEY, null, keySlots.toList()))
+        for (d in 0..9) keySlots[d] = found[d]
+        return true
+    }
+
+    /** Sets (or replaces) the key of [digit] 0..9. False, nothing changed, for another digit. */
+    fun setKey(digit: Int, rect: PxRect): Boolean {
+        if (digit !in 0..9) return false
+        history.add(Step(Mode.KEY, keySlots[digit], digit = digit))
+        keySlots[digit] = rect
         return true
     }
 
@@ -98,7 +115,7 @@ class CalibrationBoxes {
      * easier than dragging ten small boxes, and the taps only need the key's middle.
      */
     fun boxAround(x: Int, y: Int, width: Int, height: Int, defaultShare: Float = DEFAULT_KEY_SHARE): PxRect {
-        val sides = drawnKeys.map { minOf(it.width, it.height) }.sorted()
+        val sides = keySlots.filterNotNull().map { minOf(it.width, it.height) }.sorted()
         val side = (if (sides.isNotEmpty()) sides[sides.size / 2] else (minOf(width, height) * defaultShare).toInt())
             .coerceIn(MIN_TAP_SIDE, maxOf(MIN_TAP_SIDE, minOf(width, height)))
         val left = (x - side / 2).coerceIn(0, maxOf(0, width - side))
@@ -114,9 +131,8 @@ class CalibrationBoxes {
             Mode.FIELD -> numericField = step.previous
             Mode.OPTION -> drawn.removeAt(drawn.size - 1)
             Mode.KEY -> if (step.previousKeys != null) {
-                drawnKeys.clear()
-                drawnKeys.addAll(step.previousKeys)
-            } else drawnKeys.removeAt(drawnKeys.size - 1)
+                for (d in 0..9) keySlots[d] = step.previousKeys[d]
+            } else keySlots[step.digit] = step.previous
             Mode.SUBMIT -> submit = step.previous
         }
         return true
@@ -126,7 +142,7 @@ class CalibrationBoxes {
         question = null
         numericField = null
         drawn.clear()
-        drawnKeys.clear()
+        keySlots.fill(null)
         submit = null
         history.clear()
     }

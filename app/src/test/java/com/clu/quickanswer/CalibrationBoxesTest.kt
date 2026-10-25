@@ -55,6 +55,17 @@ class CalibrationBoxesTest {
         assertEquals(0, next.top)
     }
 
+    @Test fun aKeyCanBeSetForAnyDigit_andUndoPutsBackTheOldOne() {
+        val b = CalibrationBoxes()
+        assertTrue(b.setKey(7, r(1)))
+        assertEquals('0', b.nextKey)
+        assertEquals(r(1), b.keyAt[7])
+        assertTrue(b.setKey(7, r(2)))
+        assertTrue(b.undo())
+        assertEquals(r(1), b.keyAt[7])
+        assertFalse(b.setKey(10, r(3)))
+    }
+
     @Test fun aNewQuestionOrFieldReplacesTheOldOne() {
         val b = CalibrationBoxes()
         assertTrue(b.add(Mode.QUESTION, r(1)))
