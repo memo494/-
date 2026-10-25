@@ -90,8 +90,15 @@ class LatinOcr : AutoCloseable {
      */
     fun glyphs(bitmap: Bitmap): List<KeypadFinder.Glyph> = try {
         val text = Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0)), GLYPHS_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        text.textBlocks.flatMap { it.lines }.flatMap { it.elements }.mapNotNull { e ->
-            e.boundingBox?.let { b -> KeypadFinder.Glyph(e.text, PxRect(b.left, b.top, b.right, b.bottom)) }
+        text.textBlocks.flatMap { it.lines }.flatMap { it.elements }.flatMap { e ->
+            // A row of keys can be read as one word ("456"); its symbols carry each digit's own box,
+            // which an even split of the word's box does not (keys have gaps; measured on the phone,
+            // 26 Oct 2026, the 6 landed beside its key).
+            val symbols = if (e.text.trim().length > 1) e.symbols.mapNotNull { sym ->
+                sym.boundingBox?.let { b -> KeypadFinder.Glyph(sym.text, PxRect(b.left, b.top, b.right, b.bottom)) }
+            } else emptyList()
+            if (symbols.isNotEmpty() && symbols.size == e.symbols.size) symbols
+            else listOfNotNull(e.boundingBox?.let { b -> KeypadFinder.Glyph(e.text, PxRect(b.left, b.top, b.right, b.bottom)) })
         }
     } catch (_: Throwable) {
         emptyList()

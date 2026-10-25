@@ -147,7 +147,7 @@ class CalibrationActivity : AppCompatActivity() {
     /** The hint under the title says what to draw now and how many options there are. */
     private fun boxesChanged() {
         val what = when (mode) {
-            Mode.QUESTION -> "ارسم مربعًا حول السؤال (كل سطوره)"
+            Mode.QUESTION -> "ارسم مربعًا حول كتابة السؤال بس (كل سطوره)، بدون الأزرار والخانة"
             Mode.OPTION -> "ارسم مربعًا حول كل زر جواب (الزر كله) — الخيارات: ${boxes.options.size}"
             Mode.FIELD -> "ارسم مربعًا حول خانة كتابة الرقم، وهي فاضية"
             Mode.KEY -> boxes.nextKey?.let { "اضغط على مفتاح الرقم $it — أو «اكتشاف المفاتيح تلقائيًا»" }
@@ -186,6 +186,13 @@ class CalibrationActivity : AppCompatActivity() {
         // Half a pad would type some digits and not others: all ten or none.
         if (keys.isNotEmpty() && keys.size != 10) {
             toast(KEYS_INCOMPLETE)
+            return
+        }
+        // Say which box is wrong rather than "the boxes make no sense": the usual slip is a question
+        // box drawn round the whole card, over the buttons (26 Oct 2026, on the phone).
+        val others = options + listOfNotNull(field, submit) + keys
+        if (others.any { overlapShare(question, it) > 0.10f }) {
+            toast(QUESTION_OVER_BUTTONS)
             return
         }
         val masks = masks
@@ -263,6 +270,15 @@ class CalibrationActivity : AppCompatActivity() {
         }
     }
 
+    /** The share of the smaller of [a] and [b] that they overlap (0 when apart). */
+    private fun overlapShare(a: PxRect, b: PxRect): Float {
+        val w = minOf(a.right, b.right) - maxOf(a.left, b.left)
+        val h = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)
+        if (w <= 0 || h <= 0) return 0f
+        val smaller = minOf(a.width.toLong() * a.height, b.width.toLong() * b.height).coerceAtLeast(1)
+        return (w.toLong() * h).toFloat() / smaller
+    }
+
     /** Shows [message] and lets the user save again; closes the screen after a save that worked. */
     private fun finishSave(message: String, close: Boolean = false) {
         runOnUiThread {
@@ -308,6 +324,7 @@ class CalibrationActivity : AppCompatActivity() {
         const val DETECTING = "عم بدوّر على الأرقام…"
         const val DETECTED = "لقيت المفاتيح العشرة ✓ — راجعها، وإذا في غلط اضغط تراجع"
         const val DETECT_FAILED = "ما قدرت ألاقي لوحة أرقام كاملة؛ اضغط على المفاتيح بإيدك من 0 لـ 9"
+        const val QUESTION_OVER_BUTTONS = "مربع السؤال لازم يكون حول كتابة السؤال بس، مش حول الأزرار أو الخانة — اضغط «السؤال» وارسمه من جديد"
         const val KEYS_INCOMPLETE = "لازم ترسم مفاتيح الأرقام العشرة كلها (0 لـ 9)، أو تمسحها"
     }
 }
