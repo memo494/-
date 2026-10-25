@@ -109,15 +109,24 @@ object GameVisualLayout {
      * shift can never line every key up with its neighbour; the backdrop and submit checks still apply.
      */
     private const val MAX_SHIFT = 48
+    /** The measured window searched first (the detector's behaviour before the wide search). */
+    private const val NEAR_SHIFT = 12
+    private const val NEAR_STEP = 6
     private const val SHIFT_STEP = 4
 
     /**
-     * The offset at the centre of all offsets where every key matches ([allKeys]), or null when none
-     * does. A key surface is wide, so many offsets match; the first or the nearest one sits near an
-     * edge of the keys and taps off-centre. The centre is used only if it matches too; otherwise the
-     * matching offset closest to it.
+     * Where the keys are: first the measured window (±12 in steps of 6, the offset nearest the
+     * reference, as tested on the known captures), and only when nothing matches there, the wide
+     * search. In the wide one many offsets match a broad key face, so the one at their centre is
+     * taken (the nearest one to the centre that matches), not the first, which sits near a key's
+     * edge and taps off-centre.
      */
     private inline fun centredOffset(allKeys: (Int, Int) -> Boolean): Pair<Int, Int>? {
+        var near: Pair<Int, Int>? = null
+        for (dy in -NEAR_SHIFT..NEAR_SHIFT step NEAR_STEP) for (dx in -NEAR_SHIFT..NEAR_SHIFT step NEAR_STEP) {
+            if ((near == null || abs(dx) + abs(dy) < abs(near.first) + abs(near.second)) && allKeys(dx, dy)) near = dx to dy
+        }
+        if (near != null) return near
         val hits = ArrayList<Pair<Int, Int>>()
         for (dy in -MAX_SHIFT..MAX_SHIFT step SHIFT_STEP) for (dx in -MAX_SHIFT..MAX_SHIFT step SHIFT_STEP) {
             if (allKeys(dx, dy)) hits.add(dx to dy)
