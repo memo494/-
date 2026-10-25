@@ -22,7 +22,8 @@ capture (MediaProjection) ─► our own windows painted black = masks
   │    remembered per picture (PictureRegion.hash). A miss asks with the whole screenshot:
   │    measured faster on the owner's phone than a cropped-picture request (decision 13)
   │
-  └─ not read (or text reply unusable): Answerer.answer(screenshot) (image request)
+  └─ not read (or text reply unusable): Answerer.answer(screenshot, prompt) (image request;
+     GAME prompt when the device read the question or knows the layout, else GENERAL, decision 16)
 ```
 
 The answer is shown in a panel; for a read multiple-choice question a green box marks the option.

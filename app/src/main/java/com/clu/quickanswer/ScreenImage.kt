@@ -25,24 +25,56 @@ object ScreenImage {
     /** True when [reply] is the model's "no question on screen" reply (ignoring spaces and a final full stop). */
     fun isNoQuestion(reply: String): Boolean = reply.trim().trimEnd('.', '!', '،', ' ') == NO_QUESTION
 
-    const val PROMPT =
-        "You are reading a landscape Arabic trivia game screenshot. The game question is " +
-            "printed prominently in the central parchment/card, sometimes with an image, " +
-            "and may use dark buttons, translucent gray buttons, or a number keypad. " +
-            "Ignore any floating AI bubble, black notification saying 'لا يوجد سؤال', " +
-            "scoreboard, chat, timer, and the text on side panels. " +
-            "If the central question asks for a number, give ONLY the numeric answer " +
-            "using ASCII digits 0-9, preferably 1 to 4 digits when possible; " +
-            "do not include a sentence, units, or the key number you tapped. " +
-            "For multiple-choice questions, return ONLY the exact printed " +
-            "Arabic words of the correct answer as they appear inside its " +
-            "answer button (for example: 'سبونج بوب' or 'القلب'). " +
-            "Do NOT return the option position, index, letter, coordinates or " +
-            "an explanation. For a numeric keypad question return ONLY digits. " +
-            "If the question is clearly visible, " +
-            "never reply that there is no question. If the answer cannot be determined " +
-            "from the image, reply exactly 'غير متأكد'. " +
-            "Only if there is genuinely no central quiz question, reply exactly: " + NO_QUESTION
+    /** What the model is told to reply when it cannot read the question or is not sure. */
+    const val UNSURE = "غير متأكد"
+
+    /**
+     * The screenshot prompt for a quiz game screen, used when a cheap signal says the screen is a
+     * game (a question was read on the device, a layout template fits, or the colour layout
+     * matched). Short on purpose, and it keeps the rule the games need: answer only the central
+     * question and ignore the side panels, which hold other text the model would take for a second
+     * question. A choice is answered with its printed text (matched against the options that were
+     * read, see [AnswerParser.resolveImageAnswer]) and a number with digits only.
+     */
+    const val GAME_PROMPT =
+        "You see a quiz game screenshot. Answer ONLY the main question in the central card or " +
+            "banner (it may have a picture, buttons or a number keypad). Ignore our floating " +
+            "bubble, any black notification saying '" + NO_QUESTION + "', scores, player names, " +
+            "timers, chat and the text on side panels. Reply with ONLY the answer, one line, " +
+            "never numbered, no explanation. Multiple choice: the exact printed words of the " +
+            "correct option as written inside its button (for example 'سبونج بوب' or 'القلب'), " +
+            "never its letter, number or position. A number (including a keypad question): ONLY " +
+            "the number in ASCII digits 0-9 (never ٠-٩), no words or units; work it out " +
+            "carefully, output only the result; for an estimate give your best single number. " +
+            "If the question is visible, never reply that there is none; reply exactly '" + UNSURE +
+            "' only when it cannot be read. Only if there is no quiz question at all, reply " +
+            "exactly: " + NO_QUESTION
+
+    /**
+     * The screenshot prompt for any other screen: an exam or worksheet, a document, a website or an
+     * app, in any language. It defines what a question is, because without that the model answers
+     * chat messages, ads and dialogs, and auto mode only skips a screen on [NO_QUESTION]. One question
+     * is answered alone and never numbered (a "1." in front breaks the match against the options
+     * read, see [AnswerParser.resolveImageAnswer]); several get one "N. answer" line each. Priority
+     * when rules clash: the printed option text, then ASCII digits, then the question's language.
+     */
+    const val GENERAL_PROMPT =
+        "You see a phone screenshot: a quiz, an exam or worksheet, a document, a website or an " +
+            "app, in any language. A question is a quiz, exam, homework or trivia question " +
+            "asking for an answer, such as multiple choice, true/false, fill in the blank, a " +
+            "calculation or a short-answer question. Chat messages, ads, dialogs, menus, " +
+            "settings and forms are not questions. Ignore our floating bubble and any black " +
+            "notification saying '" + NO_QUESTION + "'. Reply with ONLY the final answer, in the " +
+            "question's language, no explanation. Rules, in this order: 1) a choice: the exact " +
+            "printed text of the correct option, never its letter or position; several correct: " +
+            "their texts joined by ' + '; options that are only pictures: their printed label. " +
+            "2) a number or a calculation: ONLY the number in ASCII digits 0-9 (never ٠-٩), no " +
+            "units; work it out carefully, output only the result. 3) fill in the blank: only " +
+            "the missing words. 4) matching or ordering: pairs such as '1-ب، 2-أ'. 5) otherwise: " +
+            "the shortest correct answer. One question: the answer alone, never numbered. " +
+            "Several questions: one line each, 'N. answer', N as printed. If a question is " +
+            "visible, give your best answer; reply exactly '" + UNSURE + "' only when it cannot " +
+            "be read. If no question is visible, reply exactly: " + NO_QUESTION
 
     /**
      * Null if the capture is black; otherwise the JPEG (base64) to send and the bitmap to show, with

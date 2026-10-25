@@ -7,7 +7,8 @@ import com.clu.quickanswer.ocr.Question
  * device (never used to answer: a candidate is not trusted yet), the screenshot is answered as
  * usual, and the model's answer is compared with what was read. An answer that is one of the read
  * options (or a number, for a number field) means the template found the right places; an answer
- * that matches nothing means it did not. Errors and "no question" say nothing about the template.
+ * that matches nothing means it did not. Errors, "no question" and replies that are not a single
+ * answer (a list, several options, pairs, "unsure") say nothing about the template.
  * Pure Kotlin.
  */
 object CandidateCheck {
@@ -22,6 +23,9 @@ object CandidateCheck {
         if (!replyIsAnswer || replyText.isBlank() || ScreenImage.isNoQuestion(replyText)) {
             return Result(Verdict.UNKNOWN, null)
         }
+        // A list, several options, pairs or "unsure" cannot match one read option, and must not count
+        // against the template (five refutations demote it).
+        if (!ReplyShape.isSingle(replyText)) return Result(Verdict.UNKNOWN, null)
         val resolved = if (read.numeric) {
             AnswerParser.numberOnly(replyText)?.let { AnswerParser.Resolved(it, null) }
         } else {

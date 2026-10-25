@@ -114,10 +114,10 @@ class OverlayService : Service() {
         // between two questions and are not compared, so the rest has to be held to a stricter limit.
         private const val WATCH_SAME_SCREEN_DIFF = CHANGE_THRESHOLD / 2
         private const val LONG_PRESS_MS = 600L
-        private const val PANEL_AUTO_HIDE_MS = 15_000L
+        // A reply for learning a layout is a quiz option or a number, which is short; a sentence means
+        // a document or an app, not a quiz screen worth a layout request.
+        private const val MAX_LEARN_REPLY_CHARS = 40
         private const val PANEL_TOP_MARGIN_DP = 6
-        private const val PANEL_TOP_MAX_LINES = 2
-        private const val PANEL_BUBBLE_MAX_LINES = 4
         private const val PREVIEW_AUTO_CLOSE_MS = 20_000L
         // An answer that auto mode hid is brought back only if it still has this long to live.
         private const val HIDDEN_ANSWER_MIN_LEFT_MS = 1_000L
@@ -605,15 +605,19 @@ class OverlayService : Service() {
     /**
      * Shows the answer at the top of the screen or next to the bubble, as set in [Prefs.panelMode].
      * The panel window is not touchable, so every tap goes through to the app underneath (the
-     * answer options of the game); it hides itself after [hideAfterMs].
+     * answer options of the game); it hides itself after [hideAfterMs] (longer for a list, see
+     * [PanelPlacement.autoHideMs]). A list is aligned to the start, in reading order.
      */
-    private fun showPanel(text: String, hideAfterMs: Long = PANEL_AUTO_HIDE_MS) {
+    private fun showPanel(text: String, hideAfterMs: Long = PanelPlacement.autoHideMs(text)) {
         hiddenAnswer.clear() // this answer replaces whatever auto mode had hidden
         hideHighlight() // the box of the answer before marks nothing now
         panelMode = Prefs.panelMode(this)
         val p = panel ?: createPanelView().also { panel = it }
-        p.maxLines = if (panelMode == PanelPlacement.Mode.TOP) PANEL_TOP_MAX_LINES else PANEL_BUBBLE_MAX_LINES
+        p.maxLines = PanelPlacement.maxLines(panelMode, text, landscape = screenW > screenH)
         p.text = text
+        val list = ReplyShape.isList(text)
+        p.gravity = if (list) Gravity.START or Gravity.CENTER_VERTICAL else Gravity.CENTER
+        p.textDirection = if (list) View.TEXT_DIRECTION_ANY_RTL else View.TEXT_DIRECTION_FIRST_STRONG
         measurePanel(p)
         val params = panelParams ?: WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -1436,6 +1440,8 @@ class OverlayService : Service() {
         val fingerprint: String? = null,
         val fits: Boolean = false,
         val picture: ShownPicture? = null,
+        /** True when [ColorLayout] read the screen (the original game). */
+        val colorLayout: Boolean = false,
     )
 
     /** The picture a question shows: where it is in the capture (pixels) and its [PictureRegion.hash]. */
@@ -1517,13 +1523,18 @@ class OverlayService : Service() {
                 }
             }
         }
-        val firstImageReply = c.answer(bmp)
+        // Cheap signals only (legacyVisibleKind stays in the retry below): the short game prompt when
+        // the device read the question or knows the layout, the general one for any other screen.
+        val prompt = if (q != null || read.candidate != null || read.fits || read.colorLayout) {
+            ImagePrompt.GAME
+        } else ImagePrompt.GENERAL
+        val firstImageReply = c.answer(bmp, prompt)
         val fallbackKind = if (q == null && firstImageReply.kind == Reply.Kind.ANSWER &&
             ScreenImage.isNoQuestion(firstImageReply.text)) legacyVisibleKind(bmp) else null
         val imageReply = if (fallbackKind != null) {
             val focused = ScreenImage.focusQuiz(bmp, fallbackKind == GameVisualLayout.Kind.NUMERIC_WHITE)
             try {
-                val retry = c.answer(focused)
+                val retry = c.answer(focused, ImagePrompt.GAME)
                 if (retry.isAnswer) retry else firstImageReply
             } finally { if (focused !== bmp) focused.recycle() }
         } else firstImageReply
@@ -1532,7 +1543,8 @@ class OverlayService : Service() {
         if (q != null && imageReply.kind == Reply.Kind.ANSWER) {
             val r = if (q.numeric) {
                 // Only a bare number counts (an error message can contain digits too).
-                AnswerParser.numberOnly(text)?.let { AnswerParser.Resolved(it, null) }
+                (AnswerParser.numberOnly(text) ?: AnswerParser.numberOnly(AnswerParser.stripLoneFirstLabel(text)))
+                    ?.let { AnswerParser.Resolved(it, null) }
             } else {
                 AnswerParser.resolveImageAnswer(q, text)
             }
@@ -1590,6 +1602,8 @@ class OverlayService : Service() {
     private fun learnFrameFor(read: DeviceRead, bmp: Bitmap, masks: List<PxRect>, c: Answerer, reply: Reply, text: String): LearnFrame? {
         val fp = read.fingerprint ?: return null
         if (read.fits || read.question != null || !reply.isAnswer || ScreenImage.isNoQuestion(text)) return null
+        // Several answers, "unsure" or a sentence: not a quiz screen a layout can be learned from.
+        if (!ReplyShape.isSingle(text) || text.trim().length > MAX_LEARN_REPLY_CHARS) return null
         if (!learningGate.tryStart(fp, SystemClock.elapsedRealtime())) return null
         val copy = try {
             bmp.copy(Bitmap.Config.ARGB_8888, false)
@@ -1669,7 +1683,7 @@ class OverlayService : Service() {
             src.getPixels(pixels, 0, w, 0, 0, w, h)
             val inspected = colorLayout.inspect(pixels, w, h)
             val layout = inspected.layout ?: return readWithTemplates(src, pixels, w, h, masks)
-            return DeviceRead(readWith(src, pixels, w, h, inspected, layout, masks, null))
+            return DeviceRead(readWith(src, pixels, w, h, inspected, layout, masks, null), colorLayout = true)
         } catch (t: Throwable) {
             return DeviceRead(null)
         } finally {

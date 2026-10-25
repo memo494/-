@@ -38,12 +38,18 @@ class Reply(val text: String, val kind: Kind) {
  */
 class LayoutAnswer(val text: String, val geometry: SentGeometry)
 
+/** Which screenshot prompt to send: the short one for quiz games, or the general one (see [ScreenImage]). */
+enum class ImagePrompt(val text: String) {
+    GAME(ScreenImage.GAME_PROMPT),
+    GENERAL(ScreenImage.GENERAL_PROMPT)
+}
+
 interface Answerer {
     /**
-     * Asks about the whole screenshot. [Reply.text] is the short answer, or a short Arabic error
-     * message ([Reply.kind] tells which). Never throws.
+     * Asks about the whole screenshot with [prompt]. [Reply.text] is the short answer, or a short
+     * Arabic error message ([Reply.kind] tells which). Never throws.
      */
-    fun answer(bitmap: Bitmap): Reply
+    fun answer(bitmap: Bitmap, prompt: ImagePrompt = ImagePrompt.GENERAL): Reply
 
     /**
      * Asks a question that was already read off the screen (see [QuestionPrompt]); no image is
