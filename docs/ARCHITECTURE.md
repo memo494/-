@@ -22,7 +22,8 @@ capture (MediaProjection) ─► our own windows painted black = masks
   │    remembered per picture (PictureRegion.hash). A miss asks with the whole screenshot:
   │    measured faster on the owner's phone than a cropped-picture request (decision 13)
   │
-  └─ not read (or text reply unusable): Answerer.answer(screenshot) (image request)
+  └─ not read (or text reply unusable): Answerer.answer(screenshot, prompt) (image request;
+     GAME prompt when the device read the question or knows the layout, else GENERAL, decision 16)
 ```
 
 The answer is shown in a panel; for a read multiple-choice question a green box marks the option.
@@ -57,7 +58,7 @@ whole-question OCR fails. See `INTERACTIONS.md` for supported patterns and limit
 | Prompts and replies | `QuestionPrompt.kt`, `ScreenImage.kt` (image prompt, crop/scale), `AnswerParser.kt` |
 | Memory | `AnswerMemory.kt` (pure), `AnswerStore.kt` (file) |
 | Templates | `ocr/ScreenFingerprint.kt`, `ocr/TextLines.kt`, `ocr/LayoutTemplate.kt`, `ocr/TemplateReader.kt`, `ocr/LayoutTemplates.kt`, `TemplateStore.kt` (file), `ocr/LayoutLearning.kt`, `ocr/PictureRegion.kt` (is a picture pinned, its hash) |
-| Arabic OCR | `ocr/ColorLayout.kt`, `ocr/ScreenReader.kt`, `ocr/LineRecognizer.kt`, `ocr/Ctc.kt`, `ocr/OrtCtcModel.kt`, `ocr/ArabicOcr.kt`, `ocr/ArabicText.kt`, `ocr/ImageOps.kt`, `ocr/OverlayCheck.kt`, assets `ocr/inference.onnx` + `dict.txt` |
+| Arabic OCR | `ocr/ColorLayout.kt`, `ocr/ScreenReader.kt`, `ocr/LineRecognizer.kt`, `ocr/LineBatch.kt`, `ocr/Ctc.kt`, `ocr/OrtCtcModel.kt`, `ocr/ArabicOcr.kt`, `ocr/ArabicText.kt`, `ocr/ImageOps.kt`, `ocr/OverlayCheck.kt`, assets `ocr/inference.onnx` + `dict.txt` |
 | English OCR | `ocr/LatinOcr.kt` (ML Kit, bundled), `ocr/LatinQuestionAssembler.kt` (pure) |
 | Small helpers | `FrameSignature.kt` (auto mode: did the screen change), `HiddenAnswer.kt`, `PanelPlacement.kt`, `Haptics.kt` |
 
@@ -66,7 +67,8 @@ Pure files (no `android.*`) carry the logic and are unit-tested on the JVM; Andr
 ## Threads and safety
 
 - UI and windows on the main thread; capture reading, OCR and network on `Dispatchers.IO`.
-- Each native reader is used under its own lock and closed on `onDestroy`.
+- Each native reader is used under its own lock and closed on `onDestroy`. Inside one Arabic
+  reading, the lines run on a small pool (`ocr/LineBatch.kt`, decision 15).
 - Reader failures, including `Error`s (OOM, missing native library), return null: never crash.
 - Stores (`AnswerStore`, `TemplateStore`) load once on their own thread and save atomically
   (temp file + rename), coalescing bursts of changes.

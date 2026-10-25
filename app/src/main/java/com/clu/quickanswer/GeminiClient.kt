@@ -34,13 +34,13 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
         private set
 
     /** The model's answer for the screenshot, or a short Arabic error message. Never throws. */
-    override fun answer(bitmap: Bitmap): Reply {
+    override fun answer(bitmap: Bitmap, prompt: ImagePrompt): Reply {
         return try {
             val prepared = ScreenImage.prepare(bitmap, IMAGE_MAX_SIDE, IMAGE_QUALITY)
                 ?: return Reply.error(ScreenImage.BLACK_SCREEN)
             lastSent = prepared.kept
             val b64 = prepared.base64
-            race { m, mode -> imageBody(m, b64, mode) }.toReply()
+            race { m, mode -> imageBody(m, prompt.text, b64, mode) }.toReply()
         } catch (e: IOException) {
             Reply.error(NO_CONNECTION)
         } catch (e: Exception) {
@@ -219,9 +219,9 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
         }
     }
 
-    private fun imageBody(m: String, b64: String, mode: ThinkingMode): String {
+    private fun imageBody(m: String, prompt: String, b64: String, mode: ThinkingMode): String {
         val parts = JSONArray()
-            .put(JSONObject().put("text", ScreenImage.PROMPT))
+            .put(JSONObject().put("text", prompt))
             .put(
                 JSONObject().put(
                     "inline_data",

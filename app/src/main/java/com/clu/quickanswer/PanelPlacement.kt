@@ -38,6 +38,38 @@ object PanelPlacement {
         screenW * (if (screenW > screenH) TOP_LANDSCAPE_WIDTH_PERCENT else TOP_PORTRAIT_WIDTH_PERCENT) / 100
 
     const val TOP_LANDSCAPE_WIDTH_PERCENT = 60
+
+    /**
+     * How many lines the panel shows for [text] in [mode]: 2 at the top and 4 next to the bubble
+     * keep a single answer small, but a reply with one answer per line (a screen with several
+     * questions) gets a line for each, up to [MAX_LIST_LINES] ([MAX_LIST_LINES_LANDSCAPE] in
+     * [landscape]), instead of losing the last ones.
+     */
+    fun maxLines(mode: Mode, text: String, landscape: Boolean = false): Int {
+        val base = if (mode == Mode.TOP) TOP_MAX_LINES else BUBBLE_MAX_LINES
+        val cap = if (landscape) MAX_LIST_LINES_LANDSCAPE else MAX_LIST_LINES
+        return maxOf(base, minOf(ReplyShape.lines(text).size, cap))
+    }
+
+    /**
+     * How long the panel stays for [text], in ms: [AUTO_HIDE_BASE_MS] for one line, plus
+     * [AUTO_HIDE_PER_LINE_MS] for each further line (a list takes longer to read), at most
+     * [AUTO_HIDE_MAX_MS].
+     */
+    fun autoHideMs(text: String): Long {
+        val extra = maxOf(0, ReplyShape.lines(text).size - 1)
+        return minOf(AUTO_HIDE_BASE_MS + AUTO_HIDE_PER_LINE_MS * extra, AUTO_HIDE_MAX_MS)
+    }
+
+    const val AUTO_HIDE_BASE_MS = 15_000L
+    const val AUTO_HIDE_PER_LINE_MS = 4_000L
+    const val AUTO_HIDE_MAX_MS = 45_000L
+    const val TOP_MAX_LINES = 2
+    const val BUBBLE_MAX_LINES = 4
+    const val MAX_LIST_LINES = 8
+
+    /** In landscape 8 lines of 18sp cover most of the game screen, so a list is capped lower. */
+    const val MAX_LIST_LINES_LANDSCAPE = 5
     const val TOP_PORTRAIT_WIDTH_PERCENT = 90
 
     /** Widest the panel may be in the given [mode]. */

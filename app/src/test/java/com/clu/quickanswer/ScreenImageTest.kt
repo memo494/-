@@ -25,9 +25,40 @@ class ScreenImageTest {
         assertFalse(ScreenImage.isNoQuestion("لا يوجد اتصال"))
     }
 
+    private val prompts = listOf(ScreenImage.GAME_PROMPT, ScreenImage.GENERAL_PROMPT)
+
     @Test
-    fun prompt_tellsTheModelToReplyWithExactlyTheNoQuestionText() {
-        assertTrue(ScreenImage.PROMPT.endsWith("exactly: " + ScreenImage.NO_QUESTION))
+    fun prompts_tellTheModelToReplyWithExactlyTheNoQuestionText() {
+        for (p in prompts) assertTrue(p.endsWith("exactly: " + ScreenImage.NO_QUESTION))
+    }
+
+    @Test
+    fun prompts_keepTheAnswerRulesTheGamesNeed() {
+        // A choice is matched against the options read on the device, a number goes to the keypad.
+        for (p in prompts) {
+            assertTrue(p.contains("ASCII digits 0-9"))
+            assertTrue(p.contains("exact printed"))
+            assertTrue(p.contains("bubble"))
+            assertTrue(p.contains("'" + ScreenImage.NO_QUESTION + "'"))
+            assertFalse(p.contains("numbered as on the screen"))
+        }
+    }
+
+    @Test
+    fun gamePrompt_keepsTheCentralQuestionRule() {
+        assertTrue(ScreenImage.GAME_PROMPT.contains("side panels"))
+        assertTrue(ScreenImage.GAME_PROMPT.contains("never numbered"))
+    }
+
+    @Test
+    fun generalPrompt_definesAQuestion_andNeverNumbersOneAnswer() {
+        assertTrue(ScreenImage.GENERAL_PROMPT.contains("never numbered"))
+        assertTrue(ScreenImage.GENERAL_PROMPT.contains("not questions"))
+    }
+
+    @Test
+    fun gamePrompt_isShorterThanTheGeneralOne() {
+        assertTrue(ScreenImage.GAME_PROMPT.length < ScreenImage.GENERAL_PROMPT.length)
     }
 
     @Test

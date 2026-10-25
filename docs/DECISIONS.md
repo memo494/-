@@ -57,3 +57,27 @@ one; mark an entry "superseded by N" when it changes.
     the service sends digits and optional submit, with neither reset controls nor reset delays.
     Occupied or unknown fields stop unchanged. Legacy reset planning/sequencing APIs remain for
     compatibility with their original contract tests; the application no longer calls those modes.
+15. **The Arabic lines of a screen are read side by side; the model stays fp32.** `ScreenReader`
+    hands every question and option line to one `LineBatch`; the app reads 4 at once
+    (`ParallelLines`), each inference on 2 threads. Same text and confidences as one by one
+    (`OcrPipelineTest.linesReadSideBySide_readExactlyWhatOneByOneReads`); on 4 cores recognising
+    S1/S2/S3 took 55/64/98 ms instead of 70/115/183 ms. An int8 copy of the model (onnxruntime
+    dynamic quantisation) was measured and rejected: with the convolutions quantised it read
+    "سورة طله" for "سورة طه" (S2 fails) and was 2-3x slower on x86; with only MatMul quantised it was
+    no faster and misread a question letter. Re-measure on an ARM phone before revisiting.
+16. **Two screenshot prompts: GAME and GENERAL.** Build-61 had rewritten the one prompt for the
+    landscape parchment game only, which invites "لا يوجد سؤال" on apps, websites and worksheets; a
+    single prompt for everything then lost the game rules (answer the central question, ignore side
+    panels) and answered chat, ads and dialogs. `ScreenImage.GAME_PROMPT` is short and keeps the
+    central-question rule; `GENERAL_PROMPT` defines what a question is (chat, ads, dialogs, menus,
+    forms are not) and gives one answer rule per kind. In both, one question is answered alone and
+    never numbered (a "1." breaks the match against the read options); several get "N. answer"
+    lines; the printed option text beats ASCII digits beats the question's language; numbers are
+    worked out carefully. `solve` picks GAME when cheap signals say it is a game (a question was
+    read, a template fits or is a candidate, or `ColorLayout` read the screen), else GENERAL; the
+    `focusQuiz` retry is GAME. `AnswerParser` also accepts a lone "1." label on the image path.
+    `ReplyShape` classifies a reply: only a single answer is judged by `CandidateCheck` (lists,
+    " + ", pairs and "غير متأكد" are UNKNOWN, so they never demote a template) and only a short
+    single answer triggers learning a layout. A list is START-aligned in the panel, stays up
+    15 s + 4 s per extra line (max 45 s) and shows at most 8 lines (5 in landscape)
+    (`PanelPlacement`).
