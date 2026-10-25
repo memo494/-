@@ -79,14 +79,12 @@ object NumericFieldInk {
      * Removes the gold of the field itself, keeping only what can be typed digits. The dark field
      * has a thin gold rim (25 Oct 2026, owner's phone: a line along its bottom in a shared JPEG, a
      * whole outline in a lossless capture), and taking it for ink made every empty field "unknown".
-     * A typed number is centred: each digit is at least a fifth of the field tall, crosses its
-     * middle row, sits away from its sides, and four digits span well under the field's width. A
-     * stroke that is flat, hugs a side, misses the middle row, or spans (nearly) the whole field is
-     * the frame and is dropped.
+     * A typed digit is at least a fifth of the field tall, shorter than the field, and four of them
+     * span well under its width. A stroke that is flat, or spans (nearly) the whole width or height,
+     * is the frame and is dropped.
      */
     fun dropFlatStrokes(mask: BooleanArray, w: Int, h: Int) {
         val minHeight = maxOf(4, h / 5)
-        val middle = h / 2
         val visited = BooleanArray(mask.size)
         val queue = IntArray(mask.size)
         for (start in mask.indices) {
@@ -105,10 +103,9 @@ object NumericFieldInk {
             }
             val height = bottom - top + 1
             val width = right - left + 1
-            val centreX = (left + right) / 2f
-            val frame = height < minHeight || middle !in top..bottom ||
-                width >= w * FRAME_WIDTH || height >= h * FRAME_HEIGHT ||
-                centreX < w * SIDE_MARGIN || centreX > w * (1 - SIDE_MARGIN)
+            // Only shapes no digit can have: anything digit-sized stays, even at an edge, so a
+            // digit clipped by the field's edge still stops the typing.
+            val frame = height < minHeight || width >= w * FRAME_WIDTH || height >= h * FRAME_HEIGHT
             if (frame) for (i in 0 until tail) mask[queue[i]] = false
         }
     }
@@ -118,7 +115,4 @@ object NumericFieldInk {
 
     /** A stroke this tall is a side of the rim: digits leave a margin above and below. */
     private const val FRAME_HEIGHT = 0.9f
-
-    /** A stroke centred this close to a side is the rim's end, not a digit. */
-    private const val SIDE_MARGIN = 0.12f
 }
