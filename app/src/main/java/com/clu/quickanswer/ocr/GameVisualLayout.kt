@@ -157,6 +157,8 @@ object GameVisualLayout {
     private const val NEAR_SHIFT = 12
     private const val NEAR_STEP = 6
     private const val SHIFT_STEP = 4
+    /** Lightness step on every side of a key for the wide search (the phone's keys: 86 and up). */
+    private const val SEPARATE_KEY_EDGE = 40.0
 
     /**
      * Where the keys are: first the measured window (±12 in steps of 6, the offset nearest the
@@ -165,15 +167,19 @@ object GameVisualLayout {
      * taken (the nearest one to the centre that matches), not the first, which sits near a key's
      * edge and taps off-centre.
      */
-    private inline fun centredOffset(allKeys: (Int, Int) -> Boolean): Pair<Int, Int>? {
+    private inline fun centredOffset(
+        allKeys: (Int, Int) -> Boolean,
+        /** Null: no wide search. Stricter than [allKeys], because more of the screen is tried. */
+        allKeysWide: ((Int, Int) -> Boolean)?,
+    ): Pair<Int, Int>? {
         var near: Pair<Int, Int>? = null
         for (dy in -NEAR_SHIFT..NEAR_SHIFT step NEAR_STEP) for (dx in -NEAR_SHIFT..NEAR_SHIFT step NEAR_STEP) {
             if ((near == null || abs(dx) + abs(dy) < abs(near.first) + abs(near.second)) && allKeys(dx, dy)) near = dx to dy
         }
-        if (near != null) return near
+        if (near != null || allKeysWide == null) return near
         val hits = ArrayList<Pair<Int, Int>>()
         for (dy in -MAX_SHIFT..MAX_SHIFT step SHIFT_STEP) for (dx in -MAX_SHIFT..MAX_SHIFT step SHIFT_STEP) {
-            if (allKeys(dx, dy)) hits.add(dx to dy)
+            if (allKeysWide(dx, dy)) hits.add(dx to dy)
         }
         if (hits.isEmpty()) return null
         val cx = hits.sumOf { it.first }.toDouble() / hits.size
@@ -269,7 +275,22 @@ object GameVisualLayout {
         ).flatten()
 
         // Skin A: warm charcoal squares, 1-2-3 / 4-5-6 / 7-8-9 / C-0-delete.
-        val darkOffset = centredOffset { dx, dy -> darkRows.all { (x, y) -> darkKey(x + dx, y + dy) } }
+        // A key on its own, edged on all four sides (measured 86..129 on the owner's phone): for the
+        // wide search, so the big dark answer buttons of a choice screen are never taken for a pad
+        // (25 Oct 2026: choices stopped being tapped after the search was widened).
+        fun separateKey(x: Int, y: Int): Boolean {
+            if (!darkKey(x, y)) return false
+            if (wasPressed(x, y)) return true
+            val center = patch(x, y, compactX, compactY).light
+            return listOf(
+                patch(x - 35, y, intArrayOf(0), intArrayOf(-5, 5)), patch(x + 35, y, intArrayOf(0), intArrayOf(-5, 5)),
+                patch(x, y - 34, intArrayOf(-5, 5), intArrayOf(0)), patch(x, y + 34, intArrayOf(-5, 5), intArrayOf(0)),
+            ).all { abs(it.light - center) >= SEPARATE_KEY_EDGE }
+        }
+        val darkOffset = centredOffset(
+            { dx, dy -> darkRows.all { (x, y) -> darkKey(x + dx, y + dy) } },
+            { dx, dy -> darkRows.all { (x, y) -> separateKey(x + dx, y + dy) } },
+        )
         if (darkOffset != null) {
             val (dx, dy) = darkOffset
             // A flat charcoal panel is not a keypad. Its keys must stand out
@@ -333,9 +354,12 @@ object GameVisualLayout {
             listOf(550 to 470, 653 to 470, 758 to 470),
             listOf(550 to 569, 653 to 569, 758 to 569),
         ).flatten()
-        val whiteOffset = centredOffset { dx, dy ->
-            whiteRows.all { (x, y) -> surface(x + dx, y + dy, lightX, lightY, ::whiteSurface) }
-        }
+        // Only the measured window: no phone has shown the white pad off its place, and white
+        // answer buttons would make a wide search risky.
+        val whiteOffset = centredOffset(
+            { dx, dy -> whiteRows.all { (x, y) -> surface(x + dx, y + dy, lightX, lightY, ::whiteSurface) } },
+            null,
+        )
         if (whiteOffset != null) {
             val (dx, dy) = whiteOffset
             // The saturated green confirmation control is essential for skin B.
