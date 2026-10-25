@@ -26,6 +26,7 @@ object NumericFieldInk {
                 NumericFieldReader.isGold(argb[(field.top + i / w) * width + field.left + i % w])
             else light[i] <= background - 18
         }
+        if (ink == NumericFieldReader.Ink.GOLD) dropFlatStrokes(mask, w, h)
         if (ink == NumericFieldReader.Ink.LIGHT) {
             // Remove only thin components attached to the field boundary (its rounded frame).
             // A character clipped at the boundary or joined to that frame remains UNKNOWN.
@@ -72,5 +73,33 @@ object NumericFieldInk {
         for (y in top..bottom) for (x in left..right) if (mask[y * w + x])
             clean[(y - top + 2) * cropW + x - left + pad] = 0xff101010.toInt()
         return Sample(State.FILLED, clean, cropW, cropH)
+    }
+
+    /**
+     * Removes gold strokes too flat to be a digit: the gold rim the dark field shows along its
+     * inner edge on some phones (measured 25 Oct 2026: a 1-2 px line along the bottom, which made an
+     * empty field "unknown" and stopped every answer). A typed digit is at least a fifth of the
+     * field tall ([NumericFieldReader] needs that too), so nothing a player types is lost.
+     */
+    fun dropFlatStrokes(mask: BooleanArray, w: Int, h: Int) {
+        val minHeight = maxOf(4, h / 5)
+        val visited = BooleanArray(mask.size)
+        val queue = IntArray(mask.size)
+        for (start in mask.indices) {
+            if (!mask[start] || visited[start]) continue
+            var head = 0; var tail = 1; var top = h; var bottom = -1
+            queue[0] = start; visited[start] = true
+            while (head < tail) {
+                val at = queue[head++]; val x = at % w; val y = at / w
+                top = minOf(top, y); bottom = maxOf(bottom, y)
+                for (dy in -1..1) for (dx in -1..1) {
+                    val nx = x + dx; val ny = y + dy
+                    if (nx !in 0 until w || ny !in 0 until h) continue
+                    val next = ny * w + nx
+                    if (mask[next] && !visited[next]) { visited[next] = true; queue[tail++] = next }
+                }
+            }
+            if (bottom - top + 1 < minHeight) for (i in 0 until tail) mask[queue[i]] = false
+        }
     }
 }
