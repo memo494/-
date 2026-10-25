@@ -23,7 +23,7 @@ class CalibrationBoxes {
     }
 
     /** One step to undo: the [mode] drawn and what it replaced ([previous], for the question and the field). */
-    private class Step(val mode: Mode, val previous: PxRect?)
+    private class Step(val mode: Mode, val previous: PxRect?, val previousKeys: List<PxRect>? = null)
 
     var question: PxRect? = null
         private set
@@ -79,6 +79,33 @@ class CalibrationBoxes {
         return true
     }
 
+    /**
+     * Replaces the number keys with [found] (ten boxes, index = digit), e.g. from automatic detection.
+     * One [undo] takes them all back. False, nothing changed, unless there are exactly ten.
+     */
+    fun setKeys(found: List<PxRect>): Boolean {
+        if (found.size != 10) return false
+        history.add(Step(Mode.KEY, null, drawnKeys.toList()))
+        drawnKeys.clear()
+        drawnKeys.addAll(found)
+        return true
+    }
+
+    /**
+     * The box for a key or button the user TAPPED at ([x], [y]) on a [width] x [height] capture: a
+     * square the size of the keys already there (their median side), or [defaultShare] of the
+     * shorter side for the first one, centred on the tap and kept inside the capture. Tapping is
+     * easier than dragging ten small boxes, and the taps only need the key's middle.
+     */
+    fun boxAround(x: Int, y: Int, width: Int, height: Int, defaultShare: Float = DEFAULT_KEY_SHARE): PxRect {
+        val sides = drawnKeys.map { minOf(it.width, it.height) }.sorted()
+        val side = (if (sides.isNotEmpty()) sides[sides.size / 2] else (minOf(width, height) * defaultShare).toInt())
+            .coerceIn(MIN_TAP_SIDE, maxOf(MIN_TAP_SIDE, minOf(width, height)))
+        val left = (x - side / 2).coerceIn(0, maxOf(0, width - side))
+        val top = (y - side / 2).coerceIn(0, maxOf(0, height - side))
+        return PxRect(left, top, minOf(width, left + side), minOf(height, top + side))
+    }
+
     /** Takes back the box drawn last (a replaced question or field comes back). False when there is none. */
     fun undo(): Boolean {
         val step = history.removeLastOrNull() ?: return false
@@ -86,7 +113,10 @@ class CalibrationBoxes {
             Mode.QUESTION -> question = step.previous
             Mode.FIELD -> numericField = step.previous
             Mode.OPTION -> drawn.removeAt(drawn.size - 1)
-            Mode.KEY -> drawnKeys.removeAt(drawnKeys.size - 1)
+            Mode.KEY -> if (step.previousKeys != null) {
+                drawnKeys.clear()
+                drawnKeys.addAll(step.previousKeys)
+            } else drawnKeys.removeAt(drawnKeys.size - 1)
             Mode.SUBMIT -> submit = step.previous
         }
         return true
@@ -106,6 +136,14 @@ class CalibrationBoxes {
      * options): rows top to bottom, right to left inside a row. What the numbers on the boxes show.
      */
     fun readingOrder(): List<PxRect> = RegionGeometry.readingRows(drawn, leftToRight = false) { it }.flatten()
+
+    companion object {
+        /** Share of the capture's shorter side for the first tapped key: a game key is usually 8-12%. */
+        const val DEFAULT_KEY_SHARE = 0.07f
+
+        /** Smallest tapped box (px): what a touch can still hit and a signature can still be measured on. */
+        const val MIN_TAP_SIDE = 24
+    }
 }
 
 /**

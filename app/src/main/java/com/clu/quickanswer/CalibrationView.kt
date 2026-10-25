@@ -109,10 +109,13 @@ class CalibrationView(
             MotionEvent.ACTION_UP -> {
                 x1 = event.x; y1 = event.y
                 dragging = false
-                // A tap, or a drag too short to mean a box, draws nothing.
                 if (abs(x1 - x0) >= MIN_DRAG_DP * density && abs(y1 - y0) >= MIN_DRAG_DP * density) {
                     onBoxDrawn(boxes.add(mode, f.rectBetween(x0, y0, x1, y1)))
+                } else if (mode == Mode.KEY || mode == Mode.SUBMIT) {
+                    // A key or the confirm button is placed with one tap on its middle.
+                    onBoxDrawn(boxes.add(mode, boxes.boxAround(f.imageX(x1), f.imageY(y1), bitmap.width, bitmap.height)))
                 }
+                // Otherwise a tap, or a drag too short to mean a box, draws nothing.
             }
             MotionEvent.ACTION_CANCEL -> dragging = false
             else -> return true

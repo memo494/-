@@ -13,6 +13,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.clu.quickanswer.CalibrationBoxes.Mode
+import com.clu.quickanswer.ocr.KeypadFinder
+import com.clu.quickanswer.ocr.LatinOcr
 import com.clu.quickanswer.ocr.LayoutTemplate
 import com.clu.quickanswer.ocr.ManualTemplate
 import com.clu.quickanswer.ocr.PxRect
@@ -38,6 +40,8 @@ class CalibrationActivity : AppCompatActivity() {
     private lateinit var view: CalibrationView
     private lateinit var hint: TextView
     private lateinit var saveButton: Button
+    private lateinit var autoButton: Button
+    private var detecting = false
     private val modeButtons = LinkedHashMap<Mode, Button>()
     private var mode = Mode.QUESTION
     private var saving = false
@@ -97,7 +101,7 @@ class CalibrationActivity : AppCompatActivity() {
             modeRow.addView(b, weighted())
         }
         // The pad of a number game: its keys and its confirm button (see CalibratedKeypad).
-        val keyRow = if (landscape) modeRow else row()
+        val keyRow = row()
         for ((m, label) in listOf(Mode.KEY to "مفاتيح الأرقام", Mode.SUBMIT to "زر التأكيد")) {
             val b = barButton(label) { selectMode(m) }
             modeButtons[m] = b
@@ -110,7 +114,10 @@ class CalibrationActivity : AppCompatActivity() {
         saveButton.setBackgroundColor(SAVE_COLOR)
         actionRow.addView(saveButton, weighted())
         root.addView(modeRow, wrapWidth())
-        if (keyRow !== modeRow) root.addView(keyRow, wrapWidth())
+        // Finds the ten keys from the digits printed on them; the user only checks them.
+        autoButton = barButton("اكتشاف المفاتيح تلقائيًا") { detectKeys() }
+        keyRow.addView(autoButton, weighted())
+        root.addView(keyRow, wrapWidth())
         if (actionRow !== modeRow) root.addView(actionRow, wrapWidth())
 
         view = CalibrationView(this, bmp, boxes) { added ->
@@ -119,7 +126,10 @@ class CalibrationActivity : AppCompatActivity() {
             // The first box is the question; the buttons come next.
             if (added && mode == Mode.QUESTION && boxes.options.isEmpty() && boxes.numericField == null) selectMode(Mode.OPTION)
             // After the field, the keys of its pad; after the tenth key, the confirm button.
-            if (added && mode == Mode.FIELD && boxes.keys.isEmpty()) selectMode(Mode.KEY)
+            if (added && mode == Mode.FIELD && boxes.keys.isEmpty()) {
+                selectMode(Mode.KEY)
+                detectKeys() // usually all ten are found, and only the confirm button is left
+            }
             if (added && mode == Mode.KEY && boxes.nextKey == null && boxes.submit == null) selectMode(Mode.SUBMIT)
             boxesChanged()
         }
@@ -140,9 +150,9 @@ class CalibrationActivity : AppCompatActivity() {
             Mode.QUESTION -> "ارسم مربعًا حول السؤال (كل سطوره)"
             Mode.OPTION -> "ارسم مربعًا حول كل زر جواب (الزر كله) — الخيارات: ${boxes.options.size}"
             Mode.FIELD -> "ارسم مربعًا حول خانة كتابة الرقم، وهي فاضية"
-            Mode.KEY -> boxes.nextKey?.let { "ارسم مربعًا حول مفتاح الرقم $it" }
-                ?: "رسمت المفاتيح العشرة ✓ — ارسم زر التأكيد إذا اللعبة فيها واحد"
-            Mode.SUBMIT -> "ارسم مربعًا حول زر التأكيد (اختياري)، ثم احفظ"
+            Mode.KEY -> boxes.nextKey?.let { "اضغط على مفتاح الرقم $it — أو «اكتشاف المفاتيح تلقائيًا»" }
+                ?: "المفاتيح العشرة جاهزة ✓ — تأكد إنه كل رقم فوق مفتاحه، وبعدين زر التأكيد"
+            Mode.SUBMIT -> "اضغط على زر التأكيد إذا اللعبة فيها واحد، ثم احفظ"
         }
         hint.text = what
         view.invalidate()
@@ -219,6 +229,40 @@ class CalibrationActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Reads the capture's digits with on-device OCR (no network) and proposes the ten keys
+     * ([KeypadFinder]). Off the main thread; the bitmap is copied first because the activity may
+     * recycle its own while ML Kit still reads.
+     */
+    private fun detectKeys() {
+        val bmp = bitmap ?: return
+        if (detecting) return
+        val copy = try { bmp.copy(Bitmap.Config.ARGB_8888, false) } catch (_: Throwable) { null } ?: return toast(DETECT_FAILED)
+        detecting = true
+        autoButton.isEnabled = false
+        toast(DETECTING)
+        thread(isDaemon = true, name = "calibration-keys") {
+            val keys = try {
+                LatinOcr().use { KeypadFinder.find(it.glyphs(copy), copy.width, copy.height) }
+            } catch (_: Throwable) {
+                null
+            } finally {
+                copy.recycle()
+            }
+            runOnUiThread {
+                detecting = false
+                if (isDestroyed) return@runOnUiThread
+                autoButton.isEnabled = true
+                if (keys == null || !boxes.setKeys(keys)) {
+                    toast(DETECT_FAILED)
+                } else {
+                    toast(DETECTED)
+                    selectMode(if (boxes.submit == null) Mode.SUBMIT else Mode.KEY)
+                }
+            }
+        }
+    }
+
     /** Shows [message] and lets the user save again; closes the screen after a save that worked. */
     private fun finishSave(message: String, close: Boolean = false) {
         runOnUiThread {
@@ -261,6 +305,9 @@ class CalibrationActivity : AppCompatActivity() {
         const val ALREADY_KNOWN = "هاي الشاشة إلها قالب من قبل"
         const val SAVED = "تم الحفظ ✓ — رح يستعمله من السؤال الجاي"
         const val SAVE_FAILED = "تعذّر الحفظ"
+        const val DETECTING = "عم بدوّر على الأرقام…"
+        const val DETECTED = "لقيت المفاتيح العشرة ✓ — راجعها، وإذا في غلط اضغط تراجع"
+        const val DETECT_FAILED = "ما قدرت ألاقي لوحة أرقام كاملة؛ اضغط على المفاتيح بإيدك من 0 لـ 9"
         const val KEYS_INCOMPLETE = "لازم ترسم مفاتيح الأرقام العشرة كلها (0 لـ 9)، أو تمسحها"
     }
 }
