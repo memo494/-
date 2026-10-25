@@ -83,6 +83,20 @@ class LatinOcr : AutoCloseable {
         }
     }
 
+    /**
+     * Every word ML Kit reads on the whole [bitmap], with its box: what [KeypadFinder] looks for
+     * key digits in. For the calibration screen, not the answer flow: it reads the full capture and
+     * may take a second. Empty on any failure. Worker thread only.
+     */
+    fun glyphs(bitmap: Bitmap): List<KeypadFinder.Glyph> = try {
+        val text = Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0)), GLYPHS_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        text.textBlocks.flatMap { it.lines }.flatMap { it.elements }.mapNotNull { e ->
+            e.boundingBox?.let { b -> KeypadFinder.Glyph(e.text, PxRect(b.left, b.top, b.right, b.bottom)) }
+        }
+    } catch (_: Throwable) {
+        emptyList()
+    }
+
     /** Banner, buttons and number field of [layout] plus [CROP_MARGIN] px, inside a [width] x [height] bitmap; null if empty. */
     private fun readArea(layout: ScreenLayout, width: Int, height: Int): PxRect? {
         var left = layout.banner.left
@@ -107,6 +121,7 @@ class LatinOcr : AutoCloseable {
     private companion object {
         const val CROP_MARGIN = 8
         const val READ_TIMEOUT_MS = 650L
+        const val GLYPHS_TIMEOUT_MS = 4_000L
         const val WARM_UP_TIMEOUT_MS = 5_000L
         const val WARM_UP_WIDTH = 320
         const val WARM_UP_HEIGHT = 64

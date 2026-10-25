@@ -62,6 +62,9 @@ class CalibrationView(
         boxes.numericField?.let { drawBox(canvas, f, it, FIELD_COLOR, "الرقم") }
         // The number on an option is its place in the order the template will use.
         for ((i, r) in boxes.readingOrder().withIndex()) drawBox(canvas, f, r, optionColor(i), (i + 1).toString())
+        // A number key shows its digit, so a key drawn for the wrong digit is seen at once.
+        for ((i, r) in boxes.keys.withIndex()) drawBox(canvas, f, r, KEY_COLOR, i.toString())
+        boxes.submit?.let { drawBox(canvas, f, it, SUBMIT_COLOR, "تأكيد") }
 
         if (dragging) {
             val l = minOf(x0, x1)
@@ -106,10 +109,13 @@ class CalibrationView(
             MotionEvent.ACTION_UP -> {
                 x1 = event.x; y1 = event.y
                 dragging = false
-                // A tap, or a drag too short to mean a box, draws nothing.
                 if (abs(x1 - x0) >= MIN_DRAG_DP * density && abs(y1 - y0) >= MIN_DRAG_DP * density) {
                     onBoxDrawn(boxes.add(mode, f.rectBetween(x0, y0, x1, y1)))
+                } else if (mode == Mode.KEY || mode == Mode.SUBMIT) {
+                    // A key or the confirm button is placed with one tap on its middle.
+                    onBoxDrawn(boxes.add(mode, boxes.boxAround(f.imageX(x1), f.imageY(y1), bitmap.width, bitmap.height)))
                 }
+                // Otherwise a tap, or a drag too short to mean a box, draws nothing.
             }
             MotionEvent.ACTION_CANCEL -> dragging = false
             else -> return true
@@ -124,6 +130,8 @@ class CalibrationView(
 
         const val QUESTION_COLOR = 0xFF1E88E5.toInt()
         const val FIELD_COLOR = 0xFFFFB300.toInt()
+        const val KEY_COLOR = 0xFF00897B.toInt()
+        const val SUBMIT_COLOR = 0xFF5E35B1.toInt()
 
         /** Options cycle through these, so neighbours are told apart; none is the question's blue or the field's amber. */
         private val OPTION_COLORS = intArrayOf(
@@ -137,6 +145,8 @@ class CalibrationView(
             Mode.QUESTION -> QUESTION_COLOR
             Mode.FIELD -> FIELD_COLOR
             Mode.OPTION -> OPTION_COLORS[0]
+            Mode.KEY -> KEY_COLOR
+            Mode.SUBMIT -> SUBMIT_COLOR
         }
     }
 }
