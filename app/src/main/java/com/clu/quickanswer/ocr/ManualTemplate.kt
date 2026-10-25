@@ -31,6 +31,12 @@ object ManualTemplate {
      *   [LayoutTemplate.regions] order; packageName and language null; state TRUSTED; hits and
      *   misses 0; source [SOURCE_MANUAL]; not bounded (hand-drawn edges are not measured, so text is
      *   still looked for a little beyond them); createdAt = lastUsedAt = [now].
+     * - [keys]: empty, or exactly ten boxes for the digits 0..9 in that order on a number template,
+     *   plus an optional [submit] button (never without keys). Each must be inside the image and at
+     *   least [TemplateLearner.MIN_REGION_SIDE] on a side; keys and submit must not overlap each other
+     *   or the question or field by more than [TemplateLearner.MAX_OVERLAP]. The field's empty look
+     *   ([FieldStamp]) is taken from this capture, so it must be drawn with the field empty; null when
+     *   the field is too small for a stamp.
      */
     fun build(
         question: PxRect,
@@ -42,11 +48,15 @@ object ManualTemplate {
         masks: List<PxRect>,
         id: String,
         now: Long,
+        keys: List<PxRect> = emptyList(),
+        submit: PxRect? = null,
     ): LayoutTemplate? {
         if (width <= 0 || height <= 0 || argb.size.toLong() < width.toLong() * height) return null
         val choices = options.size in LayoutTemplate.MIN_OPTIONS..LayoutTemplate.MAX_OPTIONS && numericField == null
         val numeric = options.isEmpty() && numericField != null
         if (!choices && !numeric) return null
+        if (keys.isNotEmpty() && (!numeric || keys.size != 10)) return null
+        if (submit != null && keys.isEmpty()) return null
 
         val rows = RegionGeometry.readingRows(options, leftToRight = false) { it }
         val orderedOptions = rows.flatten()
@@ -68,6 +78,18 @@ object ManualTemplate {
             }
         }
 
+        val keyPx = keys + listOfNotNull(submit)
+        if (keyPx.any { !insideImage(it, width, height) }) return null
+        val keyRel = keyPx.map { RelRect.fromPx(it, width, height) }
+        if (keyRel.any { !it.isValid || it.right - it.left < TemplateLearner.MIN_REGION_SIDE || it.bottom - it.top < TemplateLearner.MIN_REGION_SIDE }) {
+            return null
+        }
+        for (i in keyRel.indices) {
+            for (j in 0 until i) if (RegionGeometry.overlapsTooMuch(keyRel[i], keyRel[j], TemplateLearner.MAX_OVERLAP)) return null
+            if (regions.any { RegionGeometry.overlapsTooMuch(keyRel[i], it, TemplateLearner.MAX_OVERLAP) }) return null
+        }
+        val fieldEmpty = if (keys.isEmpty()) null else (FieldStamp.of(argb, width, height, numericField!!) ?: return null)
+
         val template = LayoutTemplate(
             id = id,
             packageName = null,
@@ -84,6 +106,10 @@ object ManualTemplate {
             source = SOURCE_MANUAL,
             createdAt = now,
             lastUsedAt = now,
+            keys = keyRel.take(keys.size).takeIf { keys.isNotEmpty() },
+            submit = keyRel.getOrNull(keys.size).takeIf { submit != null },
+            keySignatures = keyPx.map { TemplateReader.signature(argb, width, height, it) }.takeIf { keys.isNotEmpty() },
+            fieldEmpty = fieldEmpty,
         )
         return template.takeIf { it.isValid }
     }

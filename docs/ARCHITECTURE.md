@@ -28,14 +28,16 @@ capture (MediaProjection) ─► our own windows painted black = masks
 
 The answer is shown in a panel; for a read multiple-choice question a green box marks the option.
 
-On the automatic-touch feature branch, one preparation step after `solve` binds every answer source
+Automatic touch: one preparation step after `solve` binds every answer source
 to pure `interaction/AnswerInteraction` pattern planners. Reader/template geometry supplies choices;
 verified keypad adapters supply numeric controls. Live question/picture/option guards precede each
 stroke, and `TapSequence.beforeSubmit` waits for `NumericFieldReader`/`NumericEntryCheck` off the main
 thread before numeric confirmation. `NumericFieldInk` proves the field empty before direct typing:
 the service sends digits and optional confirmation only, never clear/backspace. Occupied/unknown
 fields stop without modification. An independent four-row white-button fallback reads options when
-whole-question OCR fails. See `INTERACTIONS.md` for supported patterns and limits.
+whole-question OCR fails. A game no adapter knows can have its pad drawn by hand on the calibration
+screen (`ocr/CalibratedKeypad.kt`, `ocr/FieldStamp.kt`), used only from a TRUSTED template while
+every key still looks as drawn. See `INTERACTIONS.md` for supported patterns and limits.
 
 ## Learning (in progress, see ROADMAP)
 

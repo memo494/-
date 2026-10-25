@@ -37,6 +37,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.clu.quickanswer.ocr.ArabicOcr
+import com.clu.quickanswer.ocr.CalibratedKeypad
+import com.clu.quickanswer.ocr.FieldStamp
 import com.clu.quickanswer.ocr.ChoiceTouchGuard
 import com.clu.quickanswer.ocr.GameVisualLayout
 import com.clu.quickanswer.ocr.OptionWordDetector
@@ -1090,6 +1092,7 @@ class OverlayService : Service() {
                 ?.takeIf { it.kind != GameVisualLayout.Kind.CHOICE_GRID }
                 ?.let { if (it.submit != null && !GameVisualLayout.hasSubmitControl(pixels, w, h, it))
                     it.copy(submit = null) else it }
+            if (q?.numeric == true && visual == null) return calibratedTouches(solved, request, q, pixels, w, h, bmp, masks)
             if (q?.numeric == true || request == null && visual != null) {
                 if (visual == null) return solved.copy(touchFailure = "لوحة الأرقام غير معروفة بعد؛ لم أكتب شيئًا")
                 // The keypad adapter measures this skin's field; a learned box can include its bevel or wood.
@@ -1198,8 +1201,12 @@ class OverlayService : Service() {
                         val localField = PxRect(0, 0, snapshot.width, snapshot.height)
                         val matches = withContext(Dispatchers.IO) {
                             try {
-                                val ink = if (solved.numericLayout?.kind == GameVisualLayout.Kind.NUMERIC_DARK)
-                                    NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.LIGHT
+                                // A calibrated pad's ink colour is not known: the generic line reader.
+                                val ink = when {
+                                    solved.calibratedKeys != null -> NumericFieldReader.Ink.AUTO
+                                    solved.numericLayout?.kind == GameVisualLayout.Kind.NUMERIC_DARK -> NumericFieldReader.Ink.GOLD
+                                    else -> NumericFieldReader.Ink.LIGHT
+                                }
                                 val read = synchronized(ocrLock) { ocr?.readField(snapshot, localField, ink) }
                                 read != null && NumericEntryCheck.matches(expected, read.text, read.confidence, changed = true)
                             } catch (_: Throwable) { false }
@@ -1211,6 +1218,38 @@ class OverlayService : Service() {
             }
             complete(false)
         }
+    }
+
+    /**
+     * Number entry on a pad the user drew ([CalibratedKeypad]): no built-in adapter knows this game.
+     * The same rules as the built-in pads: the field must be proven empty (here against its empty
+     * look when calibrated), digits then the confirm button only, and the confirm is sent only after
+     * the field reads back the expected number ([verifyNumericEntry] with the generic reader).
+     */
+    private fun calibratedTouches(
+        solved: Solved, request: AnswerInteraction.Request?, q: Question, pixels: IntArray, w: Int, h: Int,
+        bmp: Bitmap, masks: List<PxRect>,
+    ): Solved {
+        val fp = ScreenFingerprint.of(pixels, w, h, masks)
+        val keys = CalibratedKeypad.find(TemplateStore.templates.find(fp, null, trustedOnly = true), pixels, w, h)
+            ?: return solved.copy(touchFailure = "لوحة الأرقام غير معروفة بعد؛ علّمها من المعايرة اليدوية")
+        when (CalibratedKeypad.fieldState(keys, pixels, w, h)) {
+            FieldStamp.State.FILLED -> return solved.copy(touchFailure = "الخانة فيها إدخال سابق؛ لم أمسحه ولم أضف عليه")
+            FieldStamp.State.UNKNOWN -> return solved.copy(touchFailure = "لم أتحقق أن الخانة فارغة؛ لم أكتب أو أمسح شيئًا")
+            FieldStamp.State.EMPTY -> Unit
+        }
+        val numericRequest = request ?: return solved
+        val plan = AnswerInteraction.plan(numericRequest, AnswerInteraction.Controls(
+            w, h, keys.digits, submit = keys.submit, fieldIsEmpty = true))
+            ?: return solved.copy(touchFailure = "تعذّر تحديد مفاتيح إدخال رقم من 1–4 خانات")
+        val banner = questionRegion(q, pixels, w, h)?.takeUnless {
+            it.left < keys.field.right && keys.field.left < it.right && it.top < keys.field.bottom && keys.field.top < it.bottom
+        } ?: return solved.copy(touchFailure = "لم أجد منطقة السؤال كاملة للتحقق قبل اللمس")
+        return solved.copy(touches = plan.taps, guardRect = banner,
+            guardStamp = fingerprint(bmp, banner, masks), ignoredRects = masks,
+            calibratedKeys = keys, submitLast = keys.submit != null,
+            expectedNumber = plan.number, fieldRect = keys.field, fieldStamp = fingerprint(bmp, keys.field, masks),
+            pictureStamp = solved.pictureRect?.let { fingerprint(bmp, it, masks) })
     }
 
     /** Preserve every question line, including its final word; input fields are outside [area]. */
@@ -1271,6 +1310,15 @@ class OverlayService : Service() {
                         r.top < obstruction.bottom && r.bottom > obstruction.top
                 }) return blocked("الفقاعة تغطّي زر الإجابة؛ أبعدها ثم أعد الطلب")
                 val numeric = solved.numericLayout
+                val calibrated = solved.calibratedKeys
+                if (calibrated != null) {
+                    val pixels = IntArray(w * h)
+                    frame.getPixels(pixels, 0, w, 0, 0, w, h)
+                    if (!CalibratedKeypad.stillVisible(calibrated, pixels, w, h, boxes.getOrNull(nextTap - 1)))
+                        return blocked("لوحة الأرقام أو زر التأكيد لم يعد ظاهرًا؛ أوقفت الإدخال")
+                    if (nextTap == 0 && CalibratedKeypad.fieldState(calibrated, pixels, w, h) != FieldStamp.State.EMPTY)
+                        return blocked("الخانة لم تعد فارغة؛ لم أمسح أو أضف أرقامًا")
+                }
                 if (numeric != null || solved.choiceButtons.isNotEmpty()) {
                     val pixels = IntArray(w * h)
                     frame.getPixels(pixels, 0, w, 0, 0, w, h)
@@ -1393,6 +1441,8 @@ class OverlayService : Service() {
         val guardRect: PxRect? = null,
         val guardStamp: IntArray? = null,
         val numericLayout: GameVisualLayout.Detected? = null,
+        /** The pad the user drew, when no built-in adapter knows the game (see [calibratedTouches]). */
+        val calibratedKeys: CalibratedKeypad.Keys? = null,
         val submitLast: Boolean = false,
         val choiceButtons: List<PxRect> = emptyList(),
         val choiceWords: List<PxRect> = emptyList(),
