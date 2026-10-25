@@ -76,22 +76,26 @@ object NumericFieldInk {
     }
 
     /**
-     * Removes gold strokes too flat to be a digit: the gold rim the dark field shows along its
-     * inner edge on some phones (measured 25 Oct 2026: a 1-2 px line along the bottom, which made an
-     * empty field "unknown" and stopped every answer). A typed digit is at least a fifth of the
-     * field tall ([NumericFieldReader] needs that too), so nothing a player types is lost.
+     * Removes the gold of the field itself, keeping only what can be typed digits. The dark field
+     * has a thin gold rim (25 Oct 2026, owner's phone: a line along its bottom in a shared JPEG, a
+     * whole outline in a lossless capture), and taking it for ink made every empty field "unknown".
+     * A typed number is centred: each digit is at least a fifth of the field tall, crosses its
+     * middle row, sits away from its sides, and four digits span well under the field's width. A
+     * stroke that is flat, hugs a side, misses the middle row, or spans (nearly) the whole field is
+     * the frame and is dropped.
      */
     fun dropFlatStrokes(mask: BooleanArray, w: Int, h: Int) {
         val minHeight = maxOf(4, h / 5)
+        val middle = h / 2
         val visited = BooleanArray(mask.size)
         val queue = IntArray(mask.size)
         for (start in mask.indices) {
             if (!mask[start] || visited[start]) continue
-            var head = 0; var tail = 1; var top = h; var bottom = -1
+            var head = 0; var tail = 1; var top = h; var bottom = -1; var left = w; var right = -1
             queue[0] = start; visited[start] = true
             while (head < tail) {
                 val at = queue[head++]; val x = at % w; val y = at / w
-                top = minOf(top, y); bottom = maxOf(bottom, y)
+                top = minOf(top, y); bottom = maxOf(bottom, y); left = minOf(left, x); right = maxOf(right, x)
                 for (dy in -1..1) for (dx in -1..1) {
                     val nx = x + dx; val ny = y + dy
                     if (nx !in 0 until w || ny !in 0 until h) continue
@@ -99,7 +103,22 @@ object NumericFieldInk {
                     if (mask[next] && !visited[next]) { visited[next] = true; queue[tail++] = next }
                 }
             }
-            if (bottom - top + 1 < minHeight) for (i in 0 until tail) mask[queue[i]] = false
+            val height = bottom - top + 1
+            val width = right - left + 1
+            val centreX = (left + right) / 2f
+            val frame = height < minHeight || middle !in top..bottom ||
+                width >= w * FRAME_WIDTH || height >= h * FRAME_HEIGHT ||
+                centreX < w * SIDE_MARGIN || centreX > w * (1 - SIDE_MARGIN)
+            if (frame) for (i in 0 until tail) mask[queue[i]] = false
         }
     }
+
+    /** A stroke this wide (share of the field) is its rim: four centred digits span about 40%. */
+    private const val FRAME_WIDTH = 0.85f
+
+    /** A stroke this tall is a side of the rim: digits leave a margin above and below. */
+    private const val FRAME_HEIGHT = 0.9f
+
+    /** A stroke centred this close to a side is the rim's end, not a digit. */
+    private const val SIDE_MARGIN = 0.12f
 }

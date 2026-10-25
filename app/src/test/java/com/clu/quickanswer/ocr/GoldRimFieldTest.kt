@@ -36,6 +36,17 @@ class GoldRimFieldTest {
             NumericFieldInk.inspect(screen(rim = true, digit = true), w, h, field, NumericFieldReader.Ink.GOLD).state)
     }
 
+    @Test fun aWholeGoldOutlineIsTheFrame_notInput() {
+        val px = screen(rim = false, digit = false)
+        for (x in field.left + 3 until field.right - 3) { px[(field.top + 3) * w + x] = gold; px[(field.bottom - 4) * w + x] = gold }
+        for (y in field.top + 3 until field.bottom - 3) { px[y * w + field.left + 3] = gold; px[y * w + field.right - 4] = gold }
+        assertEquals(NumericFieldInk.State.EMPTY,
+            NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
+        for (y in field.top + 20 until field.top + 80) for (x in 296 until 304) px[y * w + x] = gold
+        assertEquals(NumericFieldInk.State.FILLED,
+            NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
+    }
+
     @Test fun theRimIsDroppedButADigitIsKept() {
         val px = screen(rim = true, digit = true)
         val mask = BooleanArray(field.width * field.height) { i ->
