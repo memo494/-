@@ -55,4 +55,28 @@ class GoldRimFieldTest {
         NumericFieldInk.dropFlatStrokes(mask, field.width, field.height)
         assertEquals(8 * 60, mask.count { it })
     }
+
+    /**
+     * The owner's phone: the reference box sits low on the field and takes in its gold rim
+     * ("ink373x30"). The measured interior leaves the rim out and still holds a typed digit.
+     */
+    @Test fun theMeasuredInteriorLeavesTheRimOut() {
+        val px = IntArray(w * h) { 0xffe8d6b4.toInt() }
+        val real = PxRect(100, 40, 500, 150)
+        for (y in real.top until real.bottom) for (x in real.left until real.right) px[y * w + x] = dark
+        // A 3 px gold rim all round, 4 px inside the wood.
+        for (y in real.top + 4 until real.bottom - 4) for (x in real.left + 4 until real.right - 4) {
+            val edge = minOf(x - real.left - 4, real.right - 5 - x, y - real.top - 4, real.bottom - 5 - y)
+            if (edge < 3) px[y * w + x] = gold
+        }
+        val reference = PxRect(110, 70, 500, 160) // low and reaching into the rim
+        val inside = GameVisualLayout.fieldInterior(px, w, h, reference)!!
+        assertEquals(NumericFieldInk.State.EMPTY, NumericFieldInk.inspect(px, w, h, inside, NumericFieldReader.Ink.GOLD).state)
+        for (y in 70 until 120) for (x in 296 until 304) px[y * w + x] = gold
+        assertEquals(NumericFieldInk.State.FILLED, NumericFieldInk.inspect(px, w, h, inside, NumericFieldReader.Ink.GOLD).state)
+    }
+
+    @Test fun noDarkFieldNoInterior() {
+        assertEquals(null, GameVisualLayout.fieldInterior(IntArray(w * h) { 0xffe8d6b4.toInt() }, w, h, field))
+    }
 }
