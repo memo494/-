@@ -1017,8 +1017,10 @@ class OverlayService : Service() {
                 lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
                 shownImage = solved.image ?: shownImage
                 // The answer only: the owner found the time and model next to it distracting.
-                showPanel(if (touchRequested && solved.isAnswer && solved.touches == null)
-                    "${solved.text}\n${solved.touchFailure ?: "لم أجد طريقة إدخال موثوقة لهذا الشكل"}" else solved.text)
+                val panelText = if (touchRequested && solved.isAnswer && solved.touches == null)
+                    "${solved.text}\n${solved.touchFailure ?: "لم أجد طريقة إدخال موثوقة لهذا الشكل"}" else solved.text
+                showPanel(panelText)
+                LastCapture.note(panelText)
                 if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
                 // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
                 val rect = solved.rect
@@ -1134,12 +1136,14 @@ class OverlayService : Service() {
             // Geometry is detected again from the visible banner/buttons; candidate/model boxes are not used.
             // This fallback initially supports the four-row example. Two remaining white rows on
             // a red/green result screen must not be mistaken for a fresh two-option question.
-            val inspected = ColorLayout().inspect(pixels, w, h).layout
+            val inspection = ColorLayout().inspect(pixels, w, h)
+            val inspected = inspection.layout
+            val inspectedWhy = inspection.rejection
             val stack = inspected?.takeIf { !it.numeric && it.buttons.size == 4 }
             val stackWords = stack?.let { PrintedChoiceTouch.regions(it, pixels, w, h) }
             // Which step of the four-row path declined, for the code shown with the refusal.
             var stackCode = when {
-                inspected == null -> "s0"
+                inspected == null -> "s0:" + inspectedWhy.orEmpty().take(30)
                 stack == null -> "s${inspected.buttons.size}${if (inspected.numeric) "n" else ""}"
                 stack.questionLines.isEmpty() -> "sq"
                 stackWords == null -> "sw"
