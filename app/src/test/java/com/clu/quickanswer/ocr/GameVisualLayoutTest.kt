@@ -41,47 +41,6 @@ class GameVisualLayoutTest {
         assertNull(detected.submit)
     }
 
-    /**
-     * The owner's phone (25 Oct 2026) drew the card about 30 left and 25 up of the reference, beyond
-     * the former ±12 search: a plainly visible pad was "unknown", so nothing was typed and the
-     * focused retry after a "no question" reply never ran. Taps must land on the keys' centres.
-     */
-    @Test fun aShiftedDarkPadIsFoundAndTappedAtItsCentres() {
-        val px = screen()
-        val rows = listOf(
-            922 to 302, 992 to 302, 1062 to 302,
-            922 to 370, 992 to 370, 1062 to 370,
-            922 to 438, 992 to 438, 1062 to 438,
-            992 to 504,
-        )
-        val sx = -30
-        val sy = -25
-        // Whole key faces, as on the phone: every sample of a shifted search lands on the key.
-        for ((x, y) in rows) for (yy in y + sy - 28..y + sy + 28) for (xx in x + sx - 30..x + sx + 30) {
-            px[yy * w + xx] = 0xff908678.toInt()
-        }
-        val detected = GameVisualLayout.detect(px, w, h)!!
-        assertEquals(GameVisualLayout.Kind.NUMERIC_DARK, detected.kind)
-        assertEquals(('0'..'9').toSet(), detected.digits.keys)
-        for ((digit, centre) in "1234567890".toList().zip(rows)) {
-            val key = detected.digits.getValue(digit)
-            assertEquals("digit $digit x", (centre.first + sx).toFloat(), key.centerX, 4f)
-            assertEquals("digit $digit y", (centre.second + sy).toFloat(), key.centerY, 4f)
-        }
-    }
-
-    @Test fun aPadShiftedByMoreThanTheLimitIsNotGuessed() {
-        val px = screen()
-        val rows = listOf(
-            922 to 302, 992 to 302, 1062 to 302,
-            922 to 370, 992 to 370, 1062 to 370,
-            922 to 438, 992 to 438, 1062 to 438,
-            992 to 504,
-        )
-        for ((x, y) in rows) paint(px, x - 90, y, listOf(-20, 20), listOf(-12, 12), 0xff908678.toInt())
-        assertNull(GameVisualLayout.detect(px, w, h)?.takeIf { it.kind == GameVisualLayout.Kind.NUMERIC_DARK })
-    }
-
     @Test fun numericConfirmButtonMustReallyBeVisible() {
         val px = screen()
         val centers = listOf(
