@@ -83,6 +83,14 @@ import kotlin.math.min
 class OverlayService : Service() {
 
     companion object {
+        /** Capture after hiding our panel: poll step, least wait (the former fixed one), most wait (ms). */
+        private const val CLEAN_POLL_MS = 40L
+        private const val CLEAN_MIN_MS = 250L
+        private const val CLEAN_MAX_MS = 1_000L
+
+        /** A frame this long after the panel's removal no longer shows it (about two screen refreshes). */
+        private const val CLEAN_LATENCY_NS = 40_000_000L
+
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
 
@@ -194,6 +202,9 @@ class OverlayService : Service() {
     @Volatile private var stoppingByUs = false
     // The virtual display only emits frames when the screen changes, so keep the last one.
     private var lastFrame: Bitmap? = null
+
+    /** When the display produced [lastFrame] ([android.media.Image.getTimestamp], ns), or 0 if unknown. */
+    private var lastFrameAtNs = 0L
 
     // On-device question reader; loaded in the background when the service starts (null until then,
     // or if it cannot load on this phone). Every use holds ocrLock, so it is never closed mid-read.
@@ -829,8 +840,12 @@ class OverlayService : Service() {
         val fresh = readFrame() ?: return false
         lastFrame?.recycle()
         lastFrame = fresh
+        lastFrameAtNs = readFrameAtNs
         return true
     }
+
+    /** Timestamp of the image [readFrame] read last (set by it). */
+    private var readFrameAtNs = 0L
 
     /**
      * Must be called on the main thread (reads view geometry). Returns the newest frame as a copy
@@ -874,6 +889,7 @@ class OverlayService : Service() {
                 image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888
             )
             wide.copyPixelsFromBuffer(plane.buffer)
+            readFrameAtNs = image.timestamp
             bmp = if (wide.width != image.width) {
                 Bitmap.createBitmap(wide, 0, 0, image.width, image.height).also { wide.recycle() }
             } else wide
@@ -918,10 +934,7 @@ class OverlayService : Service() {
             hidePanel()
             hidePreview()
             setBusy(true)
-            handler.postDelayed({
-                setBusy(false)
-                answerNow(trigger)
-            }, 250)
+            awaitFrameWithoutOverlays(trigger, SystemClock.uptimeMillis(), System.nanoTime())
             return
         }
         val bmp = captureMasked()
@@ -934,6 +947,32 @@ class OverlayService : Service() {
         touchAttempts.reset()
         autoRetry.reset()
         sendFrame(bmp, if (autoMode) signature(bmp, ignoreRects()) else null, fromAuto = false, trigger = trigger)
+    }
+
+    /**
+     * Answers once the screen has been drawn without our old answer panel. A capture that still
+     * showed the panel over the question (26 Oct 2026) could not be read on the device, and the
+     * model was then sent our own old answer to read. Waits at least [CLEAN_MIN_MS] (the wait that
+     * always worked) and, when the display's frame times can be trusted, until a frame produced
+     * [CLEAN_LATENCY_NS] after the removal has arrived; never longer than [CLEAN_MAX_MS].
+     */
+    private fun awaitFrameWithoutOverlays(trigger: AnswerTrigger, startMs: Long, removedAtNs: Long) {
+        handler.postDelayed({
+            if (destroyed) { setBusy(false); return@postDelayed }
+            grabFrame()
+            val waited = SystemClock.uptimeMillis() - startMs
+            val frameAt = lastFrameAtNs
+            // The image clock is the monotonic one on the phones seen so far; a time that is not
+            // within a minute of now is from another clock, and only the minimum wait is used.
+            val trusted = frameAt > 0 && kotlin.math.abs(frameAt - System.nanoTime()) < 60_000_000_000L
+            val clean = waited >= CLEAN_MIN_MS && (!trusted || frameAt >= removedAtNs + CLEAN_LATENCY_NS)
+            if (!clean && waited < CLEAN_MAX_MS) {
+                awaitFrameWithoutOverlays(trigger, startMs, removedAtNs)
+                return@postDelayed
+            }
+            setBusy(false)
+            answerNow(trigger)
+        }, CLEAN_POLL_MS)
     }
 
     private fun permitsTouch(trigger: AnswerTrigger): Boolean = trigger.permitsTouch(
