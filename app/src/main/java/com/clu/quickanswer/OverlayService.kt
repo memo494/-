@@ -1203,18 +1203,23 @@ class OverlayService : Service() {
             // Geometry is detected again from the visible banner/buttons; candidate/model boxes are not used.
             // This fallback initially supports the four-row example. Two remaining white rows on
             // a red/green result screen must not be mistaken for a fresh two-option question.
-            val stackInspection = ColorLayout().inspect(pixels, w, h)
+            val first = ColorLayout().inspect(pixels, w, h)
+            // The question text could not be cut (something over it), but the buttons may still be
+            // verified and their words read: then the banner itself guards the touch.
+            val stackInspection = if (first.layout == null && first.rejection == "question text band merged")
+                ColorLayout().inspect(pixels, w, h, keepMergedQuestion = true) else first
             val stack = stackInspection.layout?.takeIf { !it.numeric && it.buttons.size == 4 }
             val stackWhy = stackInspection.rejection ?: stackInspection.layout?.let {
                 if (it.numeric) "numeric" else "${it.buttons.size} buttons" } ?: "-"
             val stackWords = stack?.let { PrintedChoiceTouch.regions(it, pixels, w, h) }
-            if (stack != null && stack.questionLines.isNotEmpty() && stackWords != null) {
+            if (stack != null && (stack.questionLines.isNotEmpty() || first.layout == null) && stackWords != null) {
                 val words = stackWords
                 if (ChoiceTouchGuard.isReadyFromLayout(pixels, w, h, stack.banner, stack.buttons, words)) {
                     val printed = synchronized(ocrLock) { ocr?.readWords(bmp, words) }.orEmpty()
                     val independent = PrintedChoiceTouch.request(stack, printed, solved.rawReply)
                     val plan = independent?.let { AnswerInteraction.plan(it, AnswerInteraction.Controls(w, h)) }
                     val region = independent?.question?.let { questionRegion(it, pixels, w, h) }
+                        ?: stack.banner.takeIf { independent != null && stack.questionLines.isEmpty() }
                     if (plan != null && region != null) return solved.copy(touches = plan.taps,
                         guardRect = region, guardStamp = fingerprint(bmp, region, masks), ignoredRects = masks,
                         choiceButtons = stack.buttons, choiceWords = words, choiceFromLayout = true,
