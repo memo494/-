@@ -1132,7 +1132,13 @@ class OverlayService : Service() {
             if (q?.numeric == true || request == null && visual != null) {
                 if (visual == null) return solved.copy(touchFailure = "لوحة الأرقام غير معروفة بعد؛ لم أكتب شيئًا")
                 // The keypad adapter measures this skin's field; a learned box can include its bevel or wood.
-                val field = visual.field ?: q?.numericField ?: return solved
+                // The dark skin's reference box can reach into the field's gold rim when the card is
+                // drawn off the reference (owner's phone): check and read only the measured inside.
+                val measured = visual.field?.let {
+                    if (visual.kind == GameVisualLayout.Kind.NUMERIC_DARK)
+                        GameVisualLayout.fieldInterior(pixels, w, h, it) ?: it else it
+                }
+                val field = measured ?: q?.numericField ?: return solved
                 val ink = if (visual.kind == GameVisualLayout.Kind.NUMERIC_DARK)
                     NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.LIGHT
                 when (NumericFieldInk.inspect(pixels, w, h, field, ink).state) {
