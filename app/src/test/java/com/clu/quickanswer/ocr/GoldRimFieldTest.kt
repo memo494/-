@@ -79,4 +79,12 @@ class GoldRimFieldTest {
     @Test fun noDarkFieldNoInterior() {
         assertEquals(null, GameVisualLayout.fieldInterior(IntArray(w * h) { 0xffe8d6b4.toInt() }, w, h, field))
     }
+
+    /** A big typed digit in the middle is never taken for the rim: the field is not empty. */
+    @Test fun aTallTypedDigitInTheMiddleStaysInput() {
+        val px = screen(rim = false, digit = false)
+        for (y in field.top + 1 until field.bottom - 2) for (x in 296 until 306) px[y * w + x] = gold
+        assertEquals(NumericFieldInk.State.FILLED,
+            NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
+    }
 }

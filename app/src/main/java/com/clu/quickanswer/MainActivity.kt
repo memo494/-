@@ -105,20 +105,17 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
             if (uri == null) return@registerForActivityResult
             val app = applicationContext
-            val capture = LastCapture.get()
-            if (capture == null) {
-                Toast.makeText(app, "ما في لقطة بعد؛ اطلب جواب أول", Toast.LENGTH_SHORT).show()
-                return@registerForActivityResult
-            }
+            // The copy (about 10 MB) and the PNG are made off the main thread.
             Thread {
+                val capture = LastCapture.get()
                 val ok = try {
-                    app.contentResolver.openOutputStream(uri, "wt")?.use {
+                    capture != null && app.contentResolver.openOutputStream(uri, "wt")?.use {
                         capture.bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
                     } == true
                 } catch (_: Throwable) {
                     false
                 } finally {
-                    capture.bitmap.recycle()
+                    capture?.bitmap?.recycle()
                 }
                 runOnUiThread {
                     Toast.makeText(app, if (ok) "تم حفظ اللقطة ✓" else "تعذّر حفظ اللقطة", Toast.LENGTH_LONG).show()
@@ -275,7 +272,9 @@ class MainActivity : AppCompatActivity() {
                 .show()
         }
         findViewById<Button>(R.id.saveCaptureButton).setOnClickListener {
-            captureLauncher.launch("clu-capture.png")
+            // Checked first, so no empty file is created when there is nothing to save.
+            if (LastCapture.has()) captureLauncher.launch("clu-capture.png")
+            else Toast.makeText(this, "ما في لقطة بعد؛ اطلب جواب أول", Toast.LENGTH_SHORT).show()
         }
         findViewById<Button>(R.id.copyLogButton).setOnClickListener {
             val header = "Clu ${BuildConfigInfo.version(this)} | ${Prefs.provider(this)} " +

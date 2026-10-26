@@ -41,6 +41,10 @@ object LastCapture {
 
     /** A copy of the last capture that the caller must recycle, or null when there is none. */
     @Synchronized
+    /** Whether a capture is kept (cheap: nothing is copied). */
+    @Synchronized
+    fun has(): Boolean = bitmap != null
+
     fun get(): Capture? {
         val b = bitmap ?: return null
         return try {

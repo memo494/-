@@ -35,7 +35,7 @@ object GameVisualLayout {
     private const val BASE_W = 1536f
     private const val BASE_H = 691f
 
-    fun detect(argb: IntArray, width: Int, height: Int): Detected? = detectFrame(argb, width, height, null)
+    fun detect(argb: IntArray, width: Int, height: Int): Detected? = detectFrame(argb, width, height, null, false)
 
     /** The gray pad's dark 0000 hint is not entered text; this adapter knows its gold digit state. */
     fun inputHasText(argb: IntArray, width: Int, height: Int, detected: Detected, field: PxRect): Boolean {
@@ -137,7 +137,10 @@ object GameVisualLayout {
         val knownPrevious = previousTap?.takeIf {
             it in expected.digits.values || it == expected.clear || it == expected.backspace
         }
-        val now = detectFrame(argb, width, height, knownPrevious) ?: return false
+        // While typing, the pad is only confirmed where it already was (every key must match its
+        // place below), so the wide search may use main's two-sided key test: a pressed key's glow
+        // in the gap next to its neighbours must not stop the entry halfway.
+        val now = detectFrame(argb, width, height, knownPrevious, relaxedWide = true) ?: return false
         fun same(a: PxRect?, b: PxRect?): Boolean = a == null || b != null &&
             abs(a.centerX - b.centerX) <= max(3f, a.width * 0.2f) &&
             abs(a.centerY - b.centerY) <= max(3f, a.height * 0.2f)
@@ -188,7 +191,7 @@ object GameVisualLayout {
             .thenBy { abs(it.first) + abs(it.second) })
     }
 
-    private fun detectFrame(argb: IntArray, width: Int, height: Int, previousTap: PxRect?): Detected? {
+    private fun detectFrame(argb: IntArray, width: Int, height: Int, previousTap: PxRect?, relaxedWide: Boolean): Detected? {
         if (width < 320 || height < 200 || width.toDouble() / height !in 1.7..2.65 ||
             argb.size < width.toLong() * height
         ) return null
@@ -287,10 +290,9 @@ object GameVisualLayout {
                 patch(x, y - 34, intArrayOf(-5, 5), intArrayOf(0)), patch(x, y + 34, intArrayOf(-5, 5), intArrayOf(0)),
             ).all { abs(it.light - center) >= SEPARATE_KEY_EDGE }
         }
-        val darkOffset = centredOffset(
-            { dx, dy -> darkRows.all { (x, y) -> darkKey(x + dx, y + dy) } },
-            { dx, dy -> darkRows.all { (x, y) -> separateKey(x + dx, y + dy) } },
-        )
+        val allDarkKeys: (Int, Int) -> Boolean = { dx, dy -> darkRows.all { (x, y) -> darkKey(x + dx, y + dy) } }
+        val allSeparateKeys: (Int, Int) -> Boolean = { dx, dy -> darkRows.all { (x, y) -> separateKey(x + dx, y + dy) } }
+        val darkOffset = centredOffset(allDarkKeys, if (relaxedWide) allDarkKeys else allSeparateKeys)
         if (darkOffset != null) {
             val (dx, dy) = darkOffset
             // A flat charcoal panel is not a keypad. Its keys must stand out

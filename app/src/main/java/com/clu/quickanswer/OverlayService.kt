@@ -86,10 +86,7 @@ class OverlayService : Service() {
         /** Capture after hiding our panel: poll step, least wait (the former fixed one), most wait (ms). */
         private const val CLEAN_POLL_MS = 40L
         private const val CLEAN_MIN_MS = 250L
-        private const val CLEAN_MAX_MS = 1_000L
-
-        /** A frame this long after the panel's removal no longer shows it (about two screen refreshes). */
-        private const val CLEAN_LATENCY_NS = 40_000_000L
+        private const val CLEAN_MAX_MS = 600L
 
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
@@ -315,7 +312,8 @@ class OverlayService : Service() {
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("Clu")
+            // The installed app's own name ("Clu" or "Clu beta"), so two bubbles are told apart.
+            .setContentTitle(applicationInfo.loadLabel(packageManager))
             .setContentText("الفقاعة تعمل")
             .setOngoing(true)
             .addAction(0, "إيقاف", stopIntent)
@@ -953,26 +951,28 @@ class OverlayService : Service() {
      * Answers once the screen has been drawn without our old answer panel. A capture that still
      * showed the panel over the question (26 Oct 2026) could not be read on the device, and the
      * model was then sent our own old answer to read. Waits at least [CLEAN_MIN_MS] (the wait that
-     * always worked) and, when the display's frame times can be trusted, until a frame produced
-     * [CLEAN_LATENCY_NS] after the removal has arrived; never longer than [CLEAN_MAX_MS].
+     * always worked) and, when the display's frame times can be trusted, until the newest frame was
+     * produced after the removal; never longer than [CLEAN_MAX_MS]. Removing a window always makes
+     * the display draw a frame without it, so after the minimum wait the newest frame is that one
+     * (or a later one of an animating game).
      */
     private fun awaitFrameWithoutOverlays(trigger: AnswerTrigger, startMs: Long, removedAtNs: Long) {
         handler.postDelayed({
             if (destroyed) { setBusy(false); return@postDelayed }
-            grabFrame()
+            try { grabFrame() } catch (_: Throwable) { }
             val waited = SystemClock.uptimeMillis() - startMs
             val frameAt = lastFrameAtNs
-            // The image clock is the monotonic one on the phones seen so far; a time that is not
-            // within a minute of now is from another clock, and only the minimum wait is used.
+            // The image clock is the monotonic one (as System.nanoTime) on Android; a time that is
+            // not within a minute of now is from another clock, and only the minimum wait is used.
             val trusted = frameAt > 0 && kotlin.math.abs(frameAt - System.nanoTime()) < 60_000_000_000L
-            val clean = waited >= CLEAN_MIN_MS && (!trusted || frameAt >= removedAtNs + CLEAN_LATENCY_NS)
+            val clean = waited >= CLEAN_MIN_MS && (!trusted || frameAt > removedAtNs)
             if (!clean && waited < CLEAN_MAX_MS) {
                 awaitFrameWithoutOverlays(trigger, startMs, removedAtNs)
                 return@postDelayed
             }
             DiagLog.add("انتظار اختفاء اللوحة ${waited}ms: " + when {
                 !trusted -> "وقت الإطار غير معروف"
-                clean -> "إطار بعد الإخفاء"
+                clean -> "إطار بعد الإخفاء بـ${(frameAt - removedAtNs) / 1_000_000}ms"
                 else -> "انتهى الحد بدون إطار جديد"
             })
             setBusy(false)
@@ -1059,8 +1059,10 @@ class OverlayService : Service() {
                 lastHitKey = solved.memoryKey
                 lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
                 shownImage = solved.image ?: shownImage
+                val model = if (solved.source == AnswerSource.TEXT || solved.source == AnswerSource.IMAGE)
+                    runCatching { currentClient().lastModel }.getOrNull() ?: "-" else "-"
                 DiagLog.add("الجواب «${solved.text.take(60)}» من ${solved.source.name}" +
-                    " (${currentClient().lastModel ?: "-"}) خلال ${SystemClock.elapsedRealtime() - started}ms، " +
+                    " ($model) خلال ${SystemClock.elapsedRealtime() - started}ms، " +
                     when {
                         !touchRequested || !solved.isAnswer -> "بدون لمس"
                         solved.touches != null -> "خطة لمس: ${solved.touches.size} ضغطة"
@@ -1156,7 +1158,12 @@ class OverlayService : Service() {
                 val field = measured ?: q?.numericField ?: return quiet("no field")
                 val ink = if (visual.kind == GameVisualLayout.Kind.NUMERIC_DARK)
                     NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.LIGHT
-                when (NumericFieldInk.inspect(pixels, w, h, field, ink).state) {
+                // Our own window over the field hides what is in it: never call that empty.
+                if (masks.any { overlaps(it, field) }) return solved.copy(touchFailure =
+                    "الفقاعة فوق خانة الرقم؛ أبعدها ثم اطلب الجواب")
+                val sample = NumericFieldInk.inspect(pixels, w, h, field, ink)
+                DiagLog.add("خانة الرقم ${field.width}x${field.height}: ${sample.state} ${sample.why}")
+                when (sample.state) {
                     NumericFieldInk.State.FILLED -> return solved.copy(touchFailure =
                         "الخانة فيها إدخال سابق؛ لم أمسحه ولم أضف عليه")
                     NumericFieldInk.State.UNKNOWN -> return solved.copy(touchFailure =
@@ -1343,10 +1350,16 @@ class OverlayService : Service() {
                     ) return blocked("لوحة الأرقام أو زر التأكيد لم يعد ظاهرًا؛ أوقفت الإدخال")
                     if (numeric != null && nextTap == 0) {
                         val field = solved.fieldRect ?: return false
+                        if (obstruction != null && field.left < obstruction.right && field.right > obstruction.left &&
+                            field.top < obstruction.bottom && field.bottom > obstruction.top
+                        ) return blocked("الفقاعة فوق خانة الرقم؛ أبعدها ثم أعد الطلب")
                         val ink = if (numeric.kind == GameVisualLayout.Kind.NUMERIC_DARK)
                             NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.LIGHT
-                        if (NumericFieldInk.inspect(pixels, w, h, field, ink).state != NumericFieldInk.State.EMPTY)
+                        val sample = NumericFieldInk.inspect(pixels, w, h, field, ink)
+                        if (sample.state != NumericFieldInk.State.EMPTY) {
+                            DiagLog.add("خانة الرقم قبل أول رقم: ${sample.state} ${sample.why}")
                             return blocked("الخانة لم تعد فارغة؛ لم أمسح أو أضف أرقامًا")
+                        }
                     }
                     if (solved.choiceButtons.isNotEmpty()) {
                         val ready = if (solved.choiceFromLayout) ChoiceTouchGuard.isReadyFromLayout(

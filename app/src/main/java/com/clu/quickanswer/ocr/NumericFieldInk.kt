@@ -111,8 +111,11 @@ object NumericFieldInk {
             val height = bottom - top + 1
             val width = right - left + 1
             // Only shapes no digit can have: anything digit-sized stays, even at an edge, so a
-            // digit clipped by the field's edge still stops the typing.
-            val frame = height < minHeight || width >= w * FRAME_WIDTH || height >= h * FRAME_HEIGHT
+            // digit clipped by the field's edge still stops the typing. A tall stroke is a side of
+            // the rim only where it meets the left or right edge: a big typed digit in the middle
+            // must never be dropped (the field would then look empty and be typed into).
+            val side = left == 0 || right == w - 1
+            val frame = height < minHeight || width >= w * FRAME_WIDTH || height >= h * FRAME_HEIGHT && side
             if (frame) for (i in 0 until tail) mask[queue[i]] = false
         }
     }
