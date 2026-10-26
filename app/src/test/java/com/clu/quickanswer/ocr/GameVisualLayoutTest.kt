@@ -70,6 +70,34 @@ class GameVisualLayoutTest {
         }
     }
 
+    /**
+     * While typing on a pad only the wide search found, the pad is confirmed where the plan found
+     * it: a pressed key lit up does not stop the entry, a pad that moved away does.
+     */
+    @Test fun aShiftedPadIsConfirmedInPlaceWhileTyping() {
+        val rows = listOf(
+            922 to 302, 992 to 302, 1062 to 302,
+            922 to 370, 992 to 370, 1062 to 370,
+            922 to 438, 992 to 438, 1062 to 438,
+            992 to 504,
+        )
+        fun pad(sx: Int, sy: Int): IntArray {
+            val px = screen()
+            for ((x, y) in rows) for (yy in y + sy - 28..y + sy + 28) for (xx in x + sx - 30..x + sx + 30) {
+                px[yy * w + xx] = 0xff908678.toInt()
+            }
+            return px
+        }
+        val first = pad(-30, -25)
+        val detected = GameVisualLayout.detect(first, w, h)!!
+        assertNotNull(detected.wideOffset)
+        val five = detected.digits.getValue('5')
+        val lit = first.copyOf()
+        for (y in five.top until five.bottom) for (x in five.left until five.right) lit[y * w + x] = 0xfff0d070.toInt()
+        assertTrue(GameVisualLayout.stillVisible(lit, w, h, detected, previousTap = five))
+        assertFalse(GameVisualLayout.stillVisible(pad(-30 + 24, -25), w, h, detected, previousTap = five))
+    }
+
     @Test fun aPadShiftedByMoreThanTheLimitIsNotGuessed() {
         val px = screen()
         val rows = listOf(
