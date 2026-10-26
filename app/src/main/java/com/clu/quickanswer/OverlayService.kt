@@ -1357,11 +1357,12 @@ class OverlayService : Service() {
 
     private fun performAnswerTouches(solved: Solved, w: Int, h: Int, trigger: AnswerTrigger) {
         val boxes = solved.touches ?: return
-        val stamp = solved.guardStamp ?: return
-        val region = solved.guardRect ?: return
-        if (!TouchFrameGuard.usable(stamp)) return
+        val stamp = solved.guardStamp ?: return DiagLog.add("اللمس لم يبدأ: لا بصمة للسؤال")
+        val region = solved.guardRect ?: return DiagLog.add("اللمس لم يبدأ: لا منطقة للسؤال")
+        if (!TouchFrameGuard.usable(stamp)) return DiagLog.add("اللمس لم يبدأ: بصمة السؤال غير صالحة")
         if (touchPending || !VolumeKeyService.isEnabled(this)) {
             if (!VolumeKeyService.isEnabled(this)) showPanel("فعّل خدمة إمكانية الوصول لتشغيل اللمس التلقائي")
+            DiagLog.add("اللمس لم يبدأ: " + if (touchPending) "لمس سابق لسا شغّال" else "خدمة إمكانية الوصول مطفية")
             return
         }
         touchPending = true
@@ -1380,9 +1381,13 @@ class OverlayService : Service() {
                 grabFrame()
                 val frame = lastFrame ?: return blocked("لم تصل لقطة شاشة جديدة؛ لم أضغط")
                 val ignored = solved.ignoredRects + overlayRects().map { PxRect(it.left, it.top, it.right, it.bottom) }
-                if (frame.width != w || frame.height != h ||
-                    fingerprint(frame, region, ignored)?.let { TouchFrameGuard.matches(stamp, it) } != true
-                ) return blocked("تغيّر نص السؤال أو لم تستقر لقطته؛ لم أضغط")
+                if (frame.width != w || frame.height != h) return blocked("تغيّر مقاس اللقطة؛ لم أضغط")
+                val nowStamp = fingerprint(frame, region, ignored)
+                if (nowStamp?.let { TouchFrameGuard.matches(stamp, it) } != true) {
+                    DiagLog.add("فحص السؤال قبل الضغطة ${nextTap + 1}: " +
+                        (nowStamp?.let { TouchFrameGuard.explain(stamp, it) } ?: "لا لقطة للمنطقة"))
+                    return blocked("تغيّر نص السؤال أو لم تستقر لقطته؛ لم أضغط")
+                }
                 val picture = solved.pictureRect
                 if (picture != null && (solved.pictureStamp == null ||
                     fingerprint(frame, picture, ignored)?.let { TouchFrameGuard.matches(solved.pictureStamp, it) } != true
@@ -1432,7 +1437,14 @@ class OverlayService : Service() {
                         val ready = if (solved.choiceFromLayout) ChoiceTouchGuard.isReadyFromLayout(
                             pixels, w, h, region, solved.choiceButtons, solved.choiceWords)
                         else ChoiceTouchGuard.isReady(pixels, w, h, solved.choiceButtons, solved.choiceWords)
-                        if (!ready) return blocked("أزرار الإجابة غير جاهزة للضغط؛ لم أضغط")
+                        if (!ready) {
+                            val which = if (solved.choiceFromLayout) runCatching {
+                                ChoiceTouchGuard.firstUnreadyFromLayout(pixels, w, h, region, solved.choiceButtons, solved.choiceWords)
+                            }.getOrDefault(-1) else -1
+                            DiagLog.add("الأزرار غير جاهزة قبل الضغطة ${nextTap + 1}: " +
+                                if (which > 0) "الزر $which (ملوّن أو مغطّى)" else "شكل الأزرار تغيّر")
+                            return blocked("أزرار الإجابة غير جاهزة للضغط؛ لم أضغط")
+                        }
                     }
                     if (solved.choiceButtons.isNotEmpty() &&
                         (solved.choiceStamps.size != solved.choiceButtons.size ||
@@ -1453,7 +1465,10 @@ class OverlayService : Service() {
                 withTimeout(15_000L) {
                     delay(80L)
                     if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
-                        w != screenW || h != screenH || preview != null) return@withTimeout
+                        w != screenW || h != screenH || preview != null) {
+                        DiagLog.add("اللمس لم يبدأ: تغيّرت الحالة (محاولة أحدث، الإعدادات، الدوران أو الصورة المرسلة)")
+                        return@withTimeout
+                    }
                     hidePanel()
                     hideHighlight()
                     val removedAt = System.nanoTime()

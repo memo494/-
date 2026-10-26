@@ -29,6 +29,39 @@ internal object TouchFrameGuard {
         reference.size == WIDTH * HEIGHT && current.size == reference.size &&
             reference.indices.count { reference[it] in 0..255 && current[it] in 0..255 } >= MIN_SAMPLES
 
+    /**
+     * Why [matches] said no, for the diagnostic log: the mean difference, how many 16x8 tiles changed
+     * and where the first one is (x,y as a share of the region, 0..100), and how many samples were
+     * compared. A dark block in one place is our own window; a change everywhere is a new question.
+     */
+    fun explain(reference: IntArray, current: IntArray): String {
+        if (!usable(reference)) return "مرجع غير صالح"
+        if (!usable(current)) return "لقطة غير صالحة"
+        var total = 0L
+        var compared = 0
+        var tiles = 0
+        var first = ""
+        var darker = 0
+        for (top in 0 until HEIGHT step 8) for (left in 0 until WIDTH step 16) {
+            var changed = 0
+            for (y in top until top + 8) for (x in left until left + 16) {
+                val index = y * WIDTH + x
+                if (reference[index] == -1 || current[index] == -1) continue
+                val difference = abs(reference[index] - current[index])
+                total += difference
+                compared++
+                if (difference > 24) changed++
+                if (current[index] < reference[index] - 24) darker++
+            }
+            if (changed >= 3) {
+                if (tiles == 0) first = "${left * 100 / WIDTH},${top * 100 / HEIGHT}"
+                tiles++
+            }
+        }
+        val mean = if (compared == 0) 0 else (total / compared).toInt()
+        return "فرق=$mean مربعات=$tiles/48 أولها=$first أغمق=${darker * 100 / maxOf(1, compared)}% عيّنات=$compared"
+    }
+
     fun matches(reference: IntArray, current: IntArray): Boolean {
         if (!usable(reference) || !usable(current)) return false
         var total = 0L
