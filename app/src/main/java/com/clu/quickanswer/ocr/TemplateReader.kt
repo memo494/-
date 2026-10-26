@@ -86,7 +86,7 @@ object TemplateReader {
     }
 
     /** Whether the regions look as [stored] says: about the same background, about as uniform (either way). */
-    private fun matches(stored: List<RegionSignature>, now: List<RegionSignature>): Boolean {
+    fun matches(stored: List<RegionSignature>, now: List<RegionSignature>): Boolean {
         if (stored.size != now.size) return false
         for ((s, seen) in stored.zip(now)) {
             if (abs(s.background - seen.background) > SIGNATURE_TOLERANCE) return false
