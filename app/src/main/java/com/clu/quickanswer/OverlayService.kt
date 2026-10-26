@@ -1162,7 +1162,11 @@ class OverlayService : Service() {
             // Geometry is detected again from the visible banner/buttons; candidate/model boxes are not used.
             // This fallback initially supports the four-row example. Two remaining white rows on
             // a red/green result screen must not be mistaken for a fresh two-option question.
-            val inspection = ColorLayout().inspect(pixels, w, h)
+            val first = ColorLayout().inspect(pixels, w, h)
+            // The question text could not be cut (something over it), but the buttons may still be
+            // verified and their words read: then the banner itself guards the touch.
+            val inspection = if (first.layout == null && first.rejection == "question text band merged")
+                ColorLayout().inspect(pixels, w, h, keepMergedQuestion = true) else first
             val inspected = inspection.layout
             val inspectedWhy = inspection.rejection
             val stack = inspected?.takeIf { !it.numeric && it.buttons.size == 4 }
@@ -1171,11 +1175,11 @@ class OverlayService : Service() {
             var stackCode = when {
                 inspected == null -> "s0:" + inspectedWhy.orEmpty().take(30)
                 stack == null -> "s${inspected.buttons.size}${if (inspected.numeric) "n" else ""}"
-                stack.questionLines.isEmpty() -> "sq"
+                stack.questionLines.isEmpty() && first.layout != null -> "sq"
                 stackWords == null -> "sw"
                 else -> "s4"
             }
-            if (stack != null && stack.questionLines.isNotEmpty() && stackWords != null) {
+            if (stack != null && (stack.questionLines.isNotEmpty() || first.layout == null) && stackWords != null) {
                 val words = stackWords
                 if (!ChoiceTouchGuard.isReadyFromLayout(pixels, w, h, stack.banner, stack.buttons, words)) stackCode = "sr"
                 else {
@@ -1183,6 +1187,7 @@ class OverlayService : Service() {
                     val independent = PrintedChoiceTouch.request(stack, printed, solved.rawReply)
                     val plan = independent?.let { AnswerInteraction.plan(it, AnswerInteraction.Controls(w, h)) }
                     val region = independent?.question?.let { questionRegion(it, pixels, w, h) }
+                        ?: stack.banner.takeIf { independent != null && stack.questionLines.isEmpty() }
                     stackCode = when {
                         independent == null -> "sm:" + printed.joinToString("|") { it.text }.take(60)
                         plan == null -> "sp"
