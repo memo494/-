@@ -14,48 +14,22 @@ import kotlin.math.roundToInt
 class CalibrationBoxes {
 
     /** What the next box drawn is. */
-    enum class Mode {
-        QUESTION, OPTION, FIELD,
-        /** The next number key, 0 first then 1..9 ([nextKey]); see [com.clu.quickanswer.ocr.CalibratedKeypad]. */
-        KEY,
-        /** The game's confirm button for a typed number; a new one replaces the old one. */
-        SUBMIT,
-    }
+    enum class Mode { QUESTION, OPTION, FIELD }
 
     /** One step to undo: the [mode] drawn and what it replaced ([previous], for the question and the field). */
-    private class Step(
-        val mode: Mode,
-        val previous: PxRect?,
-        val previousKeys: List<PxRect?>? = null,
-        /** For one key: which digit it was, so undo puts back that digit's earlier box. */
-        val digit: Int = -1,
-    )
+    private class Step(val mode: Mode, val previous: PxRect?)
 
     var question: PxRect? = null
         private set
     var numericField: PxRect? = null
         private set
-    var submit: PxRect? = null
-        private set
     private val drawn = ArrayList<PxRect>()
-    /** Index = digit; a key can be set in any order (a tap is matched to the digit printed on it). */
-    private val keySlots = arrayOfNulls<PxRect>(10)
-
-    /** Each digit's key (index = digit), null where not set yet. */
-    val keyAt: List<PxRect?> get() = keySlots.toList()
-
-    /** The keys set so far, in digit order; all ten, index = digit, once [nextKey] is null. */
-    val keys: List<PxRect> get() = keySlots.filterNotNull()
-
-    /** The lowest digit with no key yet, or null when all ten are set. */
-    val nextKey: Char? get() = keySlots.indexOfFirst { it == null }.takeIf { it >= 0 }?.let { '0' + it }
     private val history = ArrayList<Step>()
 
     /** The options in the order they were drawn. */
     val options: List<PxRect> get() = drawn
 
-    val isEmpty: Boolean get() = question == null && numericField == null && drawn.isEmpty() &&
-        keySlots.all { it == null } && submit == null
+    val isEmpty: Boolean get() = question == null && numericField == null && drawn.isEmpty()
 
     /**
      * Adds [rect] as a [mode] box: a question or a number field replaces the one already there,
@@ -76,51 +50,8 @@ class CalibrationBoxes {
                 history.add(Step(mode, null))
                 drawn.add(rect)
             }
-            Mode.KEY -> {
-                val digit = nextKey?.let { it - '0' } ?: return false
-                history.add(Step(mode, null, digit = digit))
-                keySlots[digit] = rect
-            }
-            Mode.SUBMIT -> {
-                history.add(Step(mode, submit))
-                submit = rect
-            }
         }
         return true
-    }
-
-    /**
-     * Replaces the number keys with [found] (ten boxes, index = digit), e.g. from automatic detection.
-     * One [undo] takes them all back. False, nothing changed, unless there are exactly ten.
-     */
-    fun setKeys(found: List<PxRect>): Boolean {
-        if (found.size != 10) return false
-        history.add(Step(Mode.KEY, null, keySlots.toList()))
-        for (d in 0..9) keySlots[d] = found[d]
-        return true
-    }
-
-    /** Sets (or replaces) the key of [digit] 0..9. False, nothing changed, for another digit. */
-    fun setKey(digit: Int, rect: PxRect): Boolean {
-        if (digit !in 0..9) return false
-        history.add(Step(Mode.KEY, keySlots[digit], digit = digit))
-        keySlots[digit] = rect
-        return true
-    }
-
-    /**
-     * The box for a key or button the user TAPPED at ([x], [y]) on a [width] x [height] capture: a
-     * square the size of the keys already there (their median side), or [defaultShare] of the
-     * shorter side for the first one, centred on the tap and kept inside the capture. Tapping is
-     * easier than dragging ten small boxes, and the taps only need the key's middle.
-     */
-    fun boxAround(x: Int, y: Int, width: Int, height: Int, defaultShare: Float = DEFAULT_KEY_SHARE): PxRect {
-        val sides = keySlots.filterNotNull().map { minOf(it.width, it.height) }.sorted()
-        val side = (if (sides.isNotEmpty()) sides[sides.size / 2] else (minOf(width, height) * defaultShare).toInt())
-            .coerceIn(MIN_TAP_SIDE, maxOf(MIN_TAP_SIDE, minOf(width, height)))
-        val left = (x - side / 2).coerceIn(0, maxOf(0, width - side))
-        val top = (y - side / 2).coerceIn(0, maxOf(0, height - side))
-        return PxRect(left, top, minOf(width, left + side), minOf(height, top + side))
     }
 
     /** Takes back the box drawn last (a replaced question or field comes back). False when there is none. */
@@ -130,10 +61,6 @@ class CalibrationBoxes {
             Mode.QUESTION -> question = step.previous
             Mode.FIELD -> numericField = step.previous
             Mode.OPTION -> drawn.removeAt(drawn.size - 1)
-            Mode.KEY -> if (step.previousKeys != null) {
-                for (d in 0..9) keySlots[d] = step.previousKeys[d]
-            } else keySlots[step.digit] = step.previous
-            Mode.SUBMIT -> submit = step.previous
         }
         return true
     }
@@ -142,8 +69,6 @@ class CalibrationBoxes {
         question = null
         numericField = null
         drawn.clear()
-        keySlots.fill(null)
-        submit = null
         history.clear()
     }
 
@@ -152,14 +77,6 @@ class CalibrationBoxes {
      * options): rows top to bottom, right to left inside a row. What the numbers on the boxes show.
      */
     fun readingOrder(): List<PxRect> = RegionGeometry.readingRows(drawn, leftToRight = false) { it }.flatten()
-
-    companion object {
-        /** Share of the capture's shorter side for the first tapped key: a game key is usually 8-12%. */
-        const val DEFAULT_KEY_SHARE = 0.07f
-
-        /** Smallest tapped box (px): what a touch can still hit and a signature can still be measured on. */
-        const val MIN_TAP_SIDE = 24
-    }
 }
 
 /**

@@ -82,19 +82,6 @@ data class LayoutTemplate(
      * none. Not one of the [regions]: it has no signature and is never read as text.
      */
     val picture: RelRect? = null,
-    /**
-     * The game's number keys drawn by the user ("معايرة لوحة الأرقام"), index = digit 0..9, or null.
-     * Only for a NUMERIC template: with them a game whose pad Clu does not recognise can still be
-     * typed into. Not among the [regions] (they are not read as text); checked on every frame by
-     * [keySignatures] instead, see [CalibratedKeypad].
-     */
-    val keys: List<RelRect>? = null,
-    /** The game's confirm button, or null when it has none (it takes the last digit by itself). Needs [keys]. */
-    val submit: RelRect? = null,
-    /** One per key 0..9, then the [submit] button if any: what their frames looked like when drawn. */
-    val keySignatures: List<RegionSignature>? = null,
-    /** [FieldStamp] of the [numericField] as it looked empty when the keys were drawn. Needs [keys]. */
-    val fieldEmpty: String? = null,
 ) {
     /** question, options in order, then the numeric field: the order of [signatures]. */
     val regions: List<RelRect> get() = listOf(question) + options + listOfNotNull(numericField)
@@ -112,23 +99,8 @@ data class LayoutTemplate(
             val all = regions
             fun ok(s: List<RegionSignature>) = s.size == all.size && s.all { it.background in 0..255 && it.uniformity in 0f..1f }
             return all.all { it.isValid } && ok(signatures) && (altSignatures == null || ok(altSignatures)) &&
-                (picture == null || picture.isValid) && keysValid
+                (picture == null || picture.isValid)
         }
-
-    /** No keys at all, or a complete calibrated pad on a number template (see [keys]). */
-    private val keysValid: Boolean
-        get() {
-            if (keys == null) return submit == null && keySignatures == null && fieldEmpty == null
-            if (arrangement != Arrangement.NUMERIC || keys.size != 10 || keys.any { !it.isValid }) return false
-            if (submit != null && !submit.isValid) return false
-            val sigs = keySignatures ?: return false
-            if (sigs.size != 10 + (if (submit != null) 1 else 0)) return false
-            if (sigs.any { it.background !in 0..255 || it.uniformity !in 0f..1f }) return false
-            return FieldStamp.isValid(fieldEmpty)
-        }
-
-    /** The keys 0..9 then the submit button, the order of [keySignatures]; empty without keys. */
-    val keyRegions: List<RelRect> get() = keys.orEmpty() + listOfNotNull(submit.takeIf { keys != null })
 
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -149,10 +121,6 @@ data class LayoutTemplate(
         .put("sig2", altSignatures?.let { sigJson(it) } ?: JSONObject.NULL)
         .put("bnd", bounded)
         .put("pic", picture?.let { rectJson(it) } ?: JSONObject.NULL)
-        .put("keys", keys?.let { k -> JSONArray().also { a -> k.forEach { a.put(rectJson(it)) } } } ?: JSONObject.NULL)
-        .put("sub", submit?.let { rectJson(it) } ?: JSONObject.NULL)
-        .put("ksig", keySignatures?.let { sigJson(it) } ?: JSONObject.NULL)
-        .put("fe", fieldEmpty ?: JSONObject.NULL)
 
     companion object {
         const val MIN_OPTIONS = 2
@@ -202,13 +170,6 @@ data class LayoutTemplate(
                     bounded = o.optBoolean("bnd", false),
                     // Also optional: files written before pictures were known have no "pic".
                     picture = if (!o.has("pic") || o.isNull("pic")) null else rectOf(o.getJSONArray("pic")),
-                    // Calibrated keypad, optional too: older files and every non-calibrated template have none.
-                    keys = if (!o.has("keys") || o.isNull("keys")) null else o.getJSONArray("keys").let { a ->
-                        List(a.length()) { rectOf(a.getJSONArray(it)) }
-                    },
-                    submit = if (!o.has("sub") || o.isNull("sub")) null else rectOf(o.getJSONArray("sub")),
-                    keySignatures = if (!o.has("ksig") || o.isNull("ksig")) null else sigsOf(o.getJSONArray("ksig")),
-                    fieldEmpty = if (!o.has("fe") || o.isNull("fe")) null else o.getString("fe"),
                 )
                 if (t.isValid) t else null
             } catch (_: Exception) {

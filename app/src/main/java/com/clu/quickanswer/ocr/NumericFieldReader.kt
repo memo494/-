@@ -26,16 +26,13 @@ class NumericFieldReader(private val recognizer: LineRecognizer) {
     /** Gray zero placeholders and the input's bevel are not typed digits. Never strip OCR zeroes. */
     private fun readGold(argb: IntArray, width: Int, field: PxRect): RecognizedLine {
         fun empty() = RecognizedLine("", 0.0, 0)
-        val mask = BooleanArray(field.width * field.height) { i ->
-            isGold(argb[(field.top + i / field.width) * width + field.left + i % field.width])
-        }
-        // The field's own gold rim is not part of the number.
-        NumericFieldInk.dropFlatStrokes(mask, field.width, field.height)
+        val mask = BooleanArray(field.width * field.height)
         val rows = IntArray(field.height)
         var left = field.width; var right = -1; var top = field.height; var bottom = -1
         var count = 0
         for (y in 0 until field.height) for (x in 0 until field.width) {
-            if (!mask[y * field.width + x]) continue
+            if (!isGold(argb[(field.top + y) * width + field.left + x])) continue
+            mask[y * field.width + x] = true
             rows[y]++
             count++
             left = minOf(left, x); right = maxOf(right, x)

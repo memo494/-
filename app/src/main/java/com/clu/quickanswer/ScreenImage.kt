@@ -44,8 +44,7 @@ object ScreenImage {
             "never numbered, no explanation. Multiple choice: the exact printed words of the " +
             "correct option as written inside its button (for example 'سبونج بوب' or 'القلب'), " +
             "never its letter, number or position. A number (including a keypad question): ONLY " +
-            "the number in ASCII digits 0-9 (never ٠-٩), no words or units; a keypad takes a whole " +
-            "number of at most 4 digits, so answer in the unit that fits; work it out " +
+            "the number in ASCII digits 0-9 (never ٠-٩), no words or units; work it out " +
             "carefully, output only the result; for an estimate give your best single number. " +
             "If the question is visible, never reply that there is none; reply exactly '" + UNSURE +
             "' only when it cannot be read. Only if there is no quiz question at all, reply " +
