@@ -2,5 +2,30 @@
   "model": "opus",
   "env": {
     "CLAUDE_CODE_SUBAGENT_MODEL": "haiku"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-files.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/ktlint-format.sh\"",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
   }
 }
