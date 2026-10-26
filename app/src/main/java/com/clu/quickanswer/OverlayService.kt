@@ -87,6 +87,7 @@ class OverlayService : Service() {
     companion object {
         /** Waiting for a capture without our old answer panel: poll step, longest wait, settle time (ms). */
         private const val CLEAN_FRAME_POLL_MS = 40L
+        private const val CLEAN_FRAME_MIN_MS = 250L
         private const val CLEAN_FRAME_MAX_MS = 900L
         private const val CLEAN_FRAME_SETTLE_MS = 60L
 
@@ -950,12 +951,16 @@ class OverlayService : Service() {
      * after [CLEAN_FRAME_MAX_MS] (a screen that does not change emits no frame; the last one is then
      * already without our windows) and answers anyway.
      */
-    private fun awaitCleanFrame(trigger: AnswerTrigger, since: Long) {
+    private fun awaitCleanFrame(trigger: AnswerTrigger, since: Long, sawFresh: Boolean = false) {
         handler.postDelayed({
             if (destroyed) return@postDelayed
-            val fresh = grabFrame()
-            if (!fresh && SystemClock.uptimeMillis() - since < CLEAN_FRAME_MAX_MS) {
-                awaitCleanFrame(trigger, since)
+            val fresh = sawFresh || grabFrame()
+            val waited = SystemClock.uptimeMillis() - since
+            // Never sooner than the former fixed wait: a game that is still animating sends frames
+            // at once, and a capture 100 ms after the tap caught its buttons half drawn ("a button
+            // is missing in the stack", 26 Oct 2026). Never later than the cap either.
+            if ((!fresh || waited < CLEAN_FRAME_MIN_MS) && waited < CLEAN_FRAME_MAX_MS) {
+                awaitCleanFrame(trigger, since, fresh)
                 return@postDelayed
             }
             setBusy(false)
