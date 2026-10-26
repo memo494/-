@@ -267,7 +267,7 @@ class ColorLayoutTest {
      */
     @Test fun aCoveredQuestionStillGivesTheButtonsWhenAskedFor() {
         val c = SyntheticScreens.quiz(600, 1300)
-        c.fill(600 * 25 / 100, 1300 * 41 / 100, 600 * 75 / 100, 1300 * 48 / 100, 0xff202020.toInt())
+        c.ink(600 * 25 / 100, 1300 * 41 / 100, 600 * 75 / 100, 1300 * 48 / 100) // varied dark, as a real panel is
         val plain = ColorLayout().inspect(c.px, 600, 1300)
         assertNull(plain.layout)
         assertEquals("question text band merged", plain.rejection)
