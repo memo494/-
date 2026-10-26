@@ -99,6 +99,33 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    // The last capture exactly as Clu read it (lossless PNG, our windows painted black), saved only
+    // when the owner asks, so a screen that fails can be sent and examined (see LastCapture).
+    private val captureLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
+            if (uri == null) return@registerForActivityResult
+            val app = applicationContext
+            val capture = LastCapture.get()
+            if (capture == null) {
+                Toast.makeText(app, "ما في لقطة بعد؛ اطلب جواب أول", Toast.LENGTH_SHORT).show()
+                return@registerForActivityResult
+            }
+            Thread {
+                val ok = try {
+                    app.contentResolver.openOutputStream(uri, "wt")?.use {
+                        capture.bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                    } == true
+                } catch (_: Throwable) {
+                    false
+                } finally {
+                    capture.bitmap.recycle()
+                }
+                runOnUiThread {
+                    Toast.makeText(app, if (ok) "تم حفظ اللقطة ✓" else "تعذّر حفظ اللقطة", Toast.LENGTH_LONG).show()
+                }
+            }.start()
+        }
+
     private val importLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri == null) return@registerForActivityResult
@@ -246,6 +273,18 @@ class MainActivity : AppCompatActivity() {
                 }
                 .setNegativeButton("إلغاء", null)
                 .show()
+        }
+        findViewById<Button>(R.id.saveCaptureButton).setOnClickListener {
+            captureLauncher.launch("clu-capture.png")
+        }
+        findViewById<Button>(R.id.copyLogButton).setOnClickListener {
+            val header = "Clu ${BuildConfigInfo.version(this)} | ${Prefs.provider(this)} " +
+                "${if (Prefs.provider(this) == "claude") Prefs.claudeModel(this) else Prefs.model(this)} | " +
+                "قراءة ذكية=${Prefs.smartReading(this)} لمس=${Prefs.autoTouch(this)} صوت=${Prefs.volumeKey(this)}"
+            val log = DiagLog.text().ifBlank { "(السجل فاضي: اطلب جواب أول)" }
+            val clip = android.content.ClipData.newPlainText("Clu log", header + "\n" + log)
+            (getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(clip)
+            Toast.makeText(this, "تم نسخ السجل ✓ الصقه بالمحادثة", Toast.LENGTH_LONG).show()
         }
         findViewById<Button>(R.id.calibrateButton).setOnClickListener {
             startActivity(Intent(this, CalibrationActivity::class.java))

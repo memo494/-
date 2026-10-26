@@ -6,7 +6,8 @@ import com.clu.quickanswer.ocr.PxRect
 /**
  * The last screen [OverlayService] read, kept in memory so the user can draw the boxes of a new game
  * on it ([CalibrationActivity]). Process-wide because the service and the activity share nothing
- * else. Never written to disk: a capture shows other players and the owner (decision 5).
+ * else. Never written to disk by the app: a capture shows other players and the owner (decision 5).
+ * Only the owner saves it, by hand, from the settings ("حفظ آخر لقطة"), to send a failing screen.
  *
  * Only one copy is kept (about 10 MB for a 1080 x 2400 capture): [set] recycles the previous one.
  * [get] hands out a copy of its own, so a new capture arriving while the activity is still showing

@@ -391,6 +391,20 @@
             android:layout_height="wrap_content"
             android:text="معايرة يدوية (ارسم مربعات السؤال والخيارات)" />
 
+        <Button
+            android:id="@+id/copyLogButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="نسخ سجل التشخيص (لإرساله عند وجود مشكلة)" />
+
+        <Button
+            android:id="@+id/saveCaptureButton"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="حفظ آخر لقطة قرأها التطبيق" />
+
         <TextView
             style="@style/CluSectionHeader"
             android:layout_width="match_parent"

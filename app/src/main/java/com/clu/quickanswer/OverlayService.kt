@@ -970,6 +970,11 @@ class OverlayService : Service() {
                 awaitFrameWithoutOverlays(trigger, startMs, removedAtNs)
                 return@postDelayed
             }
+            DiagLog.add("انتظار اختفاء اللوحة ${waited}ms: " + when {
+                !trusted -> "وقت الإطار غير معروف"
+                clean -> "إطار بعد الإخفاء"
+                else -> "انتهى الحد بدون إطار جديد"
+            })
             setBusy(false)
             answerNow(trigger)
         }, CLEAN_POLL_MS)
@@ -1007,6 +1012,7 @@ class OverlayService : Service() {
         val capturedEpoch = touchEpoch
         val capturedWindow = VolumeKeyService.contextVersion()
         val touchRequested = permitsTouch(trigger)
+        DiagLog.add("طلب ${trigger.name}${if (fromAuto) " تلقائي" else ""} ${capturedW}x$capturedH، لمس=${if (touchRequested) "نعم" else "لا"}")
         // The question screen as the watch will compare it (see startResultWatch); [bmp] is gone after solve.
         val watchBase = if (Prefs.learnFromResults(this)) {
             try {
@@ -1053,6 +1059,13 @@ class OverlayService : Service() {
                 lastHitKey = solved.memoryKey
                 lastHitAt = if (solved.memoryKey != null) SystemClock.uptimeMillis() else 0L
                 shownImage = solved.image ?: shownImage
+                DiagLog.add("الجواب «${solved.text.take(60)}» من ${solved.source.name}" +
+                    " (${currentClient().lastModel ?: "-"}) خلال ${SystemClock.elapsedRealtime() - started}ms، " +
+                    when {
+                        !touchRequested || !solved.isAnswer -> "بدون لمس"
+                        solved.touches != null -> "خطة لمس: ${solved.touches.size} ضغطة"
+                        else -> "لا لمس: ${solved.touchFailure ?: "بدون سبب"}"
+                    })
                 // The answer only: the owner found the time and model next to it distracting.
                 showPanel(if (touchRequested && solved.isAnswer && solved.touches == null)
                     "${solved.text}\n${solved.touchFailure ?: "لم أجد طريقة إدخال موثوقة لهذا الشكل"}" else solved.text)
@@ -1094,6 +1107,8 @@ class OverlayService : Service() {
 
     /** Bind every answer source to the same interaction engine. All pixel/OCR work here is on IO. */
     private fun prepareTouches(solved: Solved, bmp: Bitmap, masks: List<PxRect>): Solved {
+        // Refusals without a message of their own: the panel stays as it was, the step goes to the log.
+        fun quiet(code: String): Solved { DiagLog.add("رفض اللمس: $code"); return solved }
         return try {
             val w = bmp.width
             val h = bmp.height
@@ -1108,7 +1123,7 @@ class OverlayService : Service() {
                 return solved.copy(touchFailure = "الفقاعة تغطّي الصورة؛ أبعدها ثم اطلب الجواب")
             }
             if (request != null && q != null && !q.numeric) {
-                val banner = q.bannerRect ?: return solved
+                val banner = q.bannerRect ?: return quiet("no banner")
                 val words = q.optionTextRects.takeIf { it.size == q.options.size } ?: q.optionRects
                 if (!ChoiceTouchGuard.isReadyFromLayout(pixels, w, h, banner, q.optionRects, words)) {
                     return solved.copy(touchFailure = "الأزرار غير جاهزة أو بعض الكتابة محجوب")
@@ -1138,7 +1153,7 @@ class OverlayService : Service() {
                     if (visual.kind == GameVisualLayout.Kind.NUMERIC_DARK)
                         GameVisualLayout.fieldInterior(pixels, w, h, it) ?: it else it
                 }
-                val field = measured ?: q?.numericField ?: return solved
+                val field = measured ?: q?.numericField ?: return quiet("no field")
                 val ink = if (visual.kind == GameVisualLayout.Kind.NUMERIC_DARK)
                     NumericFieldReader.Ink.GOLD else NumericFieldReader.Ink.LIGHT
                 when (NumericFieldInk.inspect(pixels, w, h, field, ink).state) {
@@ -1162,12 +1177,15 @@ class OverlayService : Service() {
                     expectedNumber = plan.number, fieldRect = field, fieldStamp = fingerprint(bmp, field, masks),
                     pictureStamp = picture?.let { fingerprint(bmp, it, masks) })
             }
-            if (request != null) return solved // never replace a rejected trusted reading with guessed positions
+            if (request != null) return quiet("read question, no match") // never replace a rejected trusted reading with guessed positions
             // A mixed Arabic/Latin question may fail both question readers while every option is clear.
             // Geometry is detected again from the visible banner/buttons; candidate/model boxes are not used.
             // This fallback initially supports the four-row example. Two remaining white rows on
             // a red/green result screen must not be mistaken for a fresh two-option question.
-            val stack = ColorLayout().inspect(pixels, w, h).layout?.takeIf { !it.numeric && it.buttons.size == 4 }
+            val stackInspection = ColorLayout().inspect(pixels, w, h)
+            val stack = stackInspection.layout?.takeIf { !it.numeric && it.buttons.size == 4 }
+            val stackWhy = stackInspection.rejection ?: stackInspection.layout?.let {
+                if (it.numeric) "numeric" else "${it.buttons.size} buttons" } ?: "-"
             val stackWords = stack?.let { PrintedChoiceTouch.regions(it, pixels, w, h) }
             if (stack != null && stack.questionLines.isNotEmpty() && stackWords != null) {
                 val words = stackWords
@@ -1184,15 +1202,15 @@ class OverlayService : Service() {
             }
             // Legacy fallback: independently read all four printed words; candidate/model boxes alone
             // never authorize a touch. The original reply is retained even when display matching was fuzzy.
-            val choices = OptionWordDetector.detectChoices(pixels, w, h) ?: return solved
-            if (!ChoiceTouchGuard.isReady(pixels, w, h, choices.buttons, choices.words)) return solved
-            val printed = synchronized(ocrLock) { ocr?.readWords(bmp, choices.words) } ?: return solved
+            val choices = OptionWordDetector.detectChoices(pixels, w, h) ?: return quiet("no choices found ($stackWhy)")
+            if (!ChoiceTouchGuard.isReady(pixels, w, h, choices.buttons, choices.words)) return quiet("choices not ready")
+            val printed = synchronized(ocrLock) { ocr?.readWords(bmp, choices.words) } ?: return quiet("words not read")
             val printedOptions = printed.map { it.text }
             val literal = printedOptions.singleOrNull {
                 AnswerInteraction.matchesChoice(solved.rawReply, it, printedOptions, indexRequested = false)
-            } ?: return solved
-            val target = WordAnswerMatcher.match(literal, printed) ?: return solved
-            val actions = TouchPlanner.plan(solved.rawReply, target, emptyMap(), null, w, h) ?: return solved
+            } ?: return quiet("answer not among the words read: " + printedOptions.joinToString("|").take(80))
+            val target = WordAnswerMatcher.match(literal, printed) ?: return quiet("word not placed")
+            val actions = TouchPlanner.plan(solved.rawReply, target, emptyMap(), null, w, h) ?: return quiet("no plan")
             val content = ChoiceTouchGuard.stableContent(pixels, w, h, choices.buttons) ?: return solved.copy(
                 touchFailure = "لم أجد نص السؤال كاملًا للتحقق قبل اللمس")
             if (content.picture != null && TouchFrameMask.obscuresPicture(content.picture, masks)) return solved.copy(
@@ -1201,7 +1219,7 @@ class OverlayService : Service() {
                 choiceButtons = choices.buttons, choiceWords = choices.words,
                 choiceStamps = choices.words.mapNotNull { fingerprint(bmp, it, masks) }, ignoredRects = masks,
                 pictureRect = content.picture, pictureStamp = content.picture?.let { fingerprint(bmp, it, masks) })
-        } catch (_: Throwable) { solved }
+        } catch (e: Throwable) { quiet("error ${e.javaClass.simpleName}") }
     }
 
     /** Use measured question ink, not a banner that can also contain an animated badge. */
@@ -1367,10 +1385,14 @@ class OverlayService : Service() {
                             ) { if (continuation.isActive) continuation.resume(it) }
                     }
                     if (!ready) {
+                        DiagLog.add("اللمس لم يبدأ: $cancelReason")
                         showPanel("${solved.text}\n$cancelReason")
                         return@withTimeout
                     }
-                    if (!touchAttempts.tryBegin(stamp, w, h)) return@withTimeout
+                    if (!touchAttempts.tryBegin(stamp, w, h)) {
+                        DiagLog.add("اللمس: نفس الشاشة جُرّبت قبل، تُركت")
+                        return@withTimeout
+                    }
                     setBusy(true)
                     val finished = suspendCancellableCoroutine<Boolean> { continuation ->
                         val accepted = VolumeKeyService.tapAnswer(boxes, solved.submitLast, canContinue = {
@@ -1386,10 +1408,16 @@ class OverlayService : Service() {
                             if (continuation.isActive) continuation.resume(false)
                         }
                     }
+                    DiagLog.add(when {
+                        finished -> "اللمس اكتمل (${boxes.size} ضغطة)"
+                        entryRejected -> "اللمس: الرقم المقروء بالخانة ما طابق، لم يُضغط التأكيد"
+                        else -> "اللمس توقف: $cancelReason"
+                    })
                     if (!finished) showPanel(if (entryRejected) "تعذّر التحقق من الرقم؛ لم يتم التأكيد"
                         else cancelReason)
                 }
             } catch (_: TimeoutCancellationException) {
+                DiagLog.add("اللمس: انتهت المهلة")
                 if (!destroyed && epoch == touchEpoch) try {
                     showPanel("انتهت مهلة اللمس؛ جاهز للسؤال التالي")
                 } catch (_: Throwable) { }
@@ -1619,9 +1647,14 @@ class OverlayService : Service() {
             }
         }
         val source = if (imageReply.isAnswer) AnswerSource.IMAGE else AnswerSource.FAILED
+        // The options were read on the device and this reply is none of them: say so on the panel
+        // instead of showing it as if it were an option (the owner saw "words that are not among
+        // the options", 26 Oct 2026). Nothing is tapped or remembered for it either way.
+        val offOptions = q != null && !q.numeric && imageReply.isAnswer && !ScreenImage.isNoQuestion(text)
+        if (offOptions) DiagLog.add("الجواب مش من الخيارات المقروءة: «${text.take(40)}» / " + q!!.options.joinToString("|").take(80))
         return Solved(
-            text, null, c.lastSent, null, imageReply.isAnswer, source,
-            learnFrameFor(read, bmp, masks, c, imageReply, text),
+            if (offOptions) "غير مؤكد: $text" else text, null, c.lastSent, null, imageReply.isAnswer, source,
+            learnFrameFor(read, bmp, masks, c, imageReply, text), rawReply = text,
         )
     }
 
@@ -1727,9 +1760,26 @@ class OverlayService : Service() {
             val pixels = IntArray(w * h)
             src.getPixels(pixels, 0, w, 0, 0, w, h)
             val inspected = colorLayout.inspect(pixels, w, h)
-            val layout = inspected.layout ?: return readWithTemplates(src, pixels, w, h, masks)
-            return DeviceRead(readWith(src, pixels, w, h, inspected, layout, masks, null), colorLayout = true)
+            val layout = inspected.layout
+            if (layout == null) {
+                val t = readWithTemplates(src, pixels, w, h, masks)
+                DiagLog.add("قراءة: اللعبة الأصلية لا (${inspected.rejection})، القوالب: " + when {
+                    t.question != null -> "قُرئ السؤال"
+                    t.candidate != null -> "قالب مرشّح قرأه"
+                    t.fits -> "قالب يطابق لكن ما انقرأ"
+                    else -> "لا يوجد"
+                })
+                return t
+            }
+            val q = readWith(src, pixels, w, h, inspected, layout, masks, null)
+            DiagLog.add("قراءة: اللعبة الأصلية، " + when {
+                q == null -> "الشكل معروف لكن النص ما انقرأ"
+                q.numeric -> "سؤال رقم"
+                else -> "سؤال ${q.options.size} خيارات"
+            })
+            return DeviceRead(q, colorLayout = true)
         } catch (t: Throwable) {
+            DiagLog.add("قراءة: خطأ ${t.javaClass.simpleName}")
             return DeviceRead(null)
         } finally {
             copy?.recycle()
