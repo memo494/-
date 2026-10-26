@@ -26,6 +26,10 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
+        // Names shown on the phone; a beta build (below) gets its own, so the two apps installed
+        // side by side (launcher, accessibility settings) are told apart.
+        manifestPlaceholders["appLabel"] = "Clu"
+        manifestPlaceholders["a11yLabel"] = "Clu: زر الصوت واللمس الاختياري"
     }
 
     signingConfigs {
@@ -51,6 +55,8 @@ android {
             if (System.getenv("CI_BETA_BUILD") == "true") {
                 applicationIdSuffix = ".beta"
                 versionNameSuffix = "-beta"
+                manifestPlaceholders["appLabel"] = "Clu beta"
+                manifestPlaceholders["a11yLabel"] = "Clu beta: زر الصوت واللمس الاختياري"
             }
         }
         // The build that is shared as Clu.apk, signed like the debug build (the fixed key when there
@@ -61,6 +67,8 @@ android {
             if (System.getenv("CI_BETA_BUILD") == "true") {
                 applicationIdSuffix = ".beta"
                 versionNameSuffix = "-beta"
+                manifestPlaceholders["appLabel"] = "Clu beta"
+                manifestPlaceholders["a11yLabel"] = "Clu beta: زر الصوت واللمس الاختياري"
             }
             isMinifyEnabled = false
             isShrinkResources = false

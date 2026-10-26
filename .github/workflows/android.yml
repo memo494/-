@@ -43,7 +43,27 @@ jobs:
       # The unit tests (answer parsing, memory, OCR on real screenshots, Gemini/Claude replies) run
       # first: a failing test stops the build before a broken APK is published.
       - name: Unit tests
-        run: ./gradlew testDebugUnitTest
+        run: ./gradlew testDebugUnitTest 2>&1 | tee gradle-test.log; exit ${PIPESTATUS[0]}
+        shell: bash
+      # Failed tests and compile errors as annotations, readable on the PR page from a phone (and by
+      # the API) without opening the full log.
+      - name: Report failed tests
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for f in glob.glob('app/build/test-results/**/*.xml', recursive=True):
+              for case in ET.parse(f).getroot().iter('testcase'):
+                  for bad in list(case.findall('failure')) + list(case.findall('error')):
+                      msg = (bad.get('message') or bad.text or '').strip().replace('\n', ' ')[:400]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{msg}")
+          try:
+              for line in open('gradle-test.log', errors='replace'):
+                  if line.startswith('e: ') or 'FAILED' in line or 'What went wrong' in line:
+                      print('::error title=gradle::' + line.strip()[:400])
+          except OSError:
+              pass
+          PY
       # The shared APK is the release build: compressed native libraries, same key, not shrunk.
       - name: Build APK
         run: ./gradlew assembleRelease
@@ -65,3 +85,20 @@ jobs:
           target_commitish: ${{ github.sha }}
           make_latest: true
           files: Clu.apk
+      # A beta (Run workflow with "beta") goes to one fixed pre-release, so its link never changes:
+      # .../releases/download/beta/Clu-beta.apk. It is the app "Clu beta" (its own package), which
+      # installs beside the production app and never replaces it; a pre-release is never "latest".
+      - name: Publish beta
+        if: github.event_name == 'workflow_dispatch' && inputs.beta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp Clu.apk Clu-beta.apk
+          if ! gh release view beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create beta --repo "$GITHUB_REPOSITORY" --prerelease --title "Clu beta" \
+              --notes "Clu beta" --target "$GITHUB_SHA"
+          fi
+          gh release upload beta Clu-beta.apk --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit beta --repo "$GITHUB_REPOSITORY" --prerelease \
+            --title "Clu beta ${{ github.run_number }}" \
+            --notes "Clu beta ${{ github.run_number }} (${GITHUB_SHA::7}). Installs beside Clu; does not replace it."
