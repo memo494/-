@@ -85,6 +85,11 @@ import kotlin.math.min
 class OverlayService : Service() {
 
     companion object {
+        /** Waiting for a capture without our old answer panel: poll step, longest wait, settle time (ms). */
+        private const val CLEAN_FRAME_POLL_MS = 40L
+        private const val CLEAN_FRAME_MAX_MS = 900L
+        private const val CLEAN_FRAME_SETTLE_MS = 60L
+
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
 
@@ -920,10 +925,12 @@ class OverlayService : Service() {
             hidePanel()
             hidePreview()
             setBusy(true)
-            handler.postDelayed({
-                setBusy(false)
-                answerNow(trigger)
-            }, 250)
+            // Frames taken so far still show the old answer; drop them, then wait for the first frame
+            // drawn without it. A fixed 250 ms was not always enough (26 Oct 2026): the old panel
+            // stayed in the capture over the question, the screen was declined ("s0") and the
+            // question could not be read.
+            grabFrame()
+            awaitCleanFrame(trigger, SystemClock.uptimeMillis())
             return
         }
         val bmp = captureMasked()
@@ -936,6 +943,25 @@ class OverlayService : Service() {
         touchAttempts.reset()
         autoRetry.reset()
         sendFrame(bmp, if (autoMode) signature(bmp, ignoreRects()) else null, fromAuto = false, trigger = trigger)
+    }
+
+    /**
+     * Polls for a frame that arrived after our windows were removed, then answers. Gives up waiting
+     * after [CLEAN_FRAME_MAX_MS] (a screen that does not change emits no frame; the last one is then
+     * already without our windows) and answers anyway.
+     */
+    private fun awaitCleanFrame(trigger: AnswerTrigger, since: Long) {
+        handler.postDelayed({
+            if (destroyed) return@postDelayed
+            val fresh = grabFrame()
+            if (!fresh && SystemClock.uptimeMillis() - since < CLEAN_FRAME_MAX_MS) {
+                awaitCleanFrame(trigger, since)
+                return@postDelayed
+            }
+            setBusy(false)
+            // One more frame interval after the first clean frame: the removal can be drawn in two steps.
+            handler.postDelayed({ if (!destroyed) answerNow(trigger) }, CLEAN_FRAME_SETTLE_MS)
+        }, CLEAN_FRAME_POLL_MS)
     }
 
     private fun permitsTouch(trigger: AnswerTrigger): Boolean = trigger.permitsTouch(
