@@ -54,10 +54,15 @@ object CalibratedKeypad {
             .firstNotNullOfOrNull { locate(it, argb, width, height) }
 
     /**
-     * Whether every key and the submit button still look as drawn. The key just [pressed] is left
-     * out: games highlight a key for a moment after a tap, and that is not the pad going away.
+     * Whether every key (and, with [checkSubmit], the submit button) still looks as drawn. The key
+     * just [pressed] is left out: games highlight a key for a moment after a tap, and that is not the
+     * pad going away. The submit button is compared only before typing starts: many games light or
+     * dim it once a digit is in the field, and that must not stop the entry halfway (the typed
+     * number is read back before it is pressed anyway).
      */
-    fun stillVisible(keys: Keys, argb: IntArray, width: Int, height: Int, pressed: PxRect?): Boolean {
+    fun stillVisible(
+        keys: Keys, argb: IntArray, width: Int, height: Int, pressed: PxRect?, checkSubmit: Boolean = true,
+    ): Boolean {
         if (width <= 0 || height <= 0 || argb.size.toLong() < width.toLong() * height) return false
         val all = keys.all
         if (all.size != keys.signatures.size) return false
@@ -66,6 +71,7 @@ object CalibratedKeypad {
         for ((i, r) in all.withIndex()) {
             if (r.left < 0 || r.top < 0 || r.right > width || r.bottom > height) return false
             if (r == pressed) continue
+            if (i >= 10 && !checkSubmit) continue
             stored.add(keys.signatures[i])
             now.add(TemplateReader.signature(argb, width, height, r))
         }

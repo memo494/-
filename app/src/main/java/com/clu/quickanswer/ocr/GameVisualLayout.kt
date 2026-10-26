@@ -27,6 +27,11 @@ object GameVisualLayout {
         /** Present only when the white skin's cyan erase key is visible. */
         val backspace: PxRect? = null,
         val field: PxRect? = null,
+        /**
+         * The dark pad's offset from the reference (reference units) when only the wide search found
+         * it, else null. While typing, such a pad is confirmed only near this offset (see [stillVisible]).
+         */
+        val wideOffset: Pair<Int, Int>? = null,
     )
 
     private data class RGB(val r: Double, val g: Double, val b: Double) {
@@ -35,7 +40,8 @@ object GameVisualLayout {
     private const val BASE_W = 1536f
     private const val BASE_H = 691f
 
-    fun detect(argb: IntArray, width: Int, height: Int): Detected? = detectFrame(argb, width, height, null, false)
+    fun detect(argb: IntArray, width: Int, height: Int): Detected? =
+        detectFrame(argb, width, height, null, wideSearch = true, around = null)
 
     /** The gray pad's dark 0000 hint is not entered text; this adapter knows its gold digit state. */
     fun inputHasText(argb: IntArray, width: Int, height: Int, detected: Detected, field: PxRect): Boolean {
@@ -137,10 +143,12 @@ object GameVisualLayout {
         val knownPrevious = previousTap?.takeIf {
             it in expected.digits.values || it == expected.clear || it == expected.backspace
         }
-        // While typing, the pad is only confirmed where it already was (every key must match its
-        // place below), so the wide search may use main's two-sided key test: a pressed key's glow
-        // in the gap next to its neighbours must not stop the entry halfway.
-        val now = detectFrame(argb, width, height, knownPrevious, relaxedWide = true) ?: return false
+        // A pad found where main finds it is confirmed exactly as main does (the measured window
+        // only). A pad only the wide search found is confirmed close to where it was found, with
+        // main's two-sided key test: a pressed key's glow next to its neighbours must not stop the
+        // entry halfway, and the confirmation must not jump to another place than the plan's.
+        val now = detectFrame(argb, width, height, knownPrevious, wideSearch = false, around = expected.wideOffset)
+            ?: return false
         fun same(a: PxRect?, b: PxRect?): Boolean = a == null || b != null &&
             abs(a.centerX - b.centerX) <= max(3f, a.width * 0.2f) &&
             abs(a.centerY - b.centerY) <= max(3f, a.height * 0.2f)
@@ -191,7 +199,34 @@ object GameVisualLayout {
             .thenBy { abs(it.first) + abs(it.second) })
     }
 
-    private fun detectFrame(argb: IntArray, width: Int, height: Int, previousTap: PxRect?, relaxedWide: Boolean): Detected? {
+    /** Half-width (reference units) of the search around a known offset while typing. */
+    private const val AROUND_SHIFT = 8
+    private const val AROUND_STEP = 2
+
+    /** The offset nearest [around] within [AROUND_SHIFT] where every key matches, or null. */
+    private inline fun nearestAround(around: Pair<Int, Int>, allKeys: (Int, Int) -> Boolean): Pair<Int, Int>? {
+        var best: Pair<Int, Int>? = null
+        var bestDistance = Int.MAX_VALUE
+        for (dy in -AROUND_SHIFT..AROUND_SHIFT step AROUND_STEP) for (dx in -AROUND_SHIFT..AROUND_SHIFT step AROUND_STEP) {
+            val distance = abs(dx) + abs(dy)
+            if (distance < bestDistance && allKeys(around.first + dx, around.second + dy)) {
+                best = (around.first + dx) to (around.second + dy)
+                bestDistance = distance
+            }
+        }
+        return best
+    }
+
+    /** True for an offset the measured window (main's search) can return. */
+    private fun onNearGrid(v: Int): Boolean = v in -NEAR_SHIFT..NEAR_SHIFT && v % NEAR_STEP == 0
+
+    private fun detectFrame(
+        argb: IntArray, width: Int, height: Int, previousTap: PxRect?,
+        /** Try the wide search when the measured window finds nothing (detection, not confirmation). */
+        wideSearch: Boolean,
+        /** Confirm a pad the wide search found: search only near this offset. */
+        around: Pair<Int, Int>?,
+    ): Detected? {
         if (width < 320 || height < 200 || width.toDouble() / height !in 1.7..2.65 ||
             argb.size < width.toLong() * height
         ) return null
@@ -292,7 +327,8 @@ object GameVisualLayout {
         }
         val allDarkKeys: (Int, Int) -> Boolean = { dx, dy -> darkRows.all { (x, y) -> darkKey(x + dx, y + dy) } }
         val allSeparateKeys: (Int, Int) -> Boolean = { dx, dy -> darkRows.all { (x, y) -> separateKey(x + dx, y + dy) } }
-        val darkOffset = centredOffset(allDarkKeys, if (relaxedWide) allDarkKeys else allSeparateKeys)
+        val darkOffset = if (around != null) nearestAround(around, allDarkKeys)
+            else centredOffset(allDarkKeys, if (wideSearch) allSeparateKeys else null)
         if (darkOffset != null) {
             val (dx, dy) = darkOffset
             // A flat charcoal panel is not a keypad. Its keys must stand out
@@ -341,7 +377,10 @@ object GameVisualLayout {
                     rim(intArrayOf(807, 813, 819), intArrayOf(470, 486, 502)),
                 ).count { it } >= 2
                 val visibleSubmit = strongGold && distinctGoldFill || paleGold && goldRim
-                return Detected(Kind.NUMERIC_DARK, digits = digits,
+                // The wide search never returns an offset of the measured window: one there would
+                // have been found by the window first (every separate key is also a dark key).
+                val fromWide = around != null || !(onNearGrid(dx) && onNearGrid(dy))
+                return Detected(Kind.NUMERIC_DARK, digits = digits, wideOffset = if (fromWide) dx to dy else null,
                     submit = if (visibleSubmit) rect(673 + dx, 486 + dy, 60, 17) else null,
                     // End before the keypad: a highlighted 1/4/7 key is not a changed question.
                     questionArea = rect(650 + dx, 291 + dy, 235, 63),

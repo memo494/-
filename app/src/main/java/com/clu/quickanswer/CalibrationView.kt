@@ -71,7 +71,10 @@ class CalibrationView(
             invalidate()
             return true
         }
-    })
+    }).apply {
+        // Double-tap-and-drag zoom would swallow quick taps on neighbouring keys.
+        isQuickScaleEnabled = false
+    }
 
     /** Zooms in a step around ([x], [y]) in view coordinates, or back to the whole picture after the last step. */
     fun zoomStep(x: Float = width / 2f, y: Float = height / 2f) {
@@ -217,7 +220,8 @@ class CalibrationView(
                         // A tap: the screen decides what is under it (a key, a field, a button).
                         val ix = f.imageX(b[0]); val iy = f.imageY(b[1])
                         if (onTap(ix, iy)) onBoxDrawn(true)
-                        else if (mode == Mode.KEY || mode == Mode.SUBMIT) {
+                        else if (mode == Mode.SUBMIT) {
+                            // The button's colour gave no region: a key-sized square on the tap.
                             onBoxDrawn(boxes.add(mode, boxes.boxAround(ix, iy, bitmap.width, bitmap.height)))
                         }
                     }

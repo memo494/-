@@ -62,7 +62,6 @@ class CalibrationActivity : AppCompatActivity() {
         requestedOrientation = if (landscape) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         setContentView(buildUi(capture.bitmap, landscape))
         selectMode(Mode.QUESTION)
-        readGlyphs() // ready by the time the keys are reached
     }
 
     override fun onDestroy() {
@@ -146,6 +145,8 @@ class CalibrationActivity : AppCompatActivity() {
     private fun selectMode(m: Mode) {
         mode = m
         view.mode = m
+        // A tap on a key needs the digits read on the capture: start reading as the keys are reached.
+        if (m == Mode.KEY) readGlyphs()
         for ((mm, b) in modeButtons) b.setBackgroundColor(if (mm == m) CalibrationView.colorOf(mm) else Color.TRANSPARENT)
         boxesChanged()
     }
@@ -156,7 +157,8 @@ class CalibrationActivity : AppCompatActivity() {
             Mode.QUESTION -> "ارسم مربعًا حول كتابة السؤال بس (كل سطوره)، بدون الأزرار والخانة"
             Mode.OPTION -> "اضغط على كل زر جواب (أو ارسم مربعًا حوله) — الخيارات: ${boxes.options.size}"
             Mode.FIELD -> "اضغط على خانة الرقم وهي فاضية (أو ارسم مربعًا حولها)"
-            Mode.KEY -> boxes.nextKey?.let { "اضغط على أي مفتاح وبيعرف رقمه لحاله (الناقص: ${(0..9).filter { d -> boxes.keyAt[d] == null }.joinToString("، ")})" }
+            Mode.KEY -> boxes.nextKey?.let { "اضغط على أي مفتاح وبيعرف رقمه لحاله، أو اسحب مربعًا حول مفتاح $it" +
+                " (الناقص: ${(0..9).filter { d -> boxes.keyAt[d] == null }.joinToString("، ")})" }
                 ?: "المفاتيح العشرة جاهزة ✓ — تأكد إنه كل رقم فوق مفتاحه، وبعدين زر التأكيد"
             Mode.SUBMIT -> "اضغط على زر التأكيد إذا اللعبة فيها واحد، ثم احفظ — «🔍 تكبير» إذا صغير"
         }
@@ -187,13 +189,12 @@ class CalibrationActivity : AppCompatActivity() {
         }
         val options = boxes.options.toList()
         val field = boxes.numericField
-        val keys = boxes.keys.toList()
-        val submit = boxes.submit
-        // Half a pad would type some digits and not others: all ten or none.
-        if (keys.isNotEmpty() && keys.size != 10) {
-            toast(KEYS_INCOMPLETE)
-            return
-        }
+        // Half a pad would type some digits and not others: all ten or none. Missing keys never block
+        // saving the question and the field (as before keys could be drawn); the keys are left out.
+        val keysComplete = boxes.keys.size == 10
+        if (boxes.keys.isNotEmpty() && !keysComplete) toast(KEYS_INCOMPLETE)
+        val keys = if (keysComplete) boxes.keys.toList() else emptyList()
+        val submit = if (keysComplete) boxes.submit else null
         // Say which box is wrong rather than "the boxes make no sense": the usual slip is a question
         // box drawn round the whole card, over the buttons (26 Oct 2026, on the phone).
         val others = options + listOfNotNull(field, submit) + keys
@@ -244,6 +245,9 @@ class CalibrationActivity : AppCompatActivity() {
 
     /** The words OCR read on the capture, read once in the background when the screen opens. */
     @Volatile private var glyphs: List<KeypadFinder.Glyph>? = null
+
+    /** The capture's pixels, copied once on the first tap that needs them (not once per tap). */
+    private var capturePixels: IntArray? = null
     private var reading = false
     private var detectWhenRead = false
 
@@ -262,9 +266,14 @@ class CalibrationActivity : AppCompatActivity() {
         thread(isDaemon = true, name = "calibration-ocr") {
             val read = try { LatinOcr().use { it.glyphs(copy) } } catch (_: Throwable) { emptyList() } finally { copy.recycle() }
             runOnUiThread {
-                glyphs = read
+                // A failed or timed-out read is not kept, so the next try reads again.
+                glyphs = read.takeIf { it.isNotEmpty() }
                 reading = false
-                if (!isDestroyed && detectWhenRead) { detectWhenRead = false; detectKeys() }
+                if (!isDestroyed && detectWhenRead) {
+                    detectWhenRead = false
+                    // Nothing read: say so once (no automatic re-read loop); the button tries again.
+                    if (glyphs == null) toast(DETECT_FAILED) else detectKeys()
+                }
             }
         }
     }
@@ -309,14 +318,21 @@ class CalibrationActivity : AppCompatActivity() {
         val bmp = bitmap ?: return false
         return when (mode) {
             Mode.KEY -> {
-                val hit = glyphs?.let { KeypadFinder.digitAt(it, bmp.width, bmp.height, x, y) } ?: return false
+                // Only a digit actually read under the tap: guessing "the next missing digit" would
+                // map a key to another digit and type wrong numbers. Unknown: say how to draw it.
+                val hit = glyphs?.let { KeypadFinder.digitAt(it, bmp.width, bmp.height, x, y) }
+                if (hit == null) {
+                    toast(if (glyphs == null) DETECTING else KEY_NOT_READ + (boxes.nextKey ?: ""))
+                    return true // handled: no box is placed
+                }
                 boxes.setKey(hit.first, hit.second)
                 if (boxes.nextKey == null && boxes.submit == null) selectMode(Mode.SUBMIT)
                 true
             }
             Mode.FIELD, Mode.OPTION, Mode.SUBMIT -> {
-                val pixels = try {
+                val pixels = capturePixels ?: try {
                     IntArray(bmp.width * bmp.height).also { bmp.getPixels(it, 0, bmp.width, 0, 0, bmp.width, bmp.height) }
+                        .also { capturePixels = it }
                 } catch (_: Throwable) { return false }
                 val rect = RegionSnap.around(pixels, bmp.width, bmp.height, x, y) ?: return false
                 boxes.add(mode, rect)
@@ -376,11 +392,12 @@ class CalibrationActivity : AppCompatActivity() {
         const val ALREADY_KNOWN = "هاي الشاشة إلها قالب من قبل"
         const val SAVED = "تم الحفظ ✓ — رح يستعمله من السؤال الجاي"
         const val SAVE_FAILED = "تعذّر الحفظ"
+        const val KEY_NOT_READ = "ما عرفت رقم هالمفتاح؛ ارسم مربعًا (اسحب) حول مفتاح الرقم "
         const val DETECTING = "عم بدوّر على الأرقام…"
         const val DETECTED = "لقيت المفاتيح العشرة ✓ — راجعها، وإذا في غلط اضغط تراجع"
         const val DETECTED_SOME = "لقيت جزء من المفاتيح ✓ — اضغط على الباقي: "
         const val DETECT_FAILED = "ما قدرت ألاقي لوحة أرقام كاملة؛ اضغط على المفاتيح بإيدك من 0 لـ 9"
         const val QUESTION_OVER_BUTTONS = "مربع السؤال لازم يكون حول كتابة السؤال بس، مش حول الأزرار أو الخانة — اضغط «السؤال» وارسمه من جديد"
-        const val KEYS_INCOMPLETE = "لازم ترسم مفاتيح الأرقام العشرة كلها (0 لـ 9)، أو تمسحها"
+        const val KEYS_INCOMPLETE = "المفاتيح ناقصة، فبنحفظ السؤال والخانة بدونها (ارجع كمّل المفاتيح العشرة وقت ما بدك)"
     }
 }

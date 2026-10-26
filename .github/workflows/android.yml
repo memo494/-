@@ -17,7 +17,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moves to a new release in October 2026, and the Android build was only
+    # ever run on this one.
+    runs-on: ubuntu-24.04
     env:
       # Anything not built from main is a beta (its own package, "Clu beta"), whatever the checkbox says.
       CI_BETA_BUILD: ${{ github.event_name == 'pull_request' || inputs.beta || github.ref != 'refs/heads/main' }}

@@ -182,4 +182,27 @@ class CalibratedKeypadTest {
         val plain = ManualTemplate.build(question, emptyList(), field, px, w, h, emptyList(), "t0", 1L)!!
         assertNull(CalibratedKeypad.find(listOf(plain), px, w, h))
     }
+
+    /** A thin, low-contrast "1" still makes the field not empty (finer grid, review 26 Oct 2026). */
+    @Test fun aThinLowContrastDigitIsSeen() {
+        val stamp = FieldStamp.of(screen().px, w, h, field)
+        val faint = screen().apply { fill(field.left + 300, field.top + 45, field.left + 304, field.top + 105, rgb(195, 195, 195)) }
+        assertEquals(FieldStamp.State.FILLED, FieldStamp.state(stamp, faint.px, w, h, field))
+    }
+
+    @Test fun aStampOfTheOldGridIsStillRead() {
+        val old = "eb".repeat(16 * 4) // the empty field's lightness (235) in every old cell
+        assertTrue(FieldStamp.isValid(old))
+        assertEquals(FieldStamp.State.EMPTY, FieldStamp.state(old, screen().px, w, h, field))
+        assertEquals(FieldStamp.State.FILLED, FieldStamp.state(old, screen(typed = true).px, w, h, field))
+    }
+
+    /** The confirm button may light up once a digit is typed: only the keys are compared then. */
+    @Test fun aLitConfirmButtonDoesNotStopTyping() {
+        val t = build(screen())!!
+        val found = CalibratedKeypad.locate(t, screen().px, w, h)!!
+        val lit = screen().apply { fill(submit.left, submit.top, submit.right, submit.bottom, rgb(250, 160, 30)) }
+        assertFalse(CalibratedKeypad.stillVisible(found, lit.px, w, h, pressed = null))
+        assertTrue(CalibratedKeypad.stillVisible(found, lit.px, w, h, pressed = keys[4], checkSubmit = false))
+    }
 }

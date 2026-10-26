@@ -1304,6 +1304,8 @@ class OverlayService : Service() {
         val fp = ScreenFingerprint.of(pixels, w, h, masks)
         val keys = CalibratedKeypad.find(TemplateStore.templates.find(fp, null, trustedOnly = true), pixels, w, h)
             ?: return solved.copy(touchFailure = "لوحة الأرقام غير معروفة بعد؛ علّمها من المعايرة اليدوية")
+        if (masks.any { it.left < keys.field.right && keys.field.left < it.right && it.top < keys.field.bottom &&
+                keys.field.top < it.bottom }) return solved.copy(touchFailure = "الفقاعة فوق خانة الرقم؛ أبعدها ثم اطلب الجواب")
         when (CalibratedKeypad.fieldState(keys, pixels, w, h)) {
             FieldStamp.State.FILLED -> return solved.copy(touchFailure = "الخانة فيها إدخال سابق؛ لم أمسحه ولم أضف عليه")
             FieldStamp.State.UNKNOWN -> return solved.copy(touchFailure = "لم أتحقق أن الخانة فارغة؛ لم أكتب أو أمسح شيئًا")
@@ -1385,7 +1387,8 @@ class OverlayService : Service() {
                 if (calibrated != null) {
                     val pixels = IntArray(w * h)
                     frame.getPixels(pixels, 0, w, 0, 0, w, h)
-                    if (!CalibratedKeypad.stillVisible(calibrated, pixels, w, h, boxes.getOrNull(nextTap - 1)))
+                    if (!CalibratedKeypad.stillVisible(calibrated, pixels, w, h, boxes.getOrNull(nextTap - 1),
+                            checkSubmit = nextTap == 0))
                         return blocked("لوحة الأرقام أو زر التأكيد لم يعد ظاهرًا؛ أوقفت الإدخال")
                     if (nextTap == 0 && CalibratedKeypad.fieldState(calibrated, pixels, w, h) != FieldStamp.State.EMPTY)
                         return blocked("الخانة لم تعد فارغة؛ لم أمسح أو أضف أرقامًا")
