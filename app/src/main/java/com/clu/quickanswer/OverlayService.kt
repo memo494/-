@@ -1200,11 +1200,23 @@ class OverlayService : Service() {
                 val frame = lastFrame
                 val current = frame?.let { fingerprint(it, field, solved.ignoredRects) }
                 if (frame != null && current != null && NumericEntryCheck.fieldChanged(initial, current)) {
-                    val snapshot = try { Bitmap.createBitmap(frame, field.left, field.top, field.width, field.height)
-                        .takeUnless { it === frame } }
-                        catch (_: Throwable) { null }
+                    if (field.left < 0 || field.top < 0 || field.right > frame.width ||
+                        field.bottom > frame.height || field.width <= 0 || field.height <= 0) {
+                        complete(false)
+                        return@launch
+                    }
+                    // Rounded gold fields need neighboring parchment to distinguish their corners
+                    // from clipped digits. Keep two pixels of context without widening the OCR field.
+                    val context = PxRect(maxOf(0, field.left - 2), maxOf(0, field.top - 2),
+                        minOf(frame.width, field.right + 2), minOf(frame.height, field.bottom + 2))
+                    val localField = PxRect(field.left - context.left, field.top - context.top,
+                        field.right - context.left, field.bottom - context.top)
+                    val snapshot = try {
+                        val cropped = Bitmap.createBitmap(frame, context.left, context.top, context.width, context.height)
+                        // A whole-frame crop can alias lastFrame, which the next capture recycles.
+                        if (cropped === frame) frame.copy(Bitmap.Config.ARGB_8888, false) else cropped
+                    } catch (_: Throwable) { null }
                     if (snapshot != null) {
-                        val localField = PxRect(0, 0, snapshot.width, snapshot.height)
                         val matches = withContext(Dispatchers.IO) {
                             try {
                                 val ink = if (solved.numericLayout?.kind == GameVisualLayout.Kind.NUMERIC_DARK)
@@ -1212,7 +1224,7 @@ class OverlayService : Service() {
                                 val read = synchronized(ocrLock) { ocr?.readField(snapshot, localField, ink) }
                                 read != null && NumericEntryCheck.matches(expected, read.text, read.confidence, changed = true)
                             } catch (_: Throwable) { false }
-                            finally { if (snapshot !== frame) snapshot.recycle() }
+                            finally { snapshot.recycle() }
                         }
                         if (matches) { complete(!destroyed && epoch == touchEpoch); return@launch }
                     }
