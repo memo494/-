@@ -112,10 +112,12 @@ object NumericFieldInk {
             val width = right - left + 1
             // Only shapes no digit can have: anything digit-sized stays, even at an edge, so a
             // digit clipped by the field's edge still stops the typing. A tall stroke is a side of
-            // the rim only where it meets the left or right edge: a big typed digit in the middle
-            // must never be dropped (the field would then look empty and be typed into).
+            // the rim only where it meets the left or right edge and is as thin as a rim line: a big
+            // typed digit in the middle, or one clipped by the field's edge, must never be dropped
+            // (the field would then look empty and be typed into); it stays and stops the typing.
             val side = left == 0 || right == w - 1
-            val frame = height < minHeight || width >= w * FRAME_WIDTH || height >= h * FRAME_HEIGHT && side
+            val rimThin = width <= maxOf(MIN_RIM_THICKNESS, (h * RIM_THICKNESS).toInt())
+            val frame = height < minHeight || width >= w * FRAME_WIDTH || height >= h * FRAME_HEIGHT && side && rimThin
             if (frame) for (i in 0 until tail) mask[queue[i]] = false
         }
     }
@@ -125,4 +127,13 @@ object NumericFieldInk {
 
     /** A stroke this tall is a side of the rim: digits leave a margin above and below. */
     private const val FRAME_HEIGHT = 0.9f
+
+    /**
+     * The widest a side of the rim can be, as a share of the field's height (1-2 px on the owner's
+     * phone, 3 px in a lossless capture; a typed digit's stroke is about a tenth of its height).
+     */
+    private const val RIM_THICKNESS = 0.05f
+
+    /** Floor of the rim width for small fields (px). */
+    private const val MIN_RIM_THICKNESS = 3
 }
