@@ -90,6 +90,9 @@ class OverlayService : Service() {
         private const val CLEAN_MIN_MS = 250L
         private const val CLEAN_MAX_MS = 600L
 
+        /** Before touching: at most this many [CLEAN_POLL_MS] waits for a frame without the panel. */
+        private const val CLEAN_TOUCH_POLLS = 15
+
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
 
@@ -1092,6 +1095,13 @@ class OverlayService : Service() {
                     capturedWindow == VolumeKeyService.contextVersion() &&
                     capturedW == screenW && capturedH == screenH && solved.touches != null) {
                     performAnswerTouches(solved, capturedW, capturedH, trigger)
+                } else if (touchRequested && solved.touches != null) {
+                    DiagLog.add("اللمس أُلغي قبل البدء: " + when {
+                        !permitsTouch(trigger) -> "اللمس انطفى بالإعدادات"
+                        capturedEpoch != touchEpoch -> "محاولة أحدث أو إلغاء"
+                        capturedWindow != VolumeKeyService.contextVersion() -> "تغيّر التطبيق الظاهر"
+                        else -> "تغيّر مقاس الشاشة"
+                    })
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1396,10 +1406,15 @@ class OverlayService : Service() {
                 if (numeric != null || solved.choiceButtons.isNotEmpty()) {
                     val pixels = IntArray(w * h)
                     frame.getPixels(pixels, 0, w, 0, 0, w, h)
-                    if (numeric != null &&
-                        (!GameVisualLayout.stillVisible(pixels, w, h, numeric, boxes.getOrNull(nextTap - 1)) ||
-                            numeric.submit != null && !GameVisualLayout.hasSubmitControl(pixels, w, h, numeric))
-                    ) return blocked("لوحة الأرقام أو زر التأكيد لم يعد ظاهرًا؛ أوقفت الإدخال")
+                    if (numeric != null) {
+                        val padThere = GameVisualLayout.stillVisible(pixels, w, h, numeric, boxes.getOrNull(nextTap - 1))
+                        val submitThere = numeric.submit == null || GameVisualLayout.hasSubmitControl(pixels, w, h, numeric)
+                        if (!padThere || !submitThere) {
+                            DiagLog.add("لوحة الأرقام قبل الضغطة ${nextTap + 1}: المفاتيح=${if (padThere) "ظاهرة" else "لا"}" +
+                                " التأكيد=${if (submitThere) "ظاهر" else "لا"}")
+                            return blocked("لوحة الأرقام أو زر التأكيد لم يعد ظاهرًا؛ أوقفت الإدخال")
+                        }
+                    }
                     if (numeric != null && nextTap == 0) {
                         val field = solved.fieldRect ?: return false
                         if (obstruction != null && field.left < obstruction.right && field.right > obstruction.left &&
@@ -1441,7 +1456,22 @@ class OverlayService : Service() {
                         w != screenW || h != screenH || preview != null) return@withTimeout
                     hidePanel()
                     hideHighlight()
+                    val removedAt = System.nanoTime()
                     delay(100L)
+                    // The checks below compare the question with the capture; a frame that still shows
+                    // our answer panel over it fails them ("the question changed", "buttons not
+                    // ready"). On the owner's phone the first frame without the panel came 236-272 ms
+                    // after it was hidden (log, 26 Oct 2026), later than the checks' three tries.
+                    var frameWaits = 0
+                    while (frameWaits < CLEAN_TOUCH_POLLS) {
+                        try { grabFrame() } catch (_: Throwable) { }
+                        val at = lastFrameAtNs
+                        val trusted = at > 0 && abs(at - System.nanoTime()) < 60_000_000_000L
+                        if (!trusted || at > removedAt) break
+                        delay(CLEAN_POLL_MS)
+                        frameWaits++
+                    }
+                    if (frameWaits > 0) DiagLog.add("اللمس: انتظار إطار بدون اللوحة ${100 + frameWaits * CLEAN_POLL_MS}ms")
                     val ready = suspendCancellableCoroutine<Boolean> { continuation ->
                         TouchPreflight { delay, action -> check(handler.postDelayed({ action() }, delay)) }
                             .awaitReady(
