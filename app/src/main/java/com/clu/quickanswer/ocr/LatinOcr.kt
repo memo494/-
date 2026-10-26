@@ -83,6 +83,27 @@ class LatinOcr : AutoCloseable {
         }
     }
 
+    /**
+     * Every word ML Kit reads on the whole [bitmap], with its box: what [KeypadFinder] looks for
+     * key digits in. For the calibration screen, not the answer flow: it reads the full capture and
+     * may take a second. Empty on any failure. Worker thread only.
+     */
+    fun glyphs(bitmap: Bitmap): List<KeypadFinder.Glyph> = try {
+        val text = Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0)), GLYPHS_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        text.textBlocks.flatMap { it.lines }.flatMap { it.elements }.flatMap { e ->
+            // A row of keys can be read as one word ("456"); its symbols carry each digit's own box,
+            // which an even split of the word's box does not (keys have gaps; measured on the phone,
+            // 26 Oct 2026, the 6 landed beside its key).
+            val symbols = if (e.text.trim().length > 1) e.symbols.mapNotNull { sym ->
+                sym.boundingBox?.let { b -> KeypadFinder.Glyph(sym.text, PxRect(b.left, b.top, b.right, b.bottom)) }
+            } else emptyList()
+            if (symbols.isNotEmpty() && symbols.size == e.symbols.size) symbols
+            else listOfNotNull(e.boundingBox?.let { b -> KeypadFinder.Glyph(e.text, PxRect(b.left, b.top, b.right, b.bottom)) })
+        }
+    } catch (_: Throwable) {
+        emptyList()
+    }
+
     /** Banner, buttons and number field of [layout] plus [CROP_MARGIN] px, inside a [width] x [height] bitmap; null if empty. */
     private fun readArea(layout: ScreenLayout, width: Int, height: Int): PxRect? {
         var left = layout.banner.left
@@ -107,6 +128,7 @@ class LatinOcr : AutoCloseable {
     private companion object {
         const val CROP_MARGIN = 8
         const val READ_TIMEOUT_MS = 650L
+        const val GLYPHS_TIMEOUT_MS = 4_000L
         const val WARM_UP_TIMEOUT_MS = 5_000L
         const val WARM_UP_WIDTH = 320
         const val WARM_UP_HEIGHT = 64
