@@ -26,10 +26,10 @@ class CalibrationView(
     private val boxes: CalibrationBoxes,
     /**
      * A tap (not a drag) at picture pixel (x, y): the screen decides what it means in the current
-     * mode (a key read under the tap, a field or button grown from it). Returns whether it placed a
-     * box; false lets the view do nothing.
+     * mode (a key read under the tap, a field or button grown from it, possibly later, off the main
+     * thread) and reports any box it places through its own [onBoxDrawn] call.
      */
-    private val onTap: (x: Int, y: Int) -> Boolean = { _, _ -> false },
+    private val onTap: (x: Int, y: Int) -> Unit = { _, _ -> },
     private val onBoxDrawn: (added: Boolean) -> Unit,
 ) : View(context) {
 
@@ -219,11 +219,7 @@ class CalibrationView(
                     } else {
                         // A tap: the screen decides what is under it (a key, a field, a button).
                         val ix = f.imageX(b[0]); val iy = f.imageY(b[1])
-                        if (onTap(ix, iy)) onBoxDrawn(true)
-                        else if (mode == Mode.SUBMIT) {
-                            // The button's colour gave no region: a key-sized square on the tap.
-                            onBoxDrawn(boxes.add(mode, boxes.boxAround(ix, iy, bitmap.width, bitmap.height)))
-                        }
+                        onTap(ix, iy)
                     }
                 }
                 twoFingers = false

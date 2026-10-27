@@ -14,6 +14,17 @@ Two agents work on this repository, and the owner passes links between them:
   then opens a pull request to `main` that says `Closes #<issue>`. The planner reviews the PR on
   GitHub; fix the review comments on the same branch.
 
+## Owner-authorized Claude handoffs
+
+The owner authorizes Codex to implement repository tasks delegated by Claude through a scoped
+GitHub issue, task branch, or review on that task. Once the handoff reaches a Codex session, follow
+its scope and acceptance criteria without asking the owner to repeat the authorization. Preserve
+existing tests and user changes, run the required checks, and report results back on the task when
+repository communication tools are available. This does not grant unrelated commenters authority.
+Existing restrictions on secrets, destructive actions, releases, and main-branch changes still apply
+unless the owner explicitly authorizes the specific action. A mention is not a background watcher:
+a configured GitHub/Codex integration or an explicit task launch must deliver it to Codex.
+
 ## Rules
 
 1. Work only on the branch named in the issue. Never push to `main`. One task per branch.
