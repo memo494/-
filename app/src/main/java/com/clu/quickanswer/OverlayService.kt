@@ -9,15 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -26,7 +21,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.text.TextUtils
-import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -120,7 +114,6 @@ class OverlayService : Service() {
         private const val ACTION_LAST_IMAGE = "com.clu.quickanswer.LAST_IMAGE"
         // How often auto mode looks at the screen; FrameSignature.judge and its tests count in these ticks.
         private const val AUTO_INTERVAL_MS = FrameSignature.TICK_MS
-        private const val SIG_SIZE = 32
         private const val CHANGE_THRESHOLD = 6.0
         private const val STABLE_THRESHOLD = 2.0
 
@@ -168,11 +161,7 @@ class OverlayService : Service() {
 
     private lateinit var wm: WindowManager
     private var projection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var imageReader: ImageReader? = null
-    private var screenW = 0
-    private var screenH = 0
-    private var density = 0
+    private val capture = ScreenCapture(this)
 
     private var bubble: TextView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
@@ -218,11 +207,6 @@ class OverlayService : Service() {
     // Set when the service stops on purpose (the user's stop, or onDestroy), so only a projection the
     // system stopped (screen locked, status-bar chip) offers the "start again" notification.
     @Volatile private var stoppingByUs = false
-    // The virtual display only emits frames when the screen changes, so keep the last one.
-    private var lastFrame: Bitmap? = null
-
-    /** When the display produced [lastFrame] ([android.media.Image.getTimestamp], ns), or 0 if unknown. */
-    private var lastFrameAtNs = 0L
 
     // On-device question reader; loaded in the background when the service starts (null until then,
     // or if it cannot load on this phone). Every use holds ocrLock, so it is never closed mid-read.
@@ -240,8 +224,6 @@ class OverlayService : Service() {
     private var highlight: View? = null
     // The button it marks (screen pixels) and the screen size that was measured on; null without a box.
     private var highlightBox: HiddenAnswer.Box? = null
-    // Where our own windows were painted black in a capture, by capture: the reader must know what is hidden.
-    private val captureMasks = java.util.WeakHashMap<Bitmap, List<Rect>>()
 
     // The last answer that came from memory, for the correction tap (see CORRECTION_WINDOW_MS).
     private var lastHitKey: String? = null
@@ -308,7 +290,7 @@ class OverlayService : Service() {
             }
         }, handler)
 
-        setupCapture(proj)
+        capture.setupCapture(proj)
         createBubble()
         volumeTrigger = { answerNow(AnswerTrigger.VOLUME_DOWN) }
         return START_NOT_STICKY
@@ -415,43 +397,20 @@ class OverlayService : Service() {
         // old screen, so just close it.
         // The box marks a button of the old layout (and must not push the re-placed panel around).
         hideHighlight()
-        if (resizeCapture()) clampBubble()
+        if (capture.resizeCapture()) {
+            // The auto mode's previous signature describes the old orientation.
+            prevTickSig = null
+            clampBubble()
+        }
         refreshPanel()
         hidePreview()
-    }
-
-    /**
-     * The virtual display keeps the size it was created with, so after rotating to landscape the
-     * screen would be squeezed into a portrait frame. Match it to the current orientation.
-     * Returns true when the screen size changed.
-     */
-    private fun resizeCapture(): Boolean {
-        val vd = virtualDisplay ?: return false
-        val dm = DisplayMetrics()
-        @Suppress("DEPRECATION")
-        wm.defaultDisplay.getRealMetrics(dm)
-        if (dm.widthPixels == screenW && dm.heightPixels == screenH) return false
-        screenW = dm.widthPixels
-        screenH = dm.heightPixels
-        density = dm.densityDpi
-        val old = imageReader
-        val reader = ImageReader.newInstance(screenW, screenH, PixelFormat.RGBA_8888, 2)
-        imageReader = reader
-        vd.resize(screenW, screenH, density)
-        vd.surface = reader.surface
-        old?.close()
-        lastFrame?.recycle()
-        lastFrame = null
-        // The auto mode's previous signature describes the old orientation.
-        prevTickSig = null
-        return true
     }
 
     /** After a rotation the screen has new bounds: keep the bubble fully inside them. */
     private fun clampBubble() {
         val v = bubble ?: return
         val params = bubbleParams ?: return
-        val pos = PanelPlacement.clampInto(params.x, params.y, params.width, params.height, screenW, screenH)
+        val pos = PanelPlacement.clampInto(params.x, params.y, params.width, params.height, capture.screenW, capture.screenH)
         if (pos.x == params.x && pos.y == params.y) return
         params.x = pos.x
         params.y = pos.y
@@ -459,22 +418,6 @@ class OverlayService : Service() {
             wm.updateViewLayout(v, params)
         } catch (_: Exception) {
         }
-    }
-
-    private fun setupCapture(proj: MediaProjection) {
-        val dm = DisplayMetrics()
-        @Suppress("DEPRECATION")
-        wm.defaultDisplay.getRealMetrics(dm)
-        screenW = dm.widthPixels
-        screenH = dm.heightPixels
-        density = dm.densityDpi
-        val reader = ImageReader.newInstance(screenW, screenH, PixelFormat.RGBA_8888, 2)
-        imageReader = reader
-        virtualDisplay = proj.createVirtualDisplay(
-            "CluCapture", screenW, screenH, density,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            reader.surface, null, null
-        )
     }
 
     // ---------------------------------------------------------------- overlays
@@ -523,7 +466,7 @@ class OverlayService : Service() {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = dp(8)
-            y = screenH / 3
+            y = capture.screenH / 3
         }
         // x/y are real screen coordinates, so the clamp after a rotation (getRealMetrics) is exact.
         useScreenCoordinates(params, true)
@@ -617,7 +560,7 @@ class OverlayService : Service() {
     }
 
     /** Widest the panel may be in the current [panelMode] (see [PanelPlacement.maxWidth]). */
-    private fun panelMaxWidth(): Int = PanelPlacement.maxWidth(panelMode, screenW, screenH)
+    private fun panelMaxWidth(): Int = PanelPlacement.maxWidth(panelMode, capture.screenW, capture.screenH)
 
     private fun createPanelView(): TextView = TextView(this).apply {
         setTextColor(Color.WHITE)
@@ -644,7 +587,7 @@ class OverlayService : Service() {
         hideHighlight() // the box of the answer before marks nothing now
         panelMode = Prefs.panelMode(this)
         val p = panel ?: createPanelView().also { panel = it }
-        p.maxLines = PanelPlacement.maxLines(panelMode, text, landscape = screenW > screenH)
+        p.maxLines = PanelPlacement.maxLines(panelMode, text, landscape = capture.screenW > capture.screenH)
         p.text = text
         val list = ReplyShape.isList(text)
         p.gravity = if (list) Gravity.START or Gravity.CENTER_VERTICAL else Gravity.CENTER
@@ -687,8 +630,8 @@ class OverlayService : Service() {
     private fun measurePanel(p: TextView) {
         p.maxWidth = panelMaxWidth()
         p.measure(
-            View.MeasureSpec.makeMeasureSpec(screenW, View.MeasureSpec.AT_MOST),
-            View.MeasureSpec.makeMeasureSpec(screenH, View.MeasureSpec.AT_MOST)
+            View.MeasureSpec.makeMeasureSpec(capture.screenW, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(capture.screenH, View.MeasureSpec.AT_MOST)
         )
         panelW = p.measuredWidth
         panelH = p.measuredHeight
@@ -708,10 +651,10 @@ class OverlayService : Service() {
     private fun placePanel(params: WindowManager.LayoutParams) {
         val pos = when (panelMode) {
             PanelPlacement.Mode.TOP ->
-                PanelPlacement.top(panelW, panelH, screenW, screenH, dp(PANEL_TOP_MARGIN_DP))
+                PanelPlacement.top(panelW, panelH, capture.screenW, capture.screenH, dp(PANEL_TOP_MARGIN_DP))
             PanelPlacement.Mode.NEXT_TO_BUBBLE -> {
                 val bp = bubbleParams ?: return
-                PanelPlacement.place(bp.x, bp.y, bp.width, panelW, panelH, screenW, screenH, dp(8))
+                PanelPlacement.place(bp.x, bp.y, bp.width, panelW, panelH, capture.screenW, capture.screenH, dp(8))
             }
         }
         params.x = pos.x
@@ -778,8 +721,8 @@ class OverlayService : Service() {
             return
         }
         hidePreview()
-        val maxW = (screenW * 0.8f).toInt()
-        val maxH = (screenH * 0.6f).toInt()
+        val maxW = (capture.screenW * 0.8f).toInt()
+        val maxH = (capture.screenH * 0.6f).toInt()
         val scale = min(maxW.toFloat() / bmp.width, maxH.toFloat() / bmp.height)
         val w = (bmp.width * scale).toInt().coerceAtLeast(1)
         val h = (bmp.height * scale).toInt().coerceAtLeast(1)
@@ -851,42 +794,6 @@ class OverlayService : Service() {
 
     // ---------------------------------------------------------------- capture
 
-    /**
-     * Takes the newest frame the virtual display has produced (if any) as [lastFrame]; true when a
-     * new one arrived. The display only produces frames when the screen changes, so on a static
-     * screen this costs next to nothing. Main thread.
-     */
-    private fun grabFrame(): Boolean {
-        val fresh = readFrame() ?: return false
-        lastFrame?.recycle()
-        lastFrame = fresh
-        lastFrameAtNs = readFrameAtNs
-        return true
-    }
-
-    /** Timestamp of the image [readFrame] read last (set by it). */
-    private var readFrameAtNs = 0L
-
-    /**
-     * Must be called on the main thread (reads view geometry). Returns the newest frame as a copy
-     * with our overlays painted over.
-     */
-    private fun captureMasked(): Bitmap? {
-        grabFrame()
-        return maskedCopy()
-    }
-
-    /** A full-size copy of [lastFrame] with our overlays painted black (the caller owns and recycles it). */
-    private fun maskedCopy(): Bitmap? {
-        val bmp = lastFrame?.copy(Bitmap.Config.ARGB_8888, true) ?: return null
-        val canvas = Canvas(bmp)
-        val paint = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL }
-        val masks = overlayRects()
-        for (r in masks) canvas.drawRect(r, paint)
-        captureMasks[bmp] = masks
-        return bmp
-    }
-
     /** Screen rectangles of our own windows that are painted black in captures (bubble, panel, image preview). */
     private fun overlayRects(): List<Rect> = listOfNotNull(viewRect(bubble), viewRect(panel), viewRect(preview))
 
@@ -896,47 +803,6 @@ class OverlayService : Service() {
      * the panel before anything is sent instead.
      */
     private fun ignoreRects(): List<Rect> = overlayRects() + listOfNotNull(viewRect(highlight))
-
-    private fun readFrame(): Bitmap? {
-        val reader = imageReader ?: return null
-        val image = reader.acquireLatestImage() ?: return null
-        val bmp: Bitmap
-        try {
-            val plane = image.planes[0]
-            val pixelStride = plane.pixelStride
-            val rowPadding = plane.rowStride - pixelStride * image.width
-            val wide = Bitmap.createBitmap(
-                image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888
-            )
-            wide.copyPixelsFromBuffer(plane.buffer)
-            readFrameAtNs = image.timestamp
-            bmp = if (wide.width != image.width) {
-                Bitmap.createBitmap(wide, 0, 0, image.width, image.height).also { wide.recycle() }
-            } else wide
-        } finally {
-            image.close()
-        }
-        return bmp
-    }
-
-    /**
-     * Luminance grid of the frame. Cells under one of [overlays] (our own windows) are marked
-     * ignored: the panel appearing, moving or auto-hiding must not look like the game changing.
-     */
-    private fun signature(bmp: Bitmap, overlays: List<Rect>): IntArray {
-        val w = bmp.width
-        val h = bmp.height
-        val small = Bitmap.createScaledBitmap(bmp, SIG_SIZE, SIG_SIZE, true)
-        val px = IntArray(SIG_SIZE * SIG_SIZE)
-        small.getPixels(px, 0, SIG_SIZE, 0, 0, SIG_SIZE, SIG_SIZE)
-        if (small !== bmp) small.recycle()
-        val sig = IntArray(px.size) {
-            val c = px[it]
-            (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000
-        }
-        for (r in overlays) FrameSignature.ignoreRect(sig, SIG_SIZE, w, h, r.left, r.top, r.right, r.bottom)
-        return sig
-    }
 
     // ---------------------------------------------------------------- actions
 
@@ -959,7 +825,7 @@ class OverlayService : Service() {
             awaitFrameWithoutOverlays(trigger, SystemClock.uptimeMillis(), System.nanoTime())
             return
         }
-        val bmp = captureMasked()
+        val bmp = capture.captureMasked(::overlayRects)
         if (bmp == null) {
             showPanel("لم يتم الحصول على إجابة")
             return
@@ -968,7 +834,7 @@ class OverlayService : Service() {
         // "new", hide this answer and ask again.
         touchAttempts.reset()
         autoRetry.reset()
-        sendFrame(bmp, if (autoMode) signature(bmp, ignoreRects()) else null, fromAuto = false, trigger = trigger)
+        sendFrame(bmp, if (autoMode) capture.signature(bmp, ignoreRects()) else null, fromAuto = false, trigger = trigger)
     }
 
     /**
@@ -983,9 +849,9 @@ class OverlayService : Service() {
     private fun awaitFrameWithoutOverlays(trigger: AnswerTrigger, startMs: Long, removedAtNs: Long) {
         handler.postDelayed({
             if (destroyed) { setBusy(false); return@postDelayed }
-            try { grabFrame() } catch (_: Throwable) { }
+            try { capture.grabFrame() } catch (_: Throwable) { }
             val waited = SystemClock.uptimeMillis() - startMs
-            val frameAt = lastFrameAtNs
+            val frameAt = capture.lastFrameAtNs
             // The image clock is the monotonic one (as System.nanoTime) on Android; a time that is
             // not within a minute of now is from another clock, and only the minimum wait is used.
             val trusted = frameAt > 0 && kotlin.math.abs(frameAt - System.nanoTime()) < 60_000_000_000L
@@ -1033,7 +899,7 @@ class OverlayService : Service() {
         val started = SystemClock.elapsedRealtime()
         // One budget for the whole answer: reading, the text request and the image request share it.
         val deadline = newAnswerDeadline()
-        val maskRects = captureMasks.remove(bmp).orEmpty()
+        val maskRects = capture.captureMasks.remove(bmp).orEmpty()
         val masks = maskRects.map { PxRect(it.left, it.top, it.right, it.bottom) }
         val capturedEpoch = touchEpoch
         val capturedWindow = VolumeKeyService.contextVersion()
@@ -1042,11 +908,11 @@ class OverlayService : Service() {
         val retryAttempt = sig?.let { autoRetry.begin(it) }
         fun requestIsCurrent() = !destroyed && capturedEpoch == touchEpoch &&
             capturedWindow == VolumeKeyService.contextVersion() &&
-            capturedW == screenW && capturedH == screenH
+            capturedW == capture.screenW && capturedH == capture.screenH
         // The question screen as the watch will compare it (see startResultWatch); [bmp] is gone after solve.
         val watchBase = if (Prefs.learnFromResults(this)) {
             try {
-                    signature(bmp, maskRects)
+                    capture.signature(bmp, maskRects)
                 } catch (t: Throwable) {
                     null
                 }
@@ -1139,21 +1005,21 @@ class OverlayService : Service() {
                 if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
                 // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
                 val rect = solved.rect
-                if (rect != null && capturedW == screenW && capturedH == screenH && Prefs.highlightAnswer(this@OverlayService)) {
+                if (rect != null && capturedW == capture.screenW && capturedH == capture.screenH && Prefs.highlightAnswer(this@OverlayService)) {
                     showHighlight(rect)
                 }
                 // After the answer is on screen, never before it (decision 10).
                 solved.learn?.let { startLearning(it) }
                 // The game's result screen may show another option as the right one; skip it if the screen rotated.
                 val watch = solved.watch
-                if (watch != null && watchBase != null && capturedW == screenW && capturedH == screenH &&
+                if (watch != null && watchBase != null && capturedW == capture.screenW && capturedH == capture.screenH &&
                     Prefs.learnFromResults(this@OverlayService)
                 ) {
                     startResultWatch(watch, watchBase)
                 }
                 if (touchRequested && permitsTouch(trigger) && capturedEpoch == touchEpoch &&
                     capturedWindow == VolumeKeyService.contextVersion() &&
-                    capturedW == screenW && capturedH == screenH && solved.touches != null) {
+                    capturedW == capture.screenW && capturedH == capture.screenH && solved.touches != null) {
                     performAnswerTouches(solved, capturedW, capturedH, trigger, retryAttempt)
                 } else if (touchRequested && solved.touches != null) {
                     DiagLog.add("اللمس أُلغي قبل البدء: " + when {
@@ -1340,8 +1206,8 @@ class OverlayService : Service() {
             repeat(NumericEntryCheck.READBACK_ATTEMPTS) { attempt ->
                 if (destroyed || epoch != touchEpoch) { complete(false); return@launch }
                 if (attempt > 0) delay(NumericEntryCheck.READBACK_INTERVAL_MS)
-                grabFrame()
-                val frame = lastFrame
+                capture.grabFrame()
+                val frame = capture.lastFrame
                 val current = frame?.let { fingerprint(it, field, solved.ignoredRects) }
                 if (frame != null && current != null && NumericEntryCheck.fieldChanged(initial, current)) {
                     if (field.left < 0 || field.top < 0 || field.right > frame.width ||
@@ -1461,11 +1327,11 @@ class OverlayService : Service() {
         fun canContinue(): Boolean {
             if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
                 window != VolumeKeyService.contextVersion() ||
-                w != screenW || h != screenH || preview != null || projection == null
+                w != capture.screenW || h != capture.screenH || preview != null || projection == null
             ) return blocked("تغيّر التطبيق أو وضع الشاشة؛ أُلغي اللمس")
             return try {
-                grabFrame()
-                val frame = lastFrame ?: return blocked("لم تصل لقطة شاشة جديدة؛ لم أضغط")
+                capture.grabFrame()
+                val frame = capture.lastFrame ?: return blocked("لم تصل لقطة شاشة جديدة؛ لم أضغط")
                 val ignored = solved.ignoredRects + overlayRects().map { PxRect(it.left, it.top, it.right, it.bottom) }
                 if (frame.width != w || frame.height != h) return blocked("تغيّر مقاس اللقطة؛ لم أضغط")
                 val nowStamp = fingerprint(frame, region, ignored)
@@ -1551,7 +1417,7 @@ class OverlayService : Service() {
                 withTimeout(15_000L) {
                     delay(80L)
                     if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
-                        w != screenW || h != screenH || preview != null) {
+                        w != capture.screenW || h != capture.screenH || preview != null) {
                         DiagLog.add("اللمس لم يبدأ: تغيّرت الحالة (محاولة أحدث، الإعدادات، الدوران أو الصورة المرسلة)")
                         return@withTimeout
                     }
@@ -1565,8 +1431,8 @@ class OverlayService : Service() {
                     // after it was hidden (log, 26 Oct 2026), later than the checks' three tries.
                     var frameWaits = 0
                     while (frameWaits < CLEAN_TOUCH_POLLS) {
-                        try { grabFrame() } catch (_: Throwable) { }
-                        val at = lastFrameAtNs
+                        try { capture.grabFrame() } catch (_: Throwable) { }
+                        val at = capture.lastFrameAtNs
                         val trusted = at > 0 && abs(at - System.nanoTime()) < 60_000_000_000L
                         if (!trusted || at > removedAt) break
                         delay(CLEAN_POLL_MS)
@@ -1631,7 +1497,7 @@ class OverlayService : Service() {
             } finally {
                 try {
                     if (!destroyed && epoch == touchEpoch && window == VolumeKeyService.contextVersion() &&
-                        permitsTouch(trigger) && w == screenW && h == screenH) {
+                        permitsTouch(trigger) && w == capture.screenW && h == capture.screenH) {
                         retryAttempt?.finish(retryable = !mayHaveDispatched, SystemClock.uptimeMillis())
                     } else retryAttempt?.cancel()
                 } finally {
@@ -1883,7 +1749,6 @@ class OverlayService : Service() {
                 GameVisualLayout.Kind.CHOICE_GRID else null
         }
     } catch (_: Throwable) { null }
-
 
     /**
      * A copy of [bmp] to learn its layout from, or null. Only for a screen the templates were tried
@@ -2158,7 +2023,7 @@ class OverlayService : Service() {
         try {
             wm.addView(v, params)
             highlight = v
-            highlightBox = HiddenAnswer.Box(r, screenW, screenH)
+            highlightBox = HiddenAnswer.Box(r, capture.screenW, capture.screenH)
             // Once it is laid out: check where the system really put it, and keep the panel off it.
             v.post { settleHighlight(v, params, box) }
         } catch (_: Exception) {
@@ -2206,7 +2071,7 @@ class OverlayService : Service() {
      */
     private fun clearOfBox(now: PxRect, box: PxRect): PanelPlacement.Pos? {
         if (!PanelPlacement.overlaps(now, box)) return null
-        val to = PanelPlacement.moveOffBox(now, box, screenW, screenH, dp(8))
+        val to = PanelPlacement.moveOffBox(now, box, capture.screenW, capture.screenH, dp(8))
         if (to == null) hideHighlight()
         return to
     }
@@ -2223,7 +2088,7 @@ class OverlayService : Service() {
 
     /** Puts the green box of an answer that auto mode hid back, if the screen is still the one it was for. */
     private fun restoreHighlight(box: HiddenAnswer.Box?) {
-        if (box == null || box.screenW != screenW || box.screenH != screenH) return
+        if (box == null || box.screenW != capture.screenW || box.screenH != capture.screenH) return
         if (Prefs.highlightAnswer(this)) showHighlight(box.rect)
     }
 
@@ -2241,7 +2106,7 @@ class OverlayService : Service() {
     private fun startResultWatch(w: ResultWatch, base: IntArray) {
         stopResultWatch()
         for (r in w.question.optionRects) {
-            FrameSignature.ignoreRect(base, SIG_SIZE, screenW, screenH, r.left, r.top, r.right, r.bottom)
+            FrameSignature.ignoreRect(base, ScreenCapture.SIG_SIZE, capture.screenW, capture.screenH, r.left, r.top, r.right, r.bottom)
         }
         watchJob = scope.launch {
             try {
@@ -2283,12 +2148,12 @@ class OverlayService : Service() {
         val until = SystemClock.uptimeMillis() + WATCH_MAX_MS
         while (SystemClock.uptimeMillis() < until) {
             delay(WATCH_INTERVAL_MS)
-            if (!autoMode) grabFrame()
-            val frame = lastFrame ?: continue
-            if (frame.width != screenW || frame.height != screenH) return
+            if (!autoMode) capture.grabFrame()
+            val frame = capture.lastFrame ?: continue
+            if (frame.width != capture.screenW || frame.height != capture.screenH) return
             val overlays = overlayRects()
             val sig = try {
-                signature(frame, overlays + listOfNotNull(viewRect(highlight)) + optionRects)
+                capture.signature(frame, overlays + listOfNotNull(viewRect(highlight)) + optionRects)
             } catch (t: Throwable) {
                 return
             }
@@ -2391,16 +2256,16 @@ class OverlayService : Service() {
         if (busy || touchPending || preview != null) return
         // Is the panel part of the frame being judged?
         val panelShown = panelAdded
-        val gotNewFrame = grabFrame()
+        val gotNewFrame = capture.grabFrame()
         val previous = prevTickSig
         // The virtual display only emits a frame when the screen changes, so "no new frame" means
         // the screen is exactly as at the last tick: count it as one more stable tick (reusing that
         // signature) instead of waiting for a frame that may never come on a static screen.
         // Only the very first tick has nothing to reuse and takes the kept frame.
         val sig = if (gotNewFrame || previous == null) {
-            val frame = lastFrame ?: return
+            val frame = capture.lastFrame ?: return
             // Taken from the unmasked frame: the cells our windows touch are ignored anyway.
-            signature(frame, ignoreRects())
+            capture.signature(frame, ignoreRects())
         } else {
             previous
         }
@@ -2415,7 +2280,7 @@ class OverlayService : Service() {
                 hidePanel()
             }
             FrameSignature.Verdict.SEND -> {
-                val toSend = maskedCopy() ?: return
+                val toSend = capture.maskedCopy(::overlayRects) ?: return
                 hiddenAnswer.clear()
                 sendFrame(toSend, sig, fromAuto = true)
             }
@@ -2464,12 +2329,7 @@ class OverlayService : Service() {
             }
         }
         bubble = null
-        virtualDisplay?.release()
-        virtualDisplay = null
-        imageReader?.close()
-        imageReader = null
-        lastFrame?.recycle()
-        lastFrame = null
+        capture.release()
         shownImage = null
         projection?.stop()
         projection = null
