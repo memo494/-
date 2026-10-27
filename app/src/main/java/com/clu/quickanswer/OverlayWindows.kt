@@ -122,10 +122,11 @@ internal class OverlayWindows(
     fun createBubble() {
         val size = dp(56)
         val tv = TextView(context).apply {
-            text = "؟"
+            text = OverlayLook.bubbleText(OverlayLook.BubbleState.IDLE)
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             textSize = 22f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
         }
         bubble = tv
         val params = WindowManager.LayoutParams(
@@ -200,21 +201,8 @@ internal class OverlayWindows(
 
     fun updateBubbleStyle() {
         val tv = bubble ?: return
-        val color = when {
-            isBusy() -> Color.parseColor("#F59E0B")
-            isAutoMode() -> Color.parseColor("#16A34A")
-            else -> Color.parseColor("#2563EB")
-        }
-        tv.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(color)
-            setStroke(dp(2), Color.WHITE)
-        }
-        tv.text = when {
-            isBusy() -> "…"
-            isAutoMode() -> "A"
-            else -> "؟"
-        }
+        OverlayLook.styleBubble(tv, OverlayLook.bubbleState(isBusy(), isAutoMode()),
+            context.resources.displayMetrics.density)
     }
 
     /** After a rotation the screen has new bounds: keep the bubble fully inside them. */
@@ -241,11 +229,8 @@ internal class OverlayWindows(
         gravity = Gravity.CENTER
         setPadding(dp(12), dp(8), dp(12), dp(8))
         ellipsize = TextUtils.TruncateAt.END
-        background = GradientDrawable().apply {
-            cornerRadius = dp(12).toFloat()
-            // Opaque: the window itself is drawn at PANEL_WINDOW_ALPHA, which makes it ~80% dark.
-            setColor(Color.parseColor("#FF111111"))
-        }
+        // Opaque: the window itself is drawn at PANEL_WINDOW_ALPHA, which makes it ~80% dark.
+        background = OverlayLook.panelBackground(context.resources.displayMetrics.density)
     }
 
     /**
