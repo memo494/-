@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Theme.Clu: Material 3 with the Clu palette (values/colors.xml, values-night/colors.xml). One definition
+    Clu theme: Material 3 with the Clu palette (values/colors.xml, values-night/colors.xml). One definition
     serves light and dark: the DayNight parent and the colors switch with the night qualifier.
 -->
 <resources>
-    <style name="Theme.Clu" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Base.Theme.Clu" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/clu_primary</item>
         <item name="colorOnPrimary">@color/clu_on_primary</item>
         <item name="colorPrimaryContainer">@color/clu_primary_container</item>
@@ -54,15 +54,37 @@
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.Clu.MaterialAlertDialog</item>
     </style>
 
+    <!--
+        The theme the manifest names. Everything is in Base.Theme.Clu, and values-v27 adds the navigation bar
+        to this name: a style in a more specific folder replaces the one here whole, it does not add to it.
+    -->
+    <style name="Theme.Clu" parent="Base.Theme.Clu" />
+
     <!-- Dialogs: Material 3's, on the palette's raised surface. -->
     <style name="ThemeOverlay.Clu.MaterialAlertDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog" />
 
     <!-- The welcome dialog: its icon sits on top and the title and text are centered under it. -->
-    <style name="ThemeOverlay.Clu.MaterialAlertDialog.Welcome" parent="ThemeOverlay.Material3.MaterialAlertDialog.Centered" />
+    <style name="ThemeOverlay.Clu.MaterialAlertDialog.Welcome" parent="ThemeOverlay.Material3.MaterialAlertDialog.Centered">
+        <item name="materialAlertDialogTitleIconStyle">@style/MaterialAlertDialog.Clu.WelcomeIcon</item>
+    </style>
 
-    <!-- The manual calibration screen shows a capture on a dark background in both themes. -->
-    <style name="Theme.Clu.Calibration" parent="Theme.Clu">
+    <!-- Material 3 draws a dialog icon 24dp; the app's logo is the point of this dialog, so it is bigger. -->
+    <style name="MaterialAlertDialog.Clu.WelcomeIcon" parent="MaterialAlertDialog.Material3.Title.Icon.CenterStacked">
+        <item name="android:layout_width">64dp</item>
+        <item name="android:layout_height">64dp</item>
+        <item name="android:layout_marginBottom">16dp</item>
+    </style>
+
+    <!--
+        The manual calibration screen shows a capture on a dark background in both themes, so its system
+        bars are dark too. It builds its buttons in code from buttonBarButtonStyle, which Material 3 points
+        at its one-line dialog button (long labels would be cut), so it keeps the style it always had.
+    -->
+    <style name="Base.Theme.Clu.Calibration" parent="Base.Theme.Clu">
         <item name="android:statusBarColor">@color/clu_calibration_background</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="buttonBarButtonStyle">@style/Widget.MaterialComponents.Button.TextButton</item>
     </style>
+
+    <style name="Theme.Clu.Calibration" parent="Base.Theme.Clu.Calibration" />
 </resources>

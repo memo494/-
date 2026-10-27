@@ -81,3 +81,16 @@ one; mark an entry "superseded by N" when it changes.
     single answer triggers learning a layout. A list is START-aligned in the panel, stays up
     15 s + 4 s per extra line (max 45 s) and shows at most 8 lines (5 in landscape)
     (`PanelPlacement`).
+17. **The look is Material 3 on one palette, and a pixel test shows it.** Indigo is the app, one
+    amber accent (`tertiary`) is the "spark": the icon's star and the permission warning, nothing
+    else. Colors are named once (`values/colors.xml`, `values-night/colors.xml`) and `Base.Theme.Clu`
+    maps them to Material roles; two outline tones as in Material 3 (`outline` for what must be seen,
+    `outlineVariant` for card borders). Gotcha: a style in `values-v27` replaces the one of the same
+    name in `values` whole, so `Theme.Clu` is a thin child of `Base.Theme.Clu` in both. The settings
+    screen names Material classes in full (no reliance on the AppCompat inflater), keeps every id and
+    preference key, and caps its content at 600dp. The status chip reads `OverlayService.volumeTrigger`
+    (set while the bubble runs, cleared in `onDestroy`), looked at again every second while the screen
+    is in front. Paparazzi (`SettingsScreenshotTest`) draws the screen, the icon and the welcome dialog
+    in light and dark, right-to-left, into `app/src/test/snapshots/images`: after a UI change run
+    `./gradlew recordPaparazziDebug` and look at the PNGs; `testDebugUnitTest` only draws (it never
+    compares pixels), `verifyPaparazziDebug` compares. The pictures are synthetic: sample text, no key.

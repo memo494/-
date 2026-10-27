@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Launcher icon foreground, inside the 66dp safe zone of the 108dp canvas: a thick white "C" ring that opens
+    to the right (centre 51,54, radius 22, stroke 12, from 45 degrees below the axis round to 45 above it) and
+    an amber four-pointed spark in the opening (centre 75,54, tips 10 away). Source: art/icon.svg.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M66.56,69.56A22,22 0 1,1 66.56,38.44"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="12" />
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M75,44Q76.6,52.4 85,54Q76.6,55.6 75,64Q73.4,55.6 65,54Q73.4,52.4 75,44Z" />
+</vector>

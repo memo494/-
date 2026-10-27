@@ -52,7 +52,7 @@ whole-question OCR fails. See `INTERACTIONS.md` for supported patterns and limit
 | Area | Files |
 |---|---|
 | Service, capture, overlay windows, answer flow | `OverlayService.kt` (large; split planned) |
-| Settings UI / prefs | `MainActivity.kt`, `Prefs.kt`, `res/layout/activity_main.xml` |
+| Settings UI / prefs | `MainActivity.kt`, `StatusChip.kt`, `WelcomeDialog.kt`, `Prefs.kt`, `res/layout/activity_main.xml`, theme in `res/values/themes.xml` + `colors.xml` |
 | Volume-key trigger (accessibility) | `VolumeKeyService.kt` |
 | Cloud models | `Answerer.kt` (interface, `Reply`), `GeminiClient.kt`, `GeminiModels.kt`, `GeminiQuota.kt`, `GeminiRuntime.kt`, `ClaudeClient.kt`, `ClaudeApi.kt` (pure, tested) |
 | Prompts and replies | `QuestionPrompt.kt`, `ScreenImage.kt` (image prompt, crop/scale), `AnswerParser.kt` |
@@ -78,3 +78,7 @@ Pure files (no `android.*`) carry the logic and are unit-tested on the JVM; Andr
 `./gradlew testDebugUnitTest`: pure logic, synthetic images (`ocr/SyntheticScreens.kt`) and the
 original game's screenshots (`app/src/test/resources`, OCR model run by `OcrPipelineTest` in CI).
 Real screenshots of other games are not in this public repository (they show other players).
+
+`ui/SettingsScreenshotTest` (Paparazzi) draws the settings screen, the icon and the welcome dialog to
+`app/src/test/snapshots/images` (light, dark, Arabic, right-to-left, sample data). After changing
+`res/` or `MainActivity`, run `./gradlew recordPaparazziDebug` and look at the PNGs (decision 17).

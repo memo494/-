@@ -1,435 +1,581 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Settings screen. Top: the app (icon, name, one line, running status), the two big buttons and, only while
+    the overlay permission is missing, an amber card to grant it. Then one outlined card per section.
+    Material classes are named in full so the screen looks the same under the AppCompat inflater and under the
+    plain inflater of the screenshot test (SettingsScreenshotTest). The content is capped at 600dp and
+    centered, for tablets and landscape.
+-->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true"
     android:fitsSystemWindows="true"
     android:layoutDirection="rtl">
 
-    <LinearLayout
+    <androidx.constraintlayout.widget.ConstraintLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="20dp">
+        android:layout_height="wrap_content">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Clu"
-            android:textAlignment="viewStart"
-            android:textSize="28sp"
-            android:textStyle="bold" />
-
-        <TextView
-            style="@style/CluSectionHeader"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="التشغيل" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="?android:attr/listDivider" />
-
-        <Button
-            android:id="@+id/overlayButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="منح صلاحية الظهور فوق التطبيقات" />
-
-        <Button
-            android:id="@+id/startButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="تشغيل" />
-
-        <Button
-            android:id="@+id/stopButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="إيقاف" />
-
-        <TextView
-            style="@style/CluSectionHeader"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="النموذج" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="?android:attr/listDivider" />
-
-        <RadioGroup
-            android:id="@+id/providerGroup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="vertical">
-
-            <RadioButton
-                android:id="@+id/providerGemini"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Gemini (مجاني)" />
-
-            <RadioButton
-                android:id="@+id/providerClaude"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Claude (مدفوع، أدق)" />
-        </RadioGroup>
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="مفتاح Gemini API"
-            android:textAlignment="viewStart" />
-
-        <EditText
-            android:id="@+id/apiKeyInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="الصق المفتاح هنا"
-            android:importantForAutofill="no"
-            android:inputType="textPassword"
-            android:layoutDirection="ltr"
-            android:textDirection="ltr"
-            android:textAlignment="viewStart" />
-
-        <TextView
-            android:id="@+id/keyLink"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:autoLink="web"
-            android:text="احصل على مفتاح مجاني من: https://aistudio.google.com/apikey"
-            android:textAlignment="viewStart"
-            android:textSize="13sp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="نموذج Gemini"
-            android:textAlignment="viewStart" />
-
-        <Spinner
-            android:id="@+id/modelSpinner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="48dp" />
-
-        <TextView
-            android:id="@+id/modelIdText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layoutDirection="ltr"
-            android:textAlignment="viewStart"
-            android:textDirection="ltr"
-            android:textIsSelectable="true"
-            android:textSize="13sp" />
-
-        <Button
-            android:id="@+id/refreshModelsButton"
-            style="?android:attr/buttonStyleSmall"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="تحديث قائمة النماذج"
-            android:textSize="12sp" />
-
+        <!-- 632dp = 600dp of content plus the 16dp margin on each side. -->
         <LinearLayout
-            android:id="@+id/claudeSection"
-            android:layout_width="match_parent"
+            android:id="@+id/settingsContent"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:paddingStart="16dp"
+            android:paddingTop="20dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="28dp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintWidth_max="632dp">
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="مفتاح Claude API"
-                android:textAlignment="viewStart" />
-
-            <EditText
-                android:id="@+id/claudeKeyInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="الصق المفتاح هنا"
-                android:importantForAutofill="no"
-                android:inputType="textPassword"
-                android:layoutDirection="ltr"
-                android:textDirection="ltr"
-                android:textAlignment="viewStart" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="من console.anthropic.com — يحتاج رصيد"
-                android:textAlignment="viewStart"
-                android:textSize="13sp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="نموذج Claude"
-                android:textAlignment="viewStart" />
-
-            <EditText
-                android:id="@+id/claudeModelInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="claude-haiku-5-5"
-                android:importantForAutofill="no"
-                android:inputType="text"
-                android:layoutDirection="ltr"
-                android:textAlignment="viewStart" />
-
+            <!-- ======================================================== header -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <Button
-                    android:id="@+id/opusButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Opus 5.5 (الأدق)"
-                    android:textSize="12sp" />
+                <ImageView
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_clu_logo" />
 
-                <Button
-                    android:id="@+id/haikuButton"
+                <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
+                    android:layout_marginStart="16dp"
                     android:layout_weight="1"
-                    android:text="Haiku 5.5 (الأسرع والأرخص)"
-                    android:textSize="12sp" />
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/Widget.Clu.Headline"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Clu" />
+
+                    <TextView
+                        style="@style/Widget.Clu.Subtitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="الجواب على الشاشة بلمحة" />
+
+                    <com.google.android.material.chip.Chip
+                        android:id="@+id/statusChip"
+                        style="@style/Widget.Clu.Chip.Status"
+                        android:text="متوقف"
+                        android:textColor="@color/clu_on_surface_variant"
+                        app:chipBackgroundColor="@color/clu_surface_variant"
+                        app:chipIconTint="@color/clu_outline" />
+                </LinearLayout>
             </LinearLayout>
+
+            <!-- ======================================================== run -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/startButton"
+                    style="@style/Widget.Clu.Button.Hero"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="3"
+                    android:text="تشغيل"
+                    app:icon="@drawable/ic_play" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/stopButton"
+                    style="@style/Widget.Clu.Button.Hero.Tonal"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="2"
+                    android:text="إيقاف"
+                    app:icon="@drawable/ic_stop" />
+            </LinearLayout>
+
+            <!-- Shown by MainActivity only while the permission is missing. -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/overlayPermissionCard"
+                style="@style/Widget.Clu.Card.Warning">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/overlayButton"
+                    style="@style/Widget.Clu.Button.Warning"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_margin="12dp"
+                    android:text="منح صلاحية الظهور فوق التطبيقات"
+                    app:icon="@drawable/ic_warning" />
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- ======================================================== model -->
+            <com.google.android.material.card.MaterialCardView style="@style/Widget.Clu.Card">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout style="@style/Widget.Clu.CardHeader">
+
+                        <ImageView
+                            style="@style/Widget.Clu.CardIcon"
+                            android:src="@drawable/ic_section_model" />
+
+                        <TextView
+                            style="@style/Widget.Clu.CardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="النموذج" />
+                    </LinearLayout>
+
+                    <RadioGroup
+                        android:id="@+id/providerGroup"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+
+                        <com.google.android.material.radiobutton.MaterialRadioButton
+                            android:id="@+id/providerGemini"
+                            style="@style/Widget.Clu.RadioButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Gemini (مجاني)" />
+
+                        <com.google.android.material.radiobutton.MaterialRadioButton
+                            android:id="@+id/providerClaude"
+                            style="@style/Widget.Clu.RadioButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Claude (مدفوع، أدق)" />
+                    </RadioGroup>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Clu.TextInputLayout"
+                        android:hint="مفتاح Gemini API"
+                        app:endIconMode="password_toggle"
+                        app:placeholderText="الصق المفتاح هنا">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/apiKeyInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:importantForAutofill="no"
+                            android:inputType="textPassword"
+                            android:textAlignment="textStart"
+                            android:textAppearance="@style/TextAppearance.Clu.Body"
+                            android:textDirection="ltr" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <TextView
+                        android:id="@+id/keyLink"
+                        style="@style/Widget.Clu.Helper"
+                        android:autoLink="web"
+                        android:text="احصل على مفتاح مجاني من: https://aistudio.google.com/apikey" />
+
+                    <TextView
+                        style="@style/Widget.Clu.FieldLabel"
+                        android:text="نموذج Gemini" />
+
+                    <androidx.appcompat.widget.AppCompatSpinner
+                        android:id="@+id/modelSpinner"
+                        style="@style/Widget.Clu.Spinner" />
+
+                    <TextView
+                        android:id="@+id/modelIdText"
+                        style="@style/Widget.Clu.Helper"
+                        android:textDirection="ltr"
+                        android:textIsSelectable="true" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/refreshModelsButton"
+                        style="@style/Widget.Clu.Button.Text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="تحديث قائمة النماذج" />
+
+                    <LinearLayout
+                        android:id="@+id/claudeSection"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+
+                        <View
+                            style="@style/Widget.Clu.Divider"
+                            android:layout_marginTop="8dp" />
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            style="@style/Widget.Clu.TextInputLayout"
+                            android:hint="مفتاح Claude API"
+                            app:endIconMode="password_toggle"
+                            app:placeholderText="الصق المفتاح هنا">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/claudeKeyInput"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:importantForAutofill="no"
+                                android:inputType="textPassword"
+                                android:textAlignment="textStart"
+                                android:textAppearance="@style/TextAppearance.Clu.Body"
+                                android:textDirection="ltr" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <TextView
+                            style="@style/Widget.Clu.Helper"
+                            android:text="من console.anthropic.com — يحتاج رصيد" />
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            style="@style/Widget.Clu.TextInputLayout"
+                            android:hint="نموذج Claude"
+                            app:placeholderText="claude-haiku-5-5">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/claudeModelInput"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:importantForAutofill="no"
+                                android:inputType="text"
+                                android:textAlignment="textStart"
+                                android:textAppearance="@style/TextAppearance.Clu.Body"
+                                android:textDirection="ltr" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/opusButton"
+                                style="@style/Widget.Clu.Button.Outlined"
+                                android:layout_width="0dp"
+                                android:layout_height="match_parent"
+                                android:layout_weight="1"
+                                android:text="Opus 5.5 (الأدق)"
+                                android:textSize="13sp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/haikuButton"
+                                style="@style/Widget.Clu.Button.Outlined"
+                                android:layout_width="0dp"
+                                android:layout_height="match_parent"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:text="Haiku 5.5 (الأسرع والأرخص)"
+                                android:textSize="13sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- ======================================================== reading and display -->
+            <com.google.android.material.card.MaterialCardView style="@style/Widget.Clu.Card">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout style="@style/Widget.Clu.CardHeader">
+
+                        <ImageView
+                            style="@style/Widget.Clu.CardIcon"
+                            android:src="@drawable/ic_section_reading" />
+
+                        <TextView
+                            style="@style/Widget.Clu.CardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="القراءة والعرض" />
+                    </LinearLayout>
+
+                    <TextView
+                        style="@style/Widget.Clu.FieldLabel"
+                        android:layout_marginTop="8dp"
+                        android:layout_marginBottom="0dp"
+                        android:text="مكان الإجابة" />
+
+                    <RadioGroup
+                        android:id="@+id/panelPositionGroup"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.radiobutton.MaterialRadioButton
+                            android:id="@+id/panelPosTop"
+                            style="@style/Widget.Clu.RadioButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="أعلى الشاشة" />
+
+                        <com.google.android.material.radiobutton.MaterialRadioButton
+                            android:id="@+id/panelPosBubble"
+                            style="@style/Widget.Clu.RadioButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="بجانب الفقاعة" />
+                    </RadioGroup>
+
+                    <View style="@style/Widget.Clu.Divider" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/smartReadingCheck"
+                        style="@style/Widget.Clu.Switch"
+                        android:text="قراءة السؤال على الجهاز + ذاكرة الأجوبة (أسرع، والسؤال المكرر فوري)" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/highlightCheck"
+                        style="@style/Widget.Clu.Switch"
+                        android:text="تحديد الجواب الصحيح بمربع أخضر" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/learnFromResultsCheck"
+                        style="@style/Widget.Clu.Switch"
+                        android:text="تعلّم من شاشة النتيجة (يصلّح الجواب الغلط بالبنك لحاله)" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/vibrateCheck"
+                        style="@style/Widget.Clu.Switch"
+                        android:text="اهتزاز خفيف عند ظهور الجواب" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- ======================================================== volume key and touch -->
+            <com.google.android.material.card.MaterialCardView style="@style/Widget.Clu.Card">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout style="@style/Widget.Clu.CardHeader">
+
+                        <ImageView
+                            style="@style/Widget.Clu.CardIcon"
+                            android:src="@drawable/ic_section_volume" />
+
+                        <TextView
+                            style="@style/Widget.Clu.CardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="زر الصوت واللمس" />
+                    </LinearLayout>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/autoTouchCheck"
+                        style="@style/Widget.Clu.Switch"
+                        android:text="ضغط الإجابة عند لمس الفقاعة أو تشغيل A (خيارات أو رقم من 1–4 خانات)" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/volumeKeyCheck"
+                        style="@style/Widget.Clu.Switch"
+                        android:text="خفض الصوت يحلّ ويضغط الإجابة أو يكتب الرقم، دون تشغيل A" />
+
+                    <TextView
+                        android:id="@+id/volumeKeyStatus"
+                        style="@style/Widget.Clu.Helper" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/accessibilityButton"
+                        style="@style/Widget.Clu.Button.Outlined"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:text="تفعيل زر الصوت (إمكانية الوصول)" />
+
+                    <TextView
+                        android:id="@+id/volumeKeyHelp"
+                        style="@style/Widget.Clu.Helper"
+                        android:layout_marginTop="12dp"
+                        android:text="اضغط الزر أعلاه، ثم اختر «Clu: زر الصوت للإجابة» وفعّله. إذا كان المفتاح رماديًا ويقول «إعداد مقيّد»: اضغط زر «معلومات التطبيق» أدناه ← النقاط الثلاث (⋮) أعلى الشاشة ← «السماح بالإعدادات المقيّدة»، ثم ارجع وفعّله. على هواتف شاومي: من معلومات التطبيق اجعل «توفير البطارية» على «بلا قيود» وفعّل «التشغيل التلقائي» حتى لا يتوقف." />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/appInfoButton"
+                        style="@style/Widget.Clu.Button.Text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="معلومات التطبيق" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- ======================================================== question bank and templates -->
+            <com.google.android.material.card.MaterialCardView style="@style/Widget.Clu.Card">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout style="@style/Widget.Clu.CardHeader">
+
+                        <ImageView
+                            style="@style/Widget.Clu.CardIcon"
+                            android:src="@drawable/ic_section_bank" />
+
+                        <TextView
+                            style="@style/Widget.Clu.CardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="بنك الأسئلة والقوالب" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/exportMemoryButton"
+                            style="@style/Widget.Clu.Button.Outlined"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:text="تصدير بنك الأسئلة" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/importMemoryButton"
+                            style="@style/Widget.Clu.Button.Outlined"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:text="استيراد بنك أسئلة" />
+                    </LinearLayout>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/calibrateButton"
+                        style="@style/Widget.Clu.Button.Outlined"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="معايرة يدوية (ارسم مربعات السؤال والخيارات)" />
+
+                    <View style="@style/Widget.Clu.Divider" />
+
+                    <TextView
+                        android:id="@+id/templatesStatus"
+                        style="@style/Widget.Clu.Helper"
+                        android:layout_marginTop="8dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/clearTemplatesButton"
+                        style="@style/Widget.Clu.Button.Destructive"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:enabled="false"
+                        android:text="مسح القوالب" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/clearMemoryButton"
+                        style="@style/Widget.Clu.Button.Destructive"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="مسح الذاكرة" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- ======================================================== statistics -->
+            <com.google.android.material.card.MaterialCardView style="@style/Widget.Clu.Card">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout style="@style/Widget.Clu.CardHeader">
+
+                        <ImageView
+                            style="@style/Widget.Clu.CardIcon"
+                            android:src="@drawable/ic_section_stats" />
+
+                        <TextView
+                            style="@style/Widget.Clu.CardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="الإحصائيات" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/statsText"
+                        style="@style/Widget.Clu.Body"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/clearStatsButton"
+                        style="@style/Widget.Clu.Button.Destructive"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:enabled="false"
+                        android:text="مسح الإحصائيات" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- ======================================================== diagnostics -->
+            <com.google.android.material.card.MaterialCardView style="@style/Widget.Clu.Card">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout style="@style/Widget.Clu.CardHeader">
+
+                        <ImageView
+                            style="@style/Widget.Clu.CardIcon"
+                            android:src="@drawable/ic_section_diagnostics" />
+
+                        <TextView
+                            style="@style/Widget.Clu.CardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="التشخيص" />
+                    </LinearLayout>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/copyLogButton"
+                        style="@style/Widget.Clu.Button.Outlined"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="نسخ سجل التشخيص (لإرساله عند وجود مشكلة)" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/saveCaptureButton"
+                        style="@style/Widget.Clu.Button.Outlined"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="حفظ آخر لقطة قرأها التطبيق" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
         </LinearLayout>
-
-        <TextView
-            style="@style/CluSectionHeader"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="القراءة والعرض" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="?android:attr/listDivider" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="مكان الإجابة"
-            android:textAlignment="viewStart" />
-
-        <RadioGroup
-            android:id="@+id/panelPositionGroup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <RadioButton
-                android:id="@+id/panelPosTop"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="أعلى الشاشة"
-                android:textSize="14sp" />
-
-            <RadioButton
-                android:id="@+id/panelPosBubble"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="بجانب الفقاعة"
-                android:textSize="14sp" />
-        </RadioGroup>
-
-        <CheckBox
-            android:id="@+id/smartReadingCheck"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="قراءة السؤال على الجهاز + ذاكرة الأجوبة (أسرع، والسؤال المكرر فوري)" />
-
-        <CheckBox
-            android:id="@+id/highlightCheck"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="تحديد الجواب الصحيح بمربع أخضر" />
-
-        <CheckBox
-            android:id="@+id/learnFromResultsCheck"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="تعلّم من شاشة النتيجة (يصلّح الجواب الغلط بالبنك لحاله)" />
-
-        <CheckBox
-            android:id="@+id/vibrateCheck"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="اهتزاز خفيف عند ظهور الجواب" />
-
-        <TextView
-            style="@style/CluSectionHeader"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="زر الصوت" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="?android:attr/listDivider" />
-
-        <CheckBox
-            android:id="@+id/autoTouchCheck"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="ضغط الإجابة عند لمس الفقاعة أو تشغيل A (خيارات أو رقم من 1–4 خانات)" />
-
-        <CheckBox
-            android:id="@+id/volumeKeyCheck"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="خفض الصوت يحلّ ويضغط الإجابة أو يكتب الرقم، دون تشغيل A" />
-
-        <TextView
-            android:id="@+id/volumeKeyStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textAlignment="viewStart"
-            android:textSize="13sp" />
-
-        <Button
-            android:id="@+id/accessibilityButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="تفعيل زر الصوت (إمكانية الوصول)" />
-
-        <TextView
-            android:id="@+id/volumeKeyHelp"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textAlignment="viewStart"
-            android:textSize="12sp"
-            android:text="اضغط الزر أعلاه، ثم اختر «Clu: زر الصوت للإجابة» وفعّله. إذا كان المفتاح رماديًا ويقول «إعداد مقيّد»: اضغط زر «معلومات التطبيق» أدناه ← النقاط الثلاث (⋮) أعلى الشاشة ← «السماح بالإعدادات المقيّدة»، ثم ارجع وفعّله. على هواتف شاومي: من معلومات التطبيق اجعل «توفير البطارية» على «بلا قيود» وفعّل «التشغيل التلقائي» حتى لا يتوقف." />
-
-        <Button
-            android:id="@+id/appInfoButton"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="معلومات التطبيق" />
-
-        <TextView
-            style="@style/CluSectionHeader"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="بنك الأسئلة والقوالب" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="?android:attr/listDivider" />
-
-        <Button
-            android:id="@+id/clearMemoryButton"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="مسح الذاكرة" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/exportMemoryButton"
-                style="?android:attr/buttonBarButtonStyle"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="تصدير بنك الأسئلة" />
-
-            <Button
-                android:id="@+id/importMemoryButton"
-                style="?android:attr/buttonBarButtonStyle"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="استيراد بنك أسئلة" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/templatesStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textAlignment="viewStart"
-            android:textSize="13sp" />
-
-        <Button
-            android:id="@+id/clearTemplatesButton"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:enabled="false"
-            android:text="مسح القوالب" />
-
-        <Button
-            android:id="@+id/calibrateButton"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="معايرة يدوية (ارسم مربعات السؤال والخيارات)" />
-
-        <Button
-            android:id="@+id/copyLogButton"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="نسخ سجل التشخيص (لإرساله عند وجود مشكلة)" />
-
-        <Button
-            android:id="@+id/saveCaptureButton"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="حفظ آخر لقطة قرأها التطبيق" />
-
-        <TextView
-            style="@style/CluSectionHeader"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="الإحصائيات" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="?android:attr/listDivider" />
-
-        <TextView
-            android:id="@+id/statsText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textAlignment="viewStart"
-            android:textSize="14sp" />
-
-        <Button
-            android:id="@+id/clearStatsButton"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:enabled="false"
-            android:text="مسح الإحصائيات" />
-    </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
 </ScrollView>

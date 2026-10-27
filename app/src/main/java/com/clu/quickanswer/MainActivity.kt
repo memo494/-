@@ -14,7 +14,7 @@ import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
-import android.widget.CheckBox
+import android.widget.CompoundButton
 import android.widget.EditText
 import android.widget.RadioGroup
 import android.widget.Spinner
@@ -25,12 +25,16 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.clu.quickanswer.ocr.TemplateState
+import com.google.android.material.chip.Chip
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 class MainActivity : AppCompatActivity() {
 
     companion object {
         /** Set by OverlayService's "bubble stopped" notification: start the bubble again on open. */
         const val EXTRA_RESTART = "com.clu.quickanswer.RESTART"
+
+        private const val STATUS_POLL_MS = 1000L
     }
 
     private lateinit var apiKeyInput: EditText
@@ -38,19 +42,21 @@ class MainActivity : AppCompatActivity() {
     private lateinit var modelIdText: TextView
     private lateinit var refreshModelsButton: Button
     private lateinit var overlayButton: Button
+    private lateinit var overlayCard: View
+    private lateinit var statusChip: Chip
     private lateinit var providerGroup: RadioGroup
     private lateinit var claudeKeyInput: EditText
     private lateinit var claudeModelInput: EditText
     private lateinit var panelPositionGroup: RadioGroup
-    private lateinit var smartReadingCheck: CheckBox
-    private lateinit var highlightCheck: CheckBox
-    private lateinit var learnFromResultsCheck: CheckBox
-    private lateinit var vibrateCheck: CheckBox
+    private lateinit var smartReadingCheck: CompoundButton
+    private lateinit var highlightCheck: CompoundButton
+    private lateinit var learnFromResultsCheck: CompoundButton
+    private lateinit var vibrateCheck: CompoundButton
     private lateinit var clearMemoryButton: Button
     private lateinit var templatesStatus: TextView
     private lateinit var clearTemplatesButton: Button
-    private lateinit var volumeKeyCheck: CheckBox
-    private lateinit var autoTouchCheck: CheckBox
+    private lateinit var volumeKeyCheck: CompoundButton
+    private lateinit var autoTouchCheck: CompoundButton
     private lateinit var volumeKeyStatus: TextView
     private lateinit var statsText: TextView
     private lateinit var clearStatsButton: Button
@@ -187,6 +193,8 @@ class MainActivity : AppCompatActivity() {
         modelIdText = findViewById(R.id.modelIdText)
         refreshModelsButton = findViewById(R.id.refreshModelsButton)
         overlayButton = findViewById(R.id.overlayButton)
+        overlayCard = findViewById(R.id.overlayPermissionCard)
+        statusChip = findViewById(R.id.statusChip)
 
         providerGroup = findViewById(R.id.providerGroup)
         claudeKeyInput = findViewById(R.id.claudeKeyInput)
@@ -259,17 +267,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
         clearTemplatesButton.setOnClickListener {
-            AlertDialog.Builder(this)
-                .setMessage("مسح كل قوالب الألعاب؟ رح يرجع يتعلّمها من جديد.")
-                .setPositiveButton("مسح") { _, _ ->
-                    TemplateStore.runAfterLoad {
-                        TemplateStore.resetToBuiltins(this)
-                        val counts = templateCounts()
-                        runOnUiThread { if (!isDestroyed) updateTemplatesStatus(counts) }
+            showRtl(
+                MaterialAlertDialogBuilder(this)
+                    .setMessage("مسح كل قوالب الألعاب؟ رح يرجع يتعلّمها من جديد.")
+                    .setPositiveButton("مسح") { _, _ ->
+                        TemplateStore.runAfterLoad {
+                            TemplateStore.resetToBuiltins(this)
+                            val counts = templateCounts()
+                            runOnUiThread { if (!isDestroyed) updateTemplatesStatus(counts) }
+                        }
                     }
-                }
-                .setNegativeButton("إلغاء", null)
-                .show()
+                    .setNegativeButton("إلغاء", null)
+            )
         }
         findViewById<Button>(R.id.saveCaptureButton).setOnClickListener {
             // Checked first, so no empty file is created when there is nothing to save.
@@ -292,7 +301,7 @@ class MainActivity : AppCompatActivity() {
         clearStatsButton = findViewById(R.id.clearStatsButton)
         clearStatsButton.setOnClickListener {
             showRtl(
-                AlertDialog.Builder(this)
+                MaterialAlertDialogBuilder(this)
                     .setMessage("مسح كل الإحصائيات؟")
                     .setPositiveButton("مسح") { _, _ ->
                         StatsStore.runAfterLoad {
@@ -350,14 +359,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
         showRtl(
-            AlertDialog.Builder(this)
-                .setTitle("أهلًا بك في Clu")
-                .setMessage(
-                    "1) الصق مفتاح Gemini المجاني (الرابط تحت).\n" +
-                        "2) اضغط «منح صلاحية الظهور فوق التطبيقات».\n" +
-                        "3) اضغط «تشغيل» وبعدين المس الفقاعة أو زر خفض الصوت لما يطلع السؤال."
-                )
-                .setPositiveButton("يلا نبلّش") { _, _ -> Prefs.saveWelcomeShown(this) }
+            WelcomeDialog.builder(this)
+                .setPositiveButton(WelcomeDialog.BUTTON) { _, _ -> Prefs.saveWelcomeShown(this) }
                 .setOnCancelListener { Prefs.saveWelcomeShown(this) }
         )
     }
@@ -381,6 +384,23 @@ class MainActivity : AppCompatActivity() {
         onStartClicked()
     }
 
+    /**
+     * The bubble runs while [OverlayService.volumeTrigger] is set: the service sets it once the bubble is up
+     * and clears it in onDestroy, whichever way it stopped (the stop button, the notification, the system).
+     */
+    private fun updateStatus() {
+        statusChip.showStatus(OverlayService.volumeTrigger != null)
+    }
+
+    // Starting and stopping finish after the tap that asked for them (the capture dialog, the service's
+    // own start), so while this screen is in front the chip looks again every [STATUS_POLL_MS].
+    private val statusTick = object : Runnable {
+        override fun run() {
+            updateStatus()
+            statusChip.postDelayed(this, STATUS_POLL_MS)
+        }
+    }
+
     // A refresh may finish while this screen is showing, or after it was recreated by a rotation.
     private val refreshListener = Runnable {
         refreshModelsButton.isEnabled = !GeminiRuntime.refreshingModels
@@ -390,6 +410,8 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateOverlayButton()
+        statusChip.removeCallbacks(statusTick)
+        statusTick.run()
         GeminiRuntime.addRefreshListener(refreshListener)
         // A model may have run out of quota (or recovered), or a refresh may have finished, since the
         // list was last drawn.
@@ -448,6 +470,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        statusChip.removeCallbacks(statusTick)
         GeminiRuntime.removeRefreshListener(refreshListener)
         saveSettings()
     }
@@ -515,13 +538,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateOverlayButton() {
-        if (Settings.canDrawOverlays(this)) {
-            overlayButton.text = "✓ تم منح صلاحية الظهور فوق التطبيقات"
-            overlayButton.isEnabled = false
-        } else {
-            overlayButton.text = "منح صلاحية الظهور فوق التطبيقات"
-            overlayButton.isEnabled = true
-        }
+        // The card around the button is shown only while the permission is missing.
+        overlayCard.visibility = if (Settings.canDrawOverlays(this)) View.GONE else View.VISIBLE
     }
 
     private fun onStartClicked() {
