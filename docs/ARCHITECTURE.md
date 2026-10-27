@@ -4,7 +4,7 @@ Clu shows the answer to the quiz question on screen in an overlay. Everything is
 screenshot, cheapest step first; every step **fails closed** (declines and lets a later, more
 expensive step answer) rather than guessing.
 
-## The answer flow (`OverlayService.solve`)
+## The answer flow (`AnswerPipeline.solve`)
 
 ```
 capture (MediaProjection) ─► our own windows painted black = masks
@@ -51,7 +51,11 @@ whole-question OCR fails. See `INTERACTIONS.md` for supported patterns and limit
 
 | Area | Files |
 |---|---|
-| Service, capture, overlay windows, answer flow | `OverlayService.kt` (large; split planned) |
+| Service lifecycle, auto mode, result watch, wiring of the parts | `OverlayService.kt` |
+| Screen capture: virtual display, newest frame, masked copy, change signature | `ScreenCapture.kt` |
+| Overlay windows: bubble, answer panel, sent-image preview, green box | `OverlayWindows.kt` |
+| Answer flow: `solve`, on-device readers and their locks, answer provider, layout learning, `Solved` | `AnswerPipeline.kt` |
+| Automatic touch: planning on the capture, guards before each stroke, numeric readback | `AnswerTouches.kt` (extension functions of `OverlayService`) |
 | Settings UI / prefs | `MainActivity.kt`, `StatusChip.kt`, `WelcomeDialog.kt`, `Prefs.kt`, `res/layout/activity_main.xml`, theme in `res/values/themes.xml` + `colors.xml` |
 | Volume-key trigger (accessibility) | `VolumeKeyService.kt` |
 | Cloud models | `Answerer.kt` (interface, `Reply`), `GeminiClient.kt`, `GeminiModels.kt`, `GeminiQuota.kt`, `GeminiRuntime.kt`, `ClaudeClient.kt`, `ClaudeApi.kt` (pure, tested) |
@@ -61,6 +65,12 @@ whole-question OCR fails. See `INTERACTIONS.md` for supported patterns and limit
 | Arabic OCR | `ocr/ColorLayout.kt`, `ocr/ScreenReader.kt`, `ocr/LineRecognizer.kt`, `ocr/LineBatch.kt`, `ocr/Ctc.kt`, `ocr/OrtCtcModel.kt`, `ocr/ArabicOcr.kt`, `ocr/ArabicText.kt`, `ocr/ImageOps.kt`, `ocr/OverlayCheck.kt`, assets `ocr/inference.onnx` + `dict.txt` |
 | English OCR | `ocr/LatinOcr.kt` (ML Kit, bundled), `ocr/LatinQuestionAssembler.kt` (pure) |
 | Small helpers | `FrameSignature.kt` (auto mode: did the screen change), `HiddenAnswer.kt`, `PanelPlacement.kt`, `Haptics.kt` |
+
+`OverlayService` creates `ScreenCapture`, `OverlayWindows` and `AnswerPipeline` and wires them together
+(the windows get the capture for the screen size and call back into the service for a bubble tap; the
+capture takes the overlay rects as a function, so it never reads a view). `AnswerTouches.kt` keeps the
+touch code as extension functions of the service because it shares the touch state (`touchEpoch`,
+`touchPending`, `touchJob`) with `cancelTouches`, `sendFrame` and `autoTick`; that state is `internal`.
 
 Pure files (no `android.*`) carry the logic and are unit-tested on the JVM; Android files stay thin.
 

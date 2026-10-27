@@ -22,8 +22,11 @@ All sources are under `app/src/main/java/com/clu/quickanswer/`.
 
 | Area | Files |
 |---|---|
-| Service lifecycle, capture, overlay windows, answer flow, auto mode | `OverlayService.kt` (being split) |
-| Automatic touch (planning, guards, numeric entry) | `interaction/`, `TapSequence.kt`, `TouchPlanner.kt`, `VolumeKeyService.kt` |
+| Service lifecycle, auto mode, result watch, wiring of the parts | `OverlayService.kt` |
+| Screen capture (virtual display, frames, change signature) | `ScreenCapture.kt` |
+| Overlay windows (bubble, answer panel, sent-image preview, green box) | `OverlayWindows.kt` |
+| Answer flow (on-device reading, memory, cloud model, layout learning) | `AnswerPipeline.kt` |
+| Automatic touch (planning, guards, numeric entry) | `AnswerTouches.kt` (extension functions of `OverlayService`), `interaction/`, `TapSequence.kt`, `TouchPlanner.kt`, `VolumeKeyService.kt` |
 | Settings UI and prefs | `MainActivity.kt`, `Prefs.kt`, `res/layout/activity_main.xml`, `CalibrationActivity.kt` |
 | Cloud models | `Answerer.kt`, `GeminiClient.kt`, `GeminiModels.kt`, `GeminiQuota.kt`, `ClaudeClient.kt`, `ClaudeApi.kt` |
 | Prompts and replies | `QuestionPrompt.kt`, `ScreenImage.kt`, `AnswerParser.kt`, `Calculator.kt` |
