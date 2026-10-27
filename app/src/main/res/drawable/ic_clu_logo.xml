@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The icon as a picture inside the app (settings header, welcome dialog): the launcher icon's central 72 of
+    108 units, on its own rounded square. Same shapes as ic_launcher_foreground.xml, moved by -18,-18.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="72"
+    android:viewportHeight="72">
+    <path android:pathData="M18,0H54A18,18 0 0,1 72,18V54A18,18 0 0,1 54,72H18A18,18 0 0,1 0,54V18A18,18 0 0,1 18,0Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="72"
+                android:endY="72"
+                android:startX="0"
+                android:startY="0"
+                android:type="linear">
+                <item
+                    android:color="#4338CA"
+                    android:offset="0" />
+                <item
+                    android:color="#7C3AED"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <group
+        android:translateX="-18"
+        android:translateY="-18">
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M66.56,69.56A22,22 0 1,1 66.56,38.44"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round"
+            android:strokeWidth="12" />
+        <path
+            android:fillColor="#FBBF24"
+            android:pathData="M75,44Q76.6,52.4 85,54Q76.6,55.6 75,64Q73.4,55.6 65,54Q73.4,52.4 75,44Z" />
+    </group>
+</vector>

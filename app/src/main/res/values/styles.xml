@@ -1,11 +1,253 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Text appearances and widget styles of the settings screen. Sizes: app name 26sp bold, card title 17sp
+    medium, body 15sp, helper 13sp in onSurfaceVariant. Every color is a theme attribute, so light and dark
+    follow Theme.Clu without per-theme styles.
+-->
 <resources>
-    <!-- Title of a group on the settings screen; a thin divider (listDivider) goes right under it. -->
-    <style name="CluSectionHeader">
+    <!-- ======================================================== text -->
+    <style name="TextAppearance.Clu.Headline" parent="TextAppearance.Material3.HeadlineSmall">
+        <item name="android:textSize">26sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:lineHeight">34sp</item>
+    </style>
+
+    <style name="TextAppearance.Clu.Subtitle" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
+        <item name="android:lineHeight">22sp</item>
+    </style>
+
+    <style name="TextAppearance.Clu.CardTitle" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:textSize">17sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:lineHeight">24sp</item>
+    </style>
+
+    <style name="TextAppearance.Clu.Body" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:lineHeight">22sp</item>
+    </style>
+
+    <style name="TextAppearance.Clu.Helper" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textSize">13sp</item>
+        <item name="android:textColor">?attr/colorOnSurfaceVariant</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:lineHeight">20sp</item>
+    </style>
+
+    <!-- The small caption over a field that has no floating label of its own (the model spinner). -->
+    <style name="TextAppearance.Clu.FieldLabel" parent="TextAppearance.Clu.Helper">
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+
+    <style name="TextAppearance.Clu.Button" parent="TextAppearance.Material3.LabelLarge">
+        <item name="android:textSize">15sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+
+    <style name="TextAppearance.Clu.Button.Hero">
+        <item name="android:textSize">17sp</item>
+    </style>
+
+    <style name="TextAppearance.Clu.Chip" parent="TextAppearance.Material3.LabelMedium">
+        <item name="android:textSize">13sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+
+    <!-- ======================================================== text views -->
+    <style name="Widget.Clu.Headline" parent="">
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Headline</item>
+        <item name="android:textAlignment">viewStart</item>
+    </style>
+
+    <style name="Widget.Clu.Subtitle" parent="">
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Subtitle</item>
+        <item name="android:textAlignment">viewStart</item>
+    </style>
+
+    <style name="Widget.Clu.CardTitle" parent="">
+        <item name="android:textAppearance">@style/TextAppearance.Clu.CardTitle</item>
+        <item name="android:textAlignment">viewStart</item>
+        <item name="android:accessibilityHeading">true</item>
+    </style>
+
+    <style name="Widget.Clu.Body" parent="">
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Body</item>
+        <item name="android:textAlignment">viewStart</item>
+    </style>
+
+    <!-- Explanations and statuses under a control. -->
+    <style name="Widget.Clu.Helper" parent="">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">24dp</item>
+        <item name="android:layout_marginTop">4dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Helper</item>
         <item name="android:textAlignment">viewStart</item>
-        <item name="android:textSize">18sp</item>
-        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="Widget.Clu.FieldLabel" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">16dp</item>
+        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Clu.FieldLabel</item>
+        <item name="android:textAlignment">viewStart</item>
+    </style>
+
+    <style name="Widget.Clu.Divider" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">1dp</item>
+        <item name="android:layout_marginTop">12dp</item>
+        <item name="android:layout_marginBottom">4dp</item>
+        <item name="android:background">?attr/colorOutlineVariant</item>
+    </style>
+
+    <!-- ======================================================== cards -->
+    <!-- Outlined card: 16dp corners, no elevation, 1dp outline, 12dp from the card above. -->
+    <style name="Widget.Clu.Card" parent="Widget.Material3.CardView.Outlined">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">12dp</item>
+        <item name="cardCornerRadius">16dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="cardBackgroundColor">?attr/colorSurfaceContainer</item>
+        <item name="strokeColor">?attr/colorOutlineVariant</item>
+        <item name="strokeWidth">1dp</item>
+    </style>
+
+    <!-- The amber card that asks for the overlay permission while it is missing. -->
+    <style name="Widget.Clu.Card.Warning">
+        <item name="cardBackgroundColor">?attr/colorTertiaryContainer</item>
+        <item name="strokeColor">?attr/colorTertiary</item>
+    </style>
+
+    <!-- Icon and title at the top of a card. -->
+    <style name="Widget.Clu.CardHeader" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginBottom">4dp</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:minHeight">40dp</item>
+    </style>
+
+    <style name="Widget.Clu.CardIcon" parent="">
+        <item name="android:layout_width">36dp</item>
+        <item name="android:layout_height">36dp</item>
+        <item name="android:layout_marginEnd">12dp</item>
+        <item name="android:padding">8dp</item>
+        <item name="android:background">@drawable/bg_card_icon</item>
+        <item name="android:importantForAccessibility">no</item>
+        <item name="android:tint">?attr/colorOnPrimaryContainer</item>
+    </style>
+
+    <!-- ======================================================== controls -->
+    <style name="Widget.Clu.Switch" parent="Widget.Material3.CompoundButton.MaterialSwitch">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingTop">4dp</item>
+        <item name="android:paddingBottom">4dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Body</item>
+        <item name="android:textAlignment">viewStart</item>
+        <item name="switchPadding">16dp</item>
+    </style>
+
+    <style name="Widget.Clu.RadioButton" parent="Widget.Material3.CompoundButton.RadioButton">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Body</item>
+        <item name="android:textAlignment">viewStart</item>
+    </style>
+
+    <style name="Widget.Clu.TextInputLayout" parent="Widget.Material3.TextInputLayout.OutlinedBox">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">16dp</item>
+        <item name="boxCornerRadiusTopStart">12dp</item>
+        <item name="boxCornerRadiusTopEnd">12dp</item>
+        <item name="boxCornerRadiusBottomStart">12dp</item>
+        <item name="boxCornerRadiusBottomEnd">12dp</item>
+    </style>
+
+    <!-- Same height, outline and corners as the text fields; the arrow is part of the background. -->
+    <style name="Widget.Clu.Spinner" parent="Widget.AppCompat.Spinner">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">56dp</item>
+        <item name="android:background">@drawable/bg_spinner</item>
+        <item name="android:popupBackground">@drawable/bg_spinner_popup</item>
+    </style>
+
+    <!-- Status next to the app name; MainActivity colors it (StatusChip.kt). -->
+    <style name="Widget.Clu.Chip.Status" parent="Widget.Material3.Chip.Assist">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">8dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Chip</item>
+        <item name="android:clickable">false</item>
+        <item name="android:focusable">false</item>
+        <item name="chipMinHeight">28dp</item>
+        <item name="chipStrokeWidth">0dp</item>
+        <item name="chipIcon">@drawable/ic_status_dot</item>
+        <item name="chipIconSize">8dp</item>
+        <item name="ensureMinTouchTargetSize">false</item>
+    </style>
+
+    <!-- ======================================================== buttons -->
+    <!-- The two big buttons under the header. -->
+    <style name="Widget.Clu.Button.Hero" parent="Widget.Material3.Button">
+        <item name="android:minHeight">56dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Button.Hero</item>
+        <item name="iconGravity">textStart</item>
+        <item name="iconPadding">8dp</item>
+    </style>
+
+    <style name="Widget.Clu.Button.Hero.Tonal" parent="Widget.Material3.Button.TonalButton">
+        <item name="android:minHeight">56dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Button.Hero</item>
+        <item name="backgroundTint">?attr/colorPrimaryContainer</item>
+        <item name="android:textColor">?attr/colorOnPrimaryContainer</item>
+        <item name="iconTint">?attr/colorOnPrimaryContainer</item>
+        <item name="iconGravity">textStart</item>
+        <item name="iconPadding">8dp</item>
+    </style>
+
+    <!-- The permission button inside the amber card. -->
+    <style name="Widget.Clu.Button.Warning" parent="Widget.Material3.Button">
+        <item name="android:minHeight">52dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Button</item>
+        <item name="backgroundTint">?attr/colorTertiary</item>
+        <item name="android:textColor">?attr/colorOnTertiary</item>
+        <item name="iconTint">?attr/colorOnTertiary</item>
+        <item name="iconGravity">textStart</item>
+        <item name="iconPadding">8dp</item>
+    </style>
+
+    <style name="Widget.Clu.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Button</item>
+    </style>
+
+    <!-- The start margin cancels the 12dp padding inside a text button, so its text lines up with the card's text. -->
+    <style name="Widget.Clu.Button.Text" parent="Widget.Material3.Button.TextButton">
+        <item name="android:layout_marginStart">-12dp</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Clu.Button</item>
+    </style>
+
+    <!-- Clearing something: the error color, dimmed when there is nothing to clear. -->
+    <style name="Widget.Clu.Button.Destructive" parent="Widget.Clu.Button.Text">
+        <item name="android:textColor">@color/clu_destructive_foreground</item>
+        <item name="rippleColor">@color/clu_destructive_ripple</item>
     </style>
 </resources>

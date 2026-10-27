@@ -14,6 +14,5 @@
     android:paddingBottom="8dp"
     android:singleLine="false"
     android:textAlignment="viewStart"
-    android:textColor="?android:attr/textColorPrimary"
-    android:textDirection="anyRtl"
-    android:textSize="15sp" />
+    android:textAppearance="@style/TextAppearance.Clu.Body"
+    android:textDirection="anyRtl" />

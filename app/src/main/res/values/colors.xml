@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Clu palette, light. Indigo is the app; amber is the spark, used sparingly (warnings, the one accent).
+    The dark values of every name are in values-night/colors.xml; Theme.Clu maps them to Material 3 roles.
+    Two outline tones, as in Material 3: clu_outline for what must be seen (text fields, switches, the
+    spinner), clu_outline_variant for what only separates (card borders, dividers).
+-->
+<resources>
+    <color name="clu_primary">#4F46E5</color>
+    <color name="clu_on_primary">#FFFFFF</color>
+    <color name="clu_primary_container">#E0E7FF</color>
+    <color name="clu_on_primary_container">#1E1B4B</color>
+
+    <color name="clu_secondary">#6366F1</color>
+    <color name="clu_on_secondary">#FFFFFF</color>
+    <color name="clu_secondary_container">#EEF0FF</color>
+    <color name="clu_on_secondary_container">#1E1B4B</color>
+
+    <color name="clu_tertiary">#F59E0B</color>
+    <color name="clu_on_tertiary">#1F1300</color>
+    <color name="clu_tertiary_container">#FEF3C7</color>
+    <color name="clu_on_tertiary_container">#451A03</color>
+
+    <color name="clu_background">#F8F8FC</color>
+    <color name="clu_surface">#F8F8FC</color>
+    <color name="clu_on_surface">#14142B</color>
+    <color name="clu_surface_variant">#EEF0F6</color>
+    <color name="clu_on_surface_variant">#5B5E78</color>
+    <color name="clu_surface_container_lowest">#FFFFFF</color>
+    <color name="clu_surface_container_low">#FBFBFE</color>
+    <color name="clu_surface_container">#FFFFFF</color>
+    <color name="clu_surface_container_high">#FFFFFF</color>
+    <color name="clu_surface_container_highest">#F2F3FA</color>
+    <color name="clu_inverse_surface">#2A2B45</color>
+    <color name="clu_inverse_on_surface">#F1F1FA</color>
+    <color name="clu_inverse_primary">#A5B4FC</color>
+
+    <color name="clu_outline">#8E91AD</color>
+    <color name="clu_outline_variant">#D4D6E4</color>
+
+    <color name="clu_error">#DC2626</color>
+    <color name="clu_on_error">#FFFFFF</color>
+    <color name="clu_error_container">#FEE2E2</color>
+    <color name="clu_on_error_container">#7F1D1D</color>
+
+    <!-- "Running": the status chip next to the app name. -->
+    <color name="clu_success">#16A34A</color>
+    <color name="clu_success_container">#DCFCE7</color>
+    <color name="clu_on_success_container">#14532D</color>
+
+    <!-- The manual calibration screen is dark in both themes (it shows a capture); its system bars match. -->
+    <color name="clu_calibration_background">#121212</color>
+</resources>
