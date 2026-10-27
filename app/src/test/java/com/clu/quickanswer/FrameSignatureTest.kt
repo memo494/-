@@ -222,6 +222,15 @@ class FrameSignatureTest {
         assertTrue(FrameSignature.TICK_MS in 250L..1000L)
     }
 
+    /** A question that holds still is sent on the second tick: within 0.8 s of appearing. */
+    @Test
+    fun auto_aSettledQuestionIsSentWithinEightTenthsOfASecond() {
+        val run = AutoRun(::frameSig)
+        val verdicts = run.ticks(game(banner = 30, options = 180), 2)
+        assertEquals(listOf(Verdict.WAIT, Verdict.SEND), verdicts)
+        assertTrue("sent after ${verdicts.size * tickMs} ms", verdicts.size * tickMs <= 800L)
+    }
+
     @Test
     fun auto_newQuestionUnderTheVisiblePanel_hidesThenSendsTheCleanFrameOnce() {
         val a = game(banner = 30, options = 180)
@@ -259,12 +268,14 @@ class FrameSignatureTest {
             assertEquals(Verdict.IDLE, run.tick(bannerOnly))
             idleTicks++
         }
-        assertEquals("every tick until the panel's 15 s are up", (panelMs / tickMs).toInt() - 1, idleTicks)
+        // Ticks strictly before the deadline (15 s need not be a whole number of ticks).
+        val ticksToDeadline = (panelMs + tickMs - 1) / tickMs
+        assertEquals("every tick until the panel's 15 s are up", (ticksToDeadline - 1).toInt(), idleTicks)
 
         // ... but the 15 s auto-hide uncovers it (the tick at the deadline sees a frame without the
         // panel, not comparable to the one before), and it is sent one tick later.
         assertEquals(listOf(Verdict.WAIT, Verdict.SEND), run.ticks(bannerOnly, 2))
-        assertEquals(firstSendAt + panelMs + tickMs, run.lastSendAt)
+        assertEquals(firstSendAt + (ticksToDeadline + 1) * tickMs, run.lastSendAt)
         assertEquals(2, run.sends)
         assertEquals(0, run.hides)
     }
@@ -310,14 +321,14 @@ class FrameSignatureTest {
         var appearedAt = run.now
         assertEquals(listOf(Verdict.HIDE_PANEL, Verdict.WAIT, Verdict.SEND), run.ticks(b, 3))
         assertEquals(3 * tickMs, run.lastSendAt - appearedAt)
-        assertEquals(1_500L, run.lastSendAt - appearedAt)
+        assertEquals(1_200L, run.lastSendAt - appearedAt) // at 400 ms ticks
 
         // Without a panel (it timed out): the first tick sees the change, the second finds it stable.
         while (run.panelUp) assertEquals(Verdict.IDLE, run.tick(b))
         assertEquals(Verdict.IDLE, run.tick(b))
         appearedAt = run.now
         assertEquals(listOf(Verdict.WAIT, Verdict.SEND), run.ticks(c, 2))
-        assertEquals(1_000L, run.lastSendAt - appearedAt)
+        assertEquals(800L, run.lastSendAt - appearedAt) // at 400 ms ticks
 
         // And exactly one send per question, however long the screen then stays the same.
         assertTrue(run.ticks(c, 100).all { it == Verdict.IDLE })
