@@ -6,6 +6,15 @@ import kotlin.math.abs
 
 /** A completed Android gesture is insufficient: the visible field must contain every expected digit. */
 object NumericEntryCheck {
+    /**
+     * Read-back before confirming a typed number: up to this many reads, [READBACK_INTERVAL_MS]
+     * apart, starting [com.clu.quickanswer.TapSequence.SUBMIT_GAP_MS] after the last digit's UP.
+     * Short steps answer as soon as the game has drawn the digit; together they still cover about a
+     * third of a second (five frames at 15 fps), as the old 3 x 120 ms did.
+     */
+    const val READBACK_ATTEMPTS = 6
+    const val READBACK_INTERVAL_MS = 60L
+
     /** Flat empty fields are valid baselines too; identical low-contrast placeholders are not changes. */
     fun fieldChanged(reference: IntArray, current: IntArray): Boolean {
         if (reference.size != TouchFrameGuard.WIDTH * TouchFrameGuard.HEIGHT || current.size != reference.size ||

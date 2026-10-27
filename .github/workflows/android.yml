@@ -9,11 +9,16 @@ on:
         type: boolean
         required: false
         default: false
+  # Every pull request, whatever its base: build and unit tests must pass before merging.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: write
+
+# A new push to a pull request cancels its older, now pointless run. Manual release runs never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -67,6 +72,13 @@ jobs:
           except OSError:
               pass
           PY
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
       # The shared APK is the release build: compressed native libraries, same key, not shrunk.
       - name: Build APK
         run: ./gradlew assembleRelease
