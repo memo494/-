@@ -160,6 +160,12 @@ class OverlayService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val handler = Handler(Looper.getMainLooper())
 
+    /**
+     * Warming is asked for on every trigger (bubble, volume key, auto mode seeing a change), so the
+     * first question after a pause does not pay for a cold TLS handshake (~0.3 s); at most once a second.
+     */
+    private val warmUps = WarmUpThrottle(1_000L)
+
     private lateinit var wm: WindowManager
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -582,6 +588,7 @@ class OverlayService : Service() {
     /** Lets the answer provider open its connection early. Never touches the network on the main thread. */
     private fun warmUp() {
         if (projection == null && client == null) return
+        if (!warmUps.tryAcquire(SystemClock.uptimeMillis())) return
         scope.launch(Dispatchers.IO) {
             try {
                 currentClient().warmUp()
@@ -940,6 +947,8 @@ class OverlayService : Service() {
 
     private fun answerNow(trigger: AnswerTrigger = AnswerTrigger.BUBBLE) {
         if (busy || touchPending || destroyed) return
+        // The volume key reaches here without a bubble touch-down: open the connection while we read.
+        warmUp()
         stopResultWatch()
         hiddenAnswer.clear()
         if (panelAdded || preview != null) {
@@ -1328,9 +1337,9 @@ class OverlayService : Service() {
                 it.top < field.bottom && field.top < it.bottom }) { complete(false); return }
         scope.launch {
             // Accessibility's UP may precede the game's next rendered frame. Read again, never retype.
-            repeat(3) { attempt ->
+            repeat(NumericEntryCheck.READBACK_ATTEMPTS) { attempt ->
                 if (destroyed || epoch != touchEpoch) { complete(false); return@launch }
-                if (attempt > 0) delay(120)
+                if (attempt > 0) delay(NumericEntryCheck.READBACK_INTERVAL_MS)
                 grabFrame()
                 val frame = lastFrame
                 val current = frame?.let { fingerprint(it, field, solved.ignoredRects) }
@@ -2401,6 +2410,7 @@ class OverlayService : Service() {
         prevTickSig = sig
         when (verdict) {
             FrameSignature.Verdict.HIDE_PANEL -> if (panelAdded) {
+                warmUp()
                 hiddenAnswer.remember(panelText, panelDeadline, highlightBox)
                 hidePanel()
             }
@@ -2415,7 +2425,8 @@ class OverlayService : Service() {
                     restoreHighlight(it.box)
                 }
             }
-            FrameSignature.Verdict.WAIT -> {}
+            // The screen is changing: a question may be sent within a tick or two.
+            FrameSignature.Verdict.WAIT -> warmUp()
         }
     }
 

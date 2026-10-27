@@ -83,8 +83,10 @@ object ScreenImage {
      * (0-100).
      */
     fun prepare(bitmap: Bitmap, maxSide: Int = 1600, quality: Int = 85): Prepared? {
-        if (isMostlyDark(bitmap)) return null
-        val cropped = cropToContent(bitmap)
+        // One downscaled scan of the capture serves both checks (it was made twice per request).
+        val (w, h, lit) = darkMap(bitmap)
+        if (isMostlyDark(lit)) return null
+        val cropped = cropToContent(bitmap, w, h, lit)
         val geometry = SentGeometry(bitmap.width, bitmap.height, cropped.top, cropped.bottom)
         return encode(cropped.bitmap, maxSide, quality, geometry)
     }
@@ -128,10 +130,7 @@ object ScreenImage {
     }
 
     // A capture limited to one app (Android 14+), or a protected app, comes back black.
-    private fun isMostlyDark(src: Bitmap): Boolean {
-        val (_, _, lit) = darkMap(src)
-        return lit.count { it } < lit.size / 50
-    }
+    internal fun isMostlyDark(lit: BooleanArray): Boolean = lit.count { it } < lit.size / 50
 
     /** What [cropToContent] kept: [bitmap] shows rows [top] (inclusive) until [bottom] of the source. */
     private class Cropped(val bitmap: Bitmap, val top: Int, val bottom: Int)
@@ -141,8 +140,7 @@ object ScreenImage {
      * resolution on the bars, so keep only the tallest band of mostly-lit rows when there is one
      * (see [contentRows]).
      */
-    private fun cropToContent(src: Bitmap): Cropped {
-        val (w, h, lit) = darkMap(src)
+    private fun cropToContent(src: Bitmap, w: Int, h: Int, lit: BooleanArray): Cropped {
         val (top, bottom) = contentRows(lit, w, h, src.height) ?: return Cropped(src, 0, src.height)
         return Cropped(Bitmap.createBitmap(src, 0, top, src.width, bottom - top), top, bottom)
     }
