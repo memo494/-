@@ -18,8 +18,10 @@ internal class TapSequence(
         // Accessibility game taps use 90ms while preserving the explicit UP gap between repeats.
         const val GAME_PRESS_MS = 90L
         const val RELEASE_GAP_MS = 40L
-        // Let the game apply the final digit before its confirmation action is pressed.
-        const val SUBMIT_GAP_MS = 120L
+        // Before the confirmation: just past the final digit's UP. The field is then read back
+        // (NumericEntryCheck.READBACK_*) until it shows the number, so the game's render time is
+        // waited for there, not here; nothing is confirmed unread (was 120 ms of fixed wait).
+        const val SUBMIT_GAP_MS = 40L
         // Give the reset a render interval before the first digit and its field baseline capture.
         const val RESET_GAP_MS = 120L
         // A lost platform callback must not leave auto mode permanently busy or replay a digit.
