@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Light navigation bar icons exist from API 27, so the navigation bar takes the background color only
+    here; API 26 keeps the system's dark bar, whose light icons are readable.
+-->
+<resources>
+    <style name="Theme.Clu" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:navigationBarColor">@color/clu_background</item>
+        <item name="android:windowLightNavigationBar">@bool/clu_light_system_bars</item>
+    </style>
+
+    <style name="Theme.Clu.Calibration" parent="Theme.Clu">
+        <item name="android:navigationBarColor">@color/clu_calibration_background</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

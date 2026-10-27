@@ -1,3 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Theme.Clu: Material 3 with the Clu palette (values/colors.xml, values-night/colors.xml). One definition
+    serves light and dark: the DayNight parent and the colors switch with the night qualifier.
+-->
 <resources>
-    <style name="Theme.Clu" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
+    <style name="Theme.Clu" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/clu_primary</item>
+        <item name="colorOnPrimary">@color/clu_on_primary</item>
+        <item name="colorPrimaryContainer">@color/clu_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/clu_on_primary_container</item>
+        <item name="colorPrimaryInverse">@color/clu_inverse_primary</item>
+
+        <item name="colorSecondary">@color/clu_secondary</item>
+        <item name="colorOnSecondary">@color/clu_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/clu_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/clu_on_secondary_container</item>
+
+        <item name="colorTertiary">@color/clu_tertiary</item>
+        <item name="colorOnTertiary">@color/clu_on_tertiary</item>
+        <item name="colorTertiaryContainer">@color/clu_tertiary_container</item>
+        <item name="colorOnTertiaryContainer">@color/clu_on_tertiary_container</item>
+
+        <item name="colorError">@color/clu_error</item>
+        <item name="colorOnError">@color/clu_on_error</item>
+        <item name="colorErrorContainer">@color/clu_error_container</item>
+        <item name="colorOnErrorContainer">@color/clu_on_error_container</item>
+
+        <item name="android:colorBackground">@color/clu_background</item>
+        <item name="colorOnBackground">@color/clu_on_surface</item>
+        <item name="colorSurface">@color/clu_surface</item>
+        <item name="colorOnSurface">@color/clu_on_surface</item>
+        <item name="colorSurfaceVariant">@color/clu_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/clu_on_surface_variant</item>
+        <item name="colorSurfaceContainerLowest">@color/clu_surface_container_lowest</item>
+        <item name="colorSurfaceContainerLow">@color/clu_surface_container_low</item>
+        <item name="colorSurfaceContainer">@color/clu_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/clu_surface_container_high</item>
+        <item name="colorSurfaceContainerHighest">@color/clu_surface_container_highest</item>
+        <item name="colorSurfaceInverse">@color/clu_inverse_surface</item>
+        <item name="colorOnSurfaceInverse">@color/clu_inverse_on_surface</item>
+        <item name="colorOutline">@color/clu_outline</item>
+        <item name="colorOutlineVariant">@color/clu_outline_variant</item>
+
+        <!-- Plain TextViews and popups follow the palette too, not the Material defaults. -->
+        <item name="android:textColorPrimary">@color/clu_on_surface</item>
+        <item name="android:textColorSecondary">@color/clu_on_surface_variant</item>
+        <item name="android:colorBackgroundFloating">@color/clu_surface_container_high</item>
+
+        <!-- System bars sit on the background, with icons dark on light and light on dark. -->
+        <item name="android:statusBarColor">@color/clu_background</item>
+        <item name="android:windowLightStatusBar">@bool/clu_light_system_bars</item>
+
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.Clu.MaterialAlertDialog</item>
+    </style>
+
+    <!-- Dialogs: Material 3's, on the palette's raised surface. -->
+    <style name="ThemeOverlay.Clu.MaterialAlertDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog" />
+
+    <!-- The welcome dialog: its icon sits on top and the title and text are centered under it. -->
+    <style name="ThemeOverlay.Clu.MaterialAlertDialog.Welcome" parent="ThemeOverlay.Material3.MaterialAlertDialog.Centered" />
+
+    <!-- The manual calibration screen shows a capture on a dark background in both themes. -->
+    <style name="Theme.Clu.Calibration" parent="Theme.Clu">
+        <item name="android:statusBarColor">@color/clu_calibration_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
 </resources>

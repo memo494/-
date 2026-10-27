@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Clu palette, dark: the same names as values/colors.xml. -->
+<resources>
+    <color name="clu_primary">#A5B4FC</color>
+    <color name="clu_on_primary">#1E1B4B</color>
+    <color name="clu_primary_container">#3730A3</color>
+    <color name="clu_on_primary_container">#E0E7FF</color>
+
+    <color name="clu_secondary">#C7D2FE</color>
+    <color name="clu_on_secondary">#1E1B4B</color>
+    <color name="clu_secondary_container">#312E81</color>
+    <color name="clu_on_secondary_container">#E0E7FF</color>
+
+    <color name="clu_tertiary">#FBBF24</color>
+    <color name="clu_on_tertiary">#1F1300</color>
+    <color name="clu_tertiary_container">#78350F</color>
+    <color name="clu_on_tertiary_container">#FEF3C7</color>
+
+    <color name="clu_background">#0E0F1A</color>
+    <color name="clu_surface">#0E0F1A</color>
+    <color name="clu_on_surface">#ECEDF7</color>
+    <color name="clu_surface_variant">#23263A</color>
+    <color name="clu_on_surface_variant">#A3A6C2</color>
+    <color name="clu_surface_container_lowest">#0A0B14</color>
+    <color name="clu_surface_container_low">#131526</color>
+    <color name="clu_surface_container">#181A2B</color>
+    <color name="clu_surface_container_high">#1F2236</color>
+    <color name="clu_surface_container_highest">#262A40</color>
+    <color name="clu_inverse_surface">#ECEDF7</color>
+    <color name="clu_inverse_on_surface">#23263A</color>
+    <color name="clu_inverse_primary">#4F46E5</color>
+
+    <color name="clu_outline">#6A6E90</color>
+    <color name="clu_outline_variant">#34374F</color>
+
+    <color name="clu_error">#F87171</color>
+    <color name="clu_on_error">#450A0A</color>
+    <color name="clu_error_container">#7F1D1D</color>
+    <color name="clu_on_error_container">#FEE2E2</color>
+
+    <color name="clu_success">#4ADE80</color>
+    <color name="clu_success_container">#14532D</color>
+    <color name="clu_on_success_container">#BBF7D0</color>
+
+    <color name="clu_calibration_background">#121212</color>
+</resources>
