@@ -93,4 +93,16 @@ class ScreenImageRowsTest {
         assertNull(rows(map(50 until 150, cells = w / 2)))
         assertEquals(414 to 1386, rows(map(50 until 150, cells = w / 2 + 1)))
     }
+
+    /**
+     * The black-capture check now runs on the same map as the crop (one scan of the capture per
+     * request instead of two): under one lit cell in fifty is "black", as before.
+     */
+    @Test fun aCaptureIsBlackBelowOneLitCellInFifty() {
+        val lit = BooleanArray(w * h)
+        for (i in 0 until lit.size / 50 - 1) lit[i] = true
+        assertEquals(true, ScreenImage.isMostlyDark(lit))
+        lit[lit.size / 50 - 1] = true
+        assertEquals(false, ScreenImage.isMostlyDark(lit))
+    }
 }
