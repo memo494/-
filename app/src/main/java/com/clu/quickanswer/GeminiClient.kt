@@ -6,16 +6,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-private class HttpResult(val code: Int, val body: String)
+/** One HTTP reply: the status [code] and the [body] read to the end. */
+internal class HttpResult(val code: Int, val body: String)
 
 class GeminiClient(apiKey: String, model: String) : Answerer {
 
@@ -34,26 +33,28 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
         private set
 
     /** The model's answer for the screenshot, or a short Arabic error message. Never throws. */
-    override fun answer(bitmap: Bitmap, prompt: ImagePrompt): Reply {
+    override fun answer(bitmap: Bitmap, prompt: ImagePrompt, deadline: AnswerDeadline): Reply {
         return try {
+            // Before the JPEG is encoded: a request that cannot be sent in time costs nothing.
+            if (deadline.expired) return Reply.error(AnswerDeadline.TIMEOUT_TEXT)
             val prepared = ScreenImage.prepare(bitmap, IMAGE_MAX_SIDE, IMAGE_QUALITY)
                 ?: return Reply.error(ScreenImage.BLACK_SCREEN)
             lastSent = prepared.kept
             val b64 = prepared.base64
-            race { m, mode -> imageBody(m, prompt.text, b64, mode) }.toReply()
+            race(deadline) { m, mode -> imageBody(m, prompt.text, b64, mode) }.toReply()
         } catch (e: IOException) {
-            Reply.error(NO_CONNECTION)
+            ioFailure(deadline)
         } catch (e: Exception) {
             Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
         }
     }
 
     /** A question already read on the device: text only, no image (fewer tokens, faster). */
-    override fun answerText(prompt: String): Reply {
+    override fun answerText(prompt: String, deadline: AnswerDeadline): Reply {
         return try {
-            race(TEXT_PRIMARY_WAIT_MS) { m, mode -> textBody(m, prompt, mode) }.toReply()
+            race(deadline, TEXT_PRIMARY_WAIT_MS) { m, mode -> textBody(m, prompt, mode) }.toReply()
         } catch (e: IOException) {
-            Reply.error(NO_CONNECTION)
+            ioFailure(deadline)
         } catch (e: Exception) {
             Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
         }
@@ -64,14 +65,15 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
      * prompt and the picture in ONE request, through the same [race] as the others. [lastSent] is the
      * picture as sent.
      */
-    override fun answerPicture(prompt: String, picture: Bitmap): Reply {
+    override fun answerPicture(prompt: String, picture: Bitmap, deadline: AnswerDeadline): Reply {
         return try {
+            if (deadline.expired) return Reply.error(AnswerDeadline.TIMEOUT_TEXT)
             val prepared = ScreenImage.preparePicture(picture)
             lastSent = prepared.kept
             val b64 = prepared.base64
-            race { m, mode -> GeminiRequests.pictureBody(m, prompt, b64, mode) }.toReply()
+            race(deadline) { m, mode -> GeminiRequests.pictureBody(m, prompt, b64, mode) }.toReply()
         } catch (e: IOException) {
-            Reply.error(NO_CONNECTION)
+            ioFailure(deadline)
         } catch (e: Exception) {
             Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
         }
@@ -89,7 +91,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
             if (apiKey.isEmpty() || quota.isBlocked(model)) return null
             val prepared = ScreenImage.prepare(bitmap, IMAGE_MAX_SIDE, IMAGE_QUALITY) ?: return null
             val b64 = prepared.base64
-            val res = ask(model) { mode -> GeminiRequests.layoutBody(model, b64, mode) }
+            val res = ask(model, null) { mode -> GeminiRequests.layoutBody(model, b64, mode) }
             if (res.code !in 200..299) return null
             val text = replyText(res.body) ?: return null
             LayoutAnswer(text, prepared.geometry)
@@ -102,7 +104,8 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
 
     /**
      * What [race] ended with: the answer ([ok]), or a short Arabic error. [final] marks errors that
-     * would hit any other request too (quota, key, region), so trying the image instead is pointless.
+     * would hit any other request too (quota, key, region, out of time), so trying the image instead
+     * is pointless.
      */
     private class Outcome(val text: String, val ok: Boolean, val final: Boolean)
 
@@ -113,96 +116,40 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
     }
 
     /**
-     * Asks the models for one request whose body [body] builds per model and thinking mode.
-     *
-     * Free-tier models are often overloaded (503) or out of quota (429), and quota is per model. The
-     * first model goes alone, so a healthy call costs exactly one request (free-tier quota is counted
-     * per request). Fallbacks start only if it fails fast or is still silent after PRIMARY_WAIT_MS;
-     * then a few models run at once and the first answer wins. Models the quota tracker knows are out
-     * of quota are skipped, and if the user's own model is one of them the first free fallback starts
-     * straight away.
+     * A connection that failed. Out of time is not "no connection": the capped socket timeouts and the
+     * calls not started because the budget was spent all end here as IOExceptions.
      */
-    private fun race(primaryWaitMs: Long = PRIMARY_WAIT_MS, body: (String, ThinkingMode) -> String): Outcome {
-        val started = SystemClock.elapsedRealtime()
-        // What each model did, for the diagnostic log: "model:code:ms" (code 0 = no reply, an exception).
-        val trace = java.util.Collections.synchronizedList(ArrayList<String>())
-        fun timed(m: String, call: () -> HttpResult): HttpResult {
-            val t0 = SystemClock.elapsedRealtime()
-            val r = try { call() } catch (e: Exception) { trace.add("$m:0:${SystemClock.elapsedRealtime() - t0}"); throw e }
-            trace.add("$m:${r.code}:${SystemClock.elapsedRealtime() - t0}")
-            return r
-        }
-        fun logTrace() = DiagLog.add("Gemini ${SystemClock.elapsedRealtime() - started}ms: " +
-            synchronized(trace) { trace.joinToString(" ") }.ifEmpty { "-" })
+    private fun ioFailure(deadline: AnswerDeadline): Reply =
+        Reply.error(if (deadline.expired) AnswerDeadline.TIMEOUT_TEXT else NO_CONNECTION)
+
+    /**
+     * Asks the models for one request whose body [body] builds per model and thinking mode, within
+     * [deadline]. The race itself (first model alone, fallbacks after a failure or [primaryWaitMs],
+     * quota-blocked models skipped, the deadline, cancelling the losers) is [ModelRace]; if the user's
+     * own model is blocked the first free fallback starts straight away (see [GeminiModels.plan]).
+     * A timeout is final: the image request after a text one would have no time left either.
+     */
+    private fun race(
+        deadline: AnswerDeadline,
+        primaryWaitMs: Long = PRIMARY_WAIT_MS,
+        body: (String, ThinkingMode) -> String,
+    ): Outcome {
         val plan = GeminiModels.plan(model) { quota.isBlocked(it) }
-        val done = ExecutorCompletionService<Pair<String, HttpResult>>(POOL)
-        val fallbacks = plan.fallbacks.toMutableList()
-        var outstanding = 0
-        var primaryInFlight = true
-        var fannedOut = false
-        fun extrasInFlight() = outstanding - if (primaryInFlight) 1 else 0
-        fun launchNext(): Boolean {
-            while (fallbacks.isNotEmpty()) {
-                val m = fallbacks.removeAt(0)
-                // A 429 seen since the plan was made may have blocked this one.
-                if (quota.isBlocked(m)) continue
-                done.submit { m to timed(m) { ask(m) { mode -> body(m, mode) } } }
-                outstanding++
-                return true
-            }
-            return false
-        }
-        fun fanOut() {
-            fannedOut = true
-            while (extrasInFlight() < MAX_EXTRA_IN_FLIGHT && launchNext()) { /* keep launching */ }
-        }
-        done.submit { plan.first to timed(plan.first) { ask(plan.first) { mode -> body(plan.first, mode) } } }
-        outstanding++
-        val errors = mutableListOf<Pair<String, HttpResult>>()
-        while (true) {
-            if (outstanding == 0) {
-                fanOut()
-                if (outstanding == 0) break
-                continue
-            }
-            val future = if (!fannedOut) {
-                done.poll(primaryWaitMs, TimeUnit.MILLISECONDS)
-            } else {
-                done.take()
-            }
-            if (future == null) {
-                fanOut()
-                continue
-            }
-            outstanding--
-            val (m, res) = try {
-                future.get()
-            } catch (e: ExecutionException) {
-                logTrace()
-                throw e.cause ?: e
-            }
-            if (m == plan.first) primaryInFlight = false
-            if (res.code in 200..299) {
-                val text = handle(res)
-                if (text != EMPTY) {
-                    lastModel = m
-                    logTrace()
-                    return Outcome(text, ok = true, final = false)
-                }
-            }
-            errors += m to res
-            if (isKeyOrRegionError(res)) { logTrace(); return Outcome("$m: ${handle(res)}", ok = false, final = true) }
-            // After the first failure keep up to MAX_EXTRA_IN_FLIGHT fallbacks running.
-            fanOut()
-        }
-        logTrace()
-        // Every model that was asked is out of free quota (404s only mean "no such model").
-        val real = errors.filter { it.second.code != 404 }
-        if (real.isNotEmpty() && real.all { it.second.code == 429 }) return Outcome(ALL_QUOTA, ok = false, final = true)
-        // Report the most telling error: the user's own model first, never a missing model (404).
-        val (m, res) = errors.sortedBy { (em, er) -> (if (er.code == 404) 2 else 0) + (if (em == model) 0 else 1) }
-            .first()
-        return Outcome("$m: ${handle(res)}", ok = false, final = false)
+        val result = ModelRace(
+            executor = POOL,
+            clock = SystemClock::elapsedRealtime,
+            first = plan.first,
+            fallbacks = plan.fallbacks,
+            preferred = model,
+            isBlocked = { quota.isBlocked(it) },
+            ask = { m -> ask(m, deadline) { mode -> body(m, mode) } },
+            primaryWaitMs = primaryWaitMs,
+            maxExtraInFlight = MAX_EXTRA_IN_FLIGHT,
+            deadline = deadline,
+        ).run()
+        if (result.timedOut) return Outcome(AnswerDeadline.TIMEOUT_TEXT, ok = false, final = true)
+        if (result.ok) lastModel = result.model
+        return Outcome(result.text, result.ok, result.final)
     }
 
     /**
@@ -272,17 +219,20 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
      * mode becomes the one to start with), even if the retry then fails for another reason (429, 503,
      * timeout); a vaguer "invalid argument" is only remembered once a retry succeeds. A 429 blocks the
      * model (and its quota group) for the retryDelay Google gave.
+     *
+     * Every request, the detour's retries included, is cut to [deadline] (null: none, for background
+     * work) and not started at all once it has passed: [call] then throws a SocketTimeoutException.
      */
-    private fun ask(m: String, body: (ThinkingMode) -> String): HttpResult {
+    private fun ask(m: String, deadline: AnswerDeadline?, body: (ThinkingMode) -> String): HttpResult {
         val known = GeminiModels.thinkingModeFor(m, thinking.snapshot())
         val first = if (known == ThinkingMode.UNKNOWN) ThinkingMode.MINIMAL else known
         var mode = first
-        var res = post(m, body(mode))
+        var res = post(m, body(mode), deadline)
         while (isThinkingError(res)) {
             val named = GeminiModels.namesThinkingOption(errorMessage(res.body))
             mode = GeminiModels.nextThinkingMode(m, mode) ?: break
             if (named) thinking.learn(m, mode)
-            res = post(m, body(mode))
+            res = post(m, body(mode), deadline)
         }
         if (res.code in 200..299) {
             quota.clear(m)
@@ -293,36 +243,11 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
         return res
     }
 
-    private fun post(m: String, body: String): HttpResult =
-        call("$BASE_URL/models/$m:generateContent", apiKey, body)
+    private fun post(m: String, body: String, deadline: AnswerDeadline?): HttpResult =
+        call("$BASE_URL/models/$m:generateContent", apiKey, body, deadline)
 
     private fun isThinkingError(res: HttpResult): Boolean =
         res.code == 400 && !isKeyOrRegionError(res) && GeminiModels.isThinkingError(errorMessage(res.body))
-
-    private fun isKeyOrRegionError(res: HttpResult): Boolean = isKeyOrRegionError(res.code, res.body)
-
-    private fun handle(res: HttpResult): String {
-        if (res.code !in 200..299) return errorText(res.code, res.body)
-        return replyText(res.body) ?: EMPTY
-    }
-
-    /**
-     * The text of a 2xx reply [body]: the parts of the first candidate that are not the model's
-     * thoughts, joined and trimmed. Null when there is none.
-     */
-    private fun replyText(body: String): String? {
-        val candidates = JSONObject(body).optJSONArray("candidates")
-        if (candidates == null || candidates.length() == 0) return null
-        val partsArr = candidates.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts")
-            ?: return null
-        val sb = StringBuilder()
-        for (i in 0 until partsArr.length()) {
-            val part = partsArr.getJSONObject(i)
-            if (part.optBoolean("thought", false)) continue
-            sb.append(part.optString("text", ""))
-        }
-        return sb.toString().trim().ifEmpty { null }
-    }
 
     /** Result of [fetchModelIds]: the ids on success, otherwise a short Arabic error. */
     class ModelsResult(val ids: List<String>?, val error: String?)
@@ -360,9 +285,14 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
             Thread(r, "gemini").apply { isDaemon = true }
         }
 
-        private const val EMPTY = "لم يتم الحصول على إجابة"
+        // Per HTTP call; cut to what is left of the answer's deadline (see AnswerDeadline.capTimeoutMs).
+        private const val CONNECT_TIMEOUT_MS = 10_000
+        private const val READ_TIMEOUT_MS = 30_000
+
+        // Internal: ModelRace picks the outcome from these.
+        internal const val EMPTY = "لم يتم الحصول على إجابة"
         private const val NO_CONNECTION = "لا يوجد اتصال"
-        private const val ALL_QUOTA = "انتهى الحد المجاني لكل النماذج حاليًا — جرّب لاحقًا أو استخدم Claude"
+        internal const val ALL_QUOTA = "انتهى الحد المجاني لكل النماذج حاليًا — جرّب لاحقًا أو استخدم Claude"
 
         /**
          * One request. The body is read to the end and the stream closed on every path, and the
@@ -370,21 +300,26 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
          * for the next call (a cold handshake costs ~0.4 s, a warm one ~0.1 s). No streaming mode on
          * purpose: a buffered body lets the platform retry silently if the server dropped an idle
          * pooled connection.
+         *
+         * With a [deadline] (an answer's) the timeouts are cut to what is left of it, and nothing is
+         * sent once it has passed: a SocketTimeoutException, like a call that ran out of time. Without
+         * one (warm-up, model list, background learning) the plain timeouts apply.
          */
-        private fun call(url: String, apiKey: String, body: String?): HttpResult {
+        private fun call(url: String, apiKey: String, body: String?, deadline: AnswerDeadline? = null): HttpResult {
+            if (deadline != null && deadline.expired) throw SocketTimeoutException("answer deadline passed")
             inFlight.incrementAndGet()
             try {
-                return callOnce(url, apiKey, body)
+                return callOnce(url, apiKey, body, deadline)
             } finally {
                 inFlight.decrementAndGet()
             }
         }
 
-        private fun callOnce(url: String, apiKey: String, body: String?): HttpResult {
+        private fun callOnce(url: String, apiKey: String, body: String?, deadline: AnswerDeadline?): HttpResult {
             val conn = URL(url).openConnection() as HttpURLConnection
             try {
-                conn.connectTimeout = 10_000
-                conn.readTimeout = 30_000
+                conn.connectTimeout = deadline?.capTimeoutMs(CONNECT_TIMEOUT_MS) ?: CONNECT_TIMEOUT_MS
+                conn.readTimeout = deadline?.capTimeoutMs(READ_TIMEOUT_MS) ?: READ_TIMEOUT_MS
                 conn.setRequestProperty("x-goog-api-key", apiKey)
                 if (body != null) {
                     conn.requestMethod = "POST"
@@ -432,6 +367,32 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
                 ModelsResult(null, "خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
             }
         }
+
+        /**
+         * The text of a 2xx reply [body]: the parts of the first candidate that are not the model's
+         * thoughts, joined and trimmed. Null when there is none.
+         */
+        internal fun replyText(body: String): String? {
+            val candidates = JSONObject(body).optJSONArray("candidates")
+            if (candidates == null || candidates.length() == 0) return null
+            val partsArr = candidates.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts")
+                ?: return null
+            val sb = StringBuilder()
+            for (i in 0 until partsArr.length()) {
+                val part = partsArr.getJSONObject(i)
+                if (part.optBoolean("thought", false)) continue
+                sb.append(part.optString("text", ""))
+            }
+            return sb.toString().trim().ifEmpty { null }
+        }
+
+        /** What [res] means as text: the model's answer ([EMPTY] if a 2xx reply has none), or a short Arabic error. */
+        internal fun handle(res: HttpResult): String {
+            if (res.code !in 200..299) return errorText(res.code, res.body)
+            return replyText(res.body) ?: EMPTY
+        }
+
+        internal fun isKeyOrRegionError(res: HttpResult): Boolean = isKeyOrRegionError(res.code, res.body)
 
         private fun errorMessage(body: String): String = try {
             JSONObject(body).optJSONObject("error")?.optString("message") ?: ""

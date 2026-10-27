@@ -1,6 +1,7 @@
 package com.clu.quickanswer
 
 import android.graphics.Bitmap
+import android.os.SystemClock
 import com.clu.quickanswer.ocr.LayoutPrompt
 import com.clu.quickanswer.ocr.SentGeometry
 
@@ -44,28 +45,42 @@ enum class ImagePrompt(val text: String) {
     GENERAL(ScreenImage.GENERAL_PROMPT)
 }
 
+/**
+ * A fresh answer budget starting now, on the device's monotonic clock. The default of every
+ * [Answerer] call that has no deadline from its caller; [OverlayService] makes one per question and
+ * passes it through so the reading, the text request and the image request share one budget.
+ */
+fun newAnswerDeadline(): AnswerDeadline = AnswerDeadline.start(SystemClock::elapsedRealtime)
+
 interface Answerer {
     /**
      * Asks about the whole screenshot with [prompt]. [Reply.text] is the short answer, or a short
-     * Arabic error message ([Reply.kind] tells which). Never throws.
+     * Arabic error message ([Reply.kind] tells which). Never throws. Gives up at [deadline]: no
+     * request starts after it and none waits past it, and the reply is then the error
+     * [AnswerDeadline.TIMEOUT_TEXT] (an [Reply.Kind.ERROR], so no other request is tried).
      */
-    fun answer(bitmap: Bitmap, prompt: ImagePrompt = ImagePrompt.GENERAL): Reply
+    fun answer(
+        bitmap: Bitmap,
+        prompt: ImagePrompt = ImagePrompt.GENERAL,
+        deadline: AnswerDeadline = newAnswerDeadline(),
+    ): Reply
 
     /**
      * Asks a question that was already read off the screen (see [QuestionPrompt]); no image is
-     * sent. Same models, quota handling and fallbacks as [answer]. Never throws.
+     * sent. Same models, quota handling, fallbacks and [deadline] as [answer]. Never throws.
      */
-    fun answerText(prompt: String): Reply
+    fun answerText(prompt: String, deadline: AnswerDeadline = newAnswerDeadline()): Reply
 
     /**
      * Asks a question that was already read off the screen and shows a picture: [prompt] (see
      * [QuestionPrompt.buildPicture]) and the [picture] (a crop of the screen, scaled and encoded here,
      * see [ScreenImage.preparePicture]) in ONE request. Same models, quota handling, fallbacks and
-     * error mapping as [answerText]; [lastSent] becomes the picture as sent. Never throws.
+     * error mapping and [deadline] as [answerText]; [lastSent] becomes the picture as sent. Never throws.
      *
      * Default: not supported, an [Reply.Kind.EMPTY] reply, so the caller falls back to the screenshot.
      */
-    fun answerPicture(prompt: String, picture: Bitmap): Reply = Reply.empty("")
+    fun answerPicture(prompt: String, picture: Bitmap, deadline: AnswerDeadline = newAnswerDeadline()): Reply =
+        Reply.empty("")
 
     /**
      * Asks for the screen's layout: the screenshot together with [LayoutPrompt.TEXT], so a template

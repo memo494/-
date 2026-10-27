@@ -65,12 +65,14 @@ import com.clu.quickanswer.ocr.TemplateLearner
 import com.clu.quickanswer.ocr.TemplateReader
 import com.clu.quickanswer.ocr.TemplateState
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -78,6 +80,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.min
@@ -92,6 +95,13 @@ class OverlayService : Service() {
 
         /** Before touching: at most this many [CLEAN_POLL_MS] waits for a frame without the panel. */
         private const val CLEAN_TOUCH_POLLS = 15
+
+        /**
+         * How long past [AnswerDeadline.BUDGET_MS] sendFrame waits for the answer before it gives up on it.
+         * The clients stop at the budget themselves and say so, and that message should normally be the
+         * one shown, so this guard (for a hang the clients' timeouts do not catch) waits a little longer.
+         */
+        private const val ANSWER_GUARD_GRACE_MS = 1_000L
 
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
@@ -1012,6 +1022,8 @@ class OverlayService : Service() {
         val capturedH = bmp.height
         // Monotonic, so a clock change cannot give a negative time; includes reading, memory and the network.
         val started = SystemClock.elapsedRealtime()
+        // One budget for the whole answer: reading, the text request and the image request share it.
+        val deadline = newAnswerDeadline()
         val maskRects = captureMasks.remove(bmp).orEmpty()
         val masks = maskRects.map { PxRect(it.left, it.top, it.right, it.bottom) }
         val capturedEpoch = touchEpoch
@@ -1027,15 +1039,21 @@ class OverlayService : Service() {
                 }
             } else null
             setBusy(true)
+            // Set when this question is given up on (see below): its late result may then only clean up.
+            val abandoned = AtomicBoolean(false)
             scope.launch {
             try {
-                val solved = withContext(Dispatchers.IO) {
+                // The work is its own coroutine, so that the wait for it can be bounded. It is not
+                // cancelled when the wait ends: its thread could not be interrupted anyway, and it
+                // recycles [bmp] itself when it returns.
+                val work = scope.async(Dispatchers.IO) {
                     try {
-                        solve(bmp, masks, bypass).let {
+                        solve(bmp, masks, bypass, deadline).let {
                             if (touchRequested && it.isAnswer) prepareTouches(it, bmp, masks) else it
                         }.also {
                             // For "معايرة يدوية": not a screen auto mode found to be something else (settings, shade).
-                            if (!(fromAuto && ScreenImage.isNoQuestion(it.text))) LastCapture.set(bmp, masks)
+                            // Not a late result either: it would replace the capture of a newer question.
+                            if (!abandoned.get() && !(fromAuto && ScreenImage.isNoQuestion(it.text))) LastCapture.set(bmp, masks)
                         }
                     } catch (e: Throwable) {
                         Solved(
@@ -1045,6 +1063,31 @@ class OverlayService : Service() {
                     } finally {
                         bmp.recycle()
                     }
+                }
+                // The clients stop at the deadline themselves and say so; this wait ends a little after
+                // it, for whatever they do not catch (a stuck reader, a socket that ignores its timeout).
+                val solved = withTimeoutOrNull(AnswerDeadline.BUDGET_MS + ANSWER_GUARD_GRACE_MS) { work.await() }
+                if (solved == null) {
+                    // Out of time. From here on this question is over: the bubble is free (the finally
+                    // below releases it), the panel says so, and auto mode counts it as a failed
+                    // question. The late result touches nothing but its learning frame, which is ours to
+                    // recycle: no panel, no memory key, no result watch, no touches, so it can never act
+                    // on a newer question.
+                    abandoned.set(true)
+                    scope.launch(Dispatchers.IO) {
+                        runCatching { work.await() }.getOrNull()?.learn?.let { dropLearning(it) }
+                    }
+                    DiagLog.add("انتهى وقت الجواب بعد ${SystemClock.elapsedRealtime() - started}ms، والنتيجة المتأخرة تُهمل")
+                    if (destroyed) return@launch
+                    if (sig != null) {
+                        lastSentSig = sig
+                        autoRetry.record(sig, true, SystemClock.uptimeMillis())
+                    }
+                    StatsStore.record(AnswerSource.FAILED, SystemClock.elapsedRealtime() - started)
+                    lastHitKey = null
+                    lastHitAt = 0L
+                    showPanel(AnswerDeadline.TIMEOUT_TEXT)
+                    return@launch
                 }
                 if (destroyed) {
                     solved.learn?.let { dropLearning(it) }
@@ -1648,8 +1691,11 @@ class OverlayService : Service() {
      * 2. Otherwise, or when the text answer cannot be used, send the screenshot as before. If the
      *    question was read, an image answer that names one of its options still gets the box and is
      *    remembered. A correction goes straight here: the text request would get the same reply again.
+     *
+     * Both requests share [deadline]: when it runs out they answer with the timeout error, which ends
+     * the question (see [Reply.Kind.ERROR]).
      */
-    private fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?): Solved {
+    private fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?, deadline: AnswerDeadline): Solved {
         val c = currentClient()
         val memory = AnswerStore.memory
         val read = if (Prefs.smartReading(this)) readQuestion(bmp, masks) else DeviceRead(null)
@@ -1699,7 +1745,7 @@ class OverlayService : Service() {
                         return resolved(r, shownCopy(bmp), AnswerSource.MEMORY, reply = hit.answer, key = hit.key)
                     }
                 }
-                val reply = c.answerText(QuestionPrompt.build(q))
+                val reply = c.answerText(QuestionPrompt.build(q), deadline)
                 when (reply.kind) {
                     Reply.Kind.ANSWER -> AnswerParser.resolve(q, reply.text)?.let { r ->
                         if (canRemember(r, reply.text, true)) memory.put(q.questionText, q.options, q.numeric, r.answer)
@@ -1718,13 +1764,13 @@ class OverlayService : Service() {
         val prompt = if (q != null || read.candidate != null || read.fits || read.colorLayout) {
             ImagePrompt.GAME
         } else ImagePrompt.GENERAL
-        val firstImageReply = c.answer(bmp, prompt)
+        val firstImageReply = c.answer(bmp, prompt, deadline)
         val fallbackKind = if (q == null && firstImageReply.kind == Reply.Kind.ANSWER &&
             ScreenImage.isNoQuestion(firstImageReply.text)) legacyVisibleKind(bmp) else null
         val imageReply = if (fallbackKind != null) {
             val focused = ScreenImage.focusQuiz(bmp, fallbackKind == GameVisualLayout.Kind.NUMERIC_WHITE)
             try {
-                val retry = c.answer(focused, ImagePrompt.GAME)
+                val retry = c.answer(focused, ImagePrompt.GAME, deadline)
                 if (retry.isAnswer) retry else firstImageReply
             } finally { if (focused !== bmp) focused.recycle() }
         } else firstImageReply
