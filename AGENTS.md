@@ -18,6 +18,9 @@ Read `docs/ARCHITECTURE.md` (one-page map) before exploring code, `docs/ROADMAP.
   (a real input or path that fails) are fixed; guesses and style preferences are not.
 - A pull request is merged only when CI is green and the review is answered. If Codex has not
   replied within 20 minutes, it may be merged on a green CI, saying so on the PR.
+- Codex implements only when Claude hands it a task (an issue, a task branch or a review on it,
+  authorized by the owner): it follows that scope, works on the task's branch, never pushes to
+  `main`, and reports on the task.
 - The owner tests the release APK on the phone. Large changes to the app's structure are asked first.
 
 ## Layout

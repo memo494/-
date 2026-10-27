@@ -32,7 +32,11 @@ object NumericFieldInk {
                 NumericFieldReader.isGold(argb[(field.top + i / w) * width + field.left + i % w])
             else light[i] <= background - 18
         }
+        // The field's own rim lines first, then the parchment in the rounded corners of a
+        // rectangular crop; any other edge-touching gold leaves the field UNKNOWN.
         if (ink == NumericFieldReader.Ink.GOLD) dropFlatStrokes(mask, w, h)
+        if (ink == NumericFieldReader.Ink.GOLD &&
+            !removeRoundedCorners(argb, width, height, field, mask, background)) return Sample(State.UNKNOWN, why = "corner")
         if (ink == NumericFieldReader.Ink.LIGHT) {
             // Remove only thin components attached to the field boundary (its rounded frame).
             // A character clipped at the boundary or joined to that frame remains UNKNOWN.
@@ -112,10 +116,12 @@ object NumericFieldInk {
             val width = right - left + 1
             // Only shapes no digit can have: anything digit-sized stays, even at an edge, so a
             // digit clipped by the field's edge still stops the typing. A tall stroke is a side of
-            // the rim only where it meets the left or right edge: a big typed digit in the middle
-            // must never be dropped (the field would then look empty and be typed into).
+            // the rim only where it meets the left or right edge and is as thin as a rim line: a big
+            // typed digit in the middle, or one clipped by the field's edge, must never be dropped
+            // (the field would then look empty and be typed into); it stays and stops the typing.
             val side = left == 0 || right == w - 1
-            val frame = height < minHeight || width >= w * FRAME_WIDTH || height >= h * FRAME_HEIGHT && side
+            val rimThin = width <= maxOf(MIN_RIM_THICKNESS, (h * RIM_THICKNESS).toInt())
+            val frame = height < minHeight || width >= w * FRAME_WIDTH || height >= h * FRAME_HEIGHT && side && rimThin
             if (frame) for (i in 0 until tail) mask[queue[i]] = false
         }
     }
@@ -125,4 +131,87 @@ object NumericFieldInk {
 
     /** A stroke this tall is a side of the rim: digits leave a margin above and below. */
     private const val FRAME_HEIGHT = 0.9f
+
+    /**
+     * The widest a side of the rim can be, as a share of the field's height (1-2 px on the owner's
+     * phone, 3 px in a lossless capture; a typed digit's stroke is about a tenth of its height).
+     */
+    private const val RIM_THICKNESS = 0.05f
+
+    /** Floor of the rim width for small fields (px). */
+    private const val MIN_RIM_THICKNESS = 3
+
+    /**
+     * A rectangular crop of the dark capsule includes parchment at its rounded corners. Remove
+     * only a solid, tapering corner that continues outside both crop edges and borders the dark
+     * field. A clipped character on an edge, or joined to that corner, must remain UNKNOWN.
+     */
+    private fun removeRoundedCorners(
+        argb: IntArray, imageWidth: Int, imageHeight: Int, field: PxRect,
+        mask: BooleanArray, background: Int,
+    ): Boolean {
+        val w = field.width; val h = field.height
+        val visited = BooleanArray(mask.size)
+        val queue = IntArray(mask.size)
+        fun pixel(x: Int, y: Int): Int? {
+            val px = field.left + x; val py = field.top + y
+            return if (px in 0 until imageWidth && py in 0 until imageHeight) argb[py * imageWidth + px] else null
+        }
+        fun continues(a: Int?, b: Int?): Boolean {
+            if (a == null || b == null || !NumericFieldReader.isGold(b)) return false
+            return listOf(16, 8, 0).all { shift ->
+                kotlin.math.abs((a shr shift and 255) - (b shr shift and 255)) <= 24
+            }
+        }
+        fun dark(x: Int, y: Int): Boolean {
+            val c = pixel(x, y) ?: return false
+            val r = c shr 16 and 255; val g = c shr 8 and 255; val b = c and 255
+            val luma = (299 * r + 587 * g + 114 * b) / 1000
+            return luma in 15..140 && kotlin.math.abs(luma - background) <= 40 &&
+                maxOf(r, g, b) - minOf(r, g, b) <= 45
+        }
+        for (start in mask.indices) {
+            if (!mask[start] || visited[start]) continue
+            var head = 0; var tail = 1
+            var left = w; var right = -1; var top = h; var bottom = -1
+            queue[0] = start; visited[start] = true
+            while (head < tail) {
+                val at = queue[head++]; val x = at % w; val y = at / w
+                left = minOf(left, x); right = maxOf(right, x); top = minOf(top, y); bottom = maxOf(bottom, y)
+                for (dy in -1..1) for (dx in -1..1) {
+                    val nx = x + dx; val ny = y + dy
+                    if (nx !in 0 until w || ny !in 0 until h) continue
+                    val next = ny * w + nx
+                    if (mask[next] && !visited[next]) { visited[next] = true; queue[tail++] = next }
+                }
+            }
+            val onLeft = left == 0; val onRight = right == w - 1
+            val onTop = top == 0; val onBottom = bottom == h - 1
+            if (!onLeft && !onRight && !onTop && !onBottom) continue
+            if (onLeft == onRight || onTop == onBottom) return false
+            val cornerWidth = right - left + 1; val cornerHeight = bottom - top + 1
+            // A capsule corner occupies less than half the field's height in either direction;
+            // never discard a strip through the middle where a clipped digit can lie.
+            val limit = minOf(h / 2, w / 4)
+            if (cornerWidth !in 3..limit || cornerHeight !in 3..limit) return false
+            fun x(u: Int) = if (onLeft) u else w - 1 - u
+            fun y(v: Int) = if (onTop) v else h - 1 - v
+            var previous = cornerWidth
+            for (v in 0 until cornerHeight) {
+                var run = 0
+                while (run < cornerWidth && mask[y(v) * w + x(run)]) run++
+                if (run == 0 || run > previous || (run until cornerWidth).any { mask[y(v) * w + x(it)] }) return false
+                if (!continues(pixel(x(0), y(v)), pixel(x(-1), y(v)))) return false
+                // Look beyond the anti-aliased boundary, on the capsule's interior side.
+                if (!dark(x(run + 2), y(v))) return false
+                previous = run
+            }
+            if (previous > cornerWidth - maxOf(2, cornerWidth / 4)) return false
+            for (u in 0 until cornerWidth) {
+                if (!continues(pixel(x(u), y(0)), pixel(x(u), y(-1)))) return false
+            }
+            for (i in 0 until tail) mask[queue[i]] = false
+        }
+        return true
+    }
 }

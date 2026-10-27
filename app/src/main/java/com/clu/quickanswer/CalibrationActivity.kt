@@ -66,6 +66,7 @@ class CalibrationActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        snaps.invalidate()
         // Our own copy (see LastCapture.get); a save in progress has already read its pixels.
         bitmap?.recycle()
         bitmap = null
@@ -125,24 +126,29 @@ class CalibrationActivity : AppCompatActivity() {
         root.addView(keyRow, wrapWidth())
         if (actionRow !== modeRow) root.addView(actionRow, wrapWidth())
 
-        view = CalibrationView(this, bmp, boxes, onTap = ::tapped) { added ->
-            if (!added) Toast.makeText(this, if (mode == Mode.KEY) "رسمت المفاتيح العشرة كلها"
-                else "الحد الأقصى ${LayoutTemplate.MAX_OPTIONS} خيارات", Toast.LENGTH_SHORT).show()
-            // The first box is the question; the buttons come next.
-            if (added && mode == Mode.QUESTION && boxes.options.isEmpty() && boxes.numericField == null) selectMode(Mode.OPTION)
-            // After the field, the keys of its pad; after the tenth key, the confirm button.
-            if (added && mode == Mode.FIELD && boxes.keys.isEmpty()) {
-                selectMode(Mode.KEY)
-                detectKeys() // usually all ten are found, and only the confirm button is left
-            }
-            if (added && mode == Mode.KEY && boxes.nextKey == null && boxes.submit == null) selectMode(Mode.SUBMIT)
-            boxesChanged()
-        }
+        view = CalibrationView(this, bmp, boxes, onTap = ::tapped, onBoxDrawn = ::boxDrawn)
         root.addView(view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         return root
     }
 
+    /** A box was drawn or placed ([added] false: [boxes] refused it); moves on to what comes next. */
+    private fun boxDrawn(added: Boolean) {
+        if (!added) Toast.makeText(this, if (mode == Mode.KEY) "رسمت المفاتيح العشرة كلها"
+            else "الحد الأقصى ${LayoutTemplate.MAX_OPTIONS} خيارات", Toast.LENGTH_SHORT).show()
+        // The first box is the question; the buttons come next.
+        if (added && mode == Mode.QUESTION && boxes.options.isEmpty() && boxes.numericField == null) selectMode(Mode.OPTION)
+        // After the field, the keys of its pad; after the tenth key, the confirm button.
+        if (added && mode == Mode.FIELD && boxes.keys.isEmpty()) {
+            selectMode(Mode.KEY)
+            detectKeys() // usually all ten are found, and only the confirm button is left
+        }
+        if (added && mode == Mode.KEY && boxes.nextKey == null && boxes.submit == null) selectMode(Mode.SUBMIT)
+        boxesChanged()
+    }
+
     private fun selectMode(m: Mode) {
+        // A control still being found was tapped for the previous mode.
+        snaps.invalidate()
         mode = m
         view.mode = m
         // A tap on a key needs the digits read on the capture: start reading as the keys are reached.
@@ -248,6 +254,9 @@ class CalibrationActivity : AppCompatActivity() {
 
     /** The capture's pixels, copied once on the first tap that needs them (not once per tap). */
     private var capturePixels: IntArray? = null
+
+    /** Finds the control under a tap on a worker thread ([RegionSnap] is too slow for the touch callback). */
+    private val snaps = SnapQueue({ job -> thread(isDaemon = true, name = "calibration-snap") { job.run() } }, ::runOnUiThread)
     private var reading = false
     private var detectWhenRead = false
 
@@ -312,32 +321,43 @@ class CalibrationActivity : AppCompatActivity() {
     /**
      * A tap on the picture: in "keys" the digit printed under it gets its key (any order); for the
      * field, an answer button or the confirm button, the control under it is grown from its colour
-     * ([RegionSnap]). False when nothing could be found, and the view then places a plain box.
+     * ([RegionSnap], on a worker thread). When nothing is found there, the confirm button gets a
+     * key-sized square on the tap and the other controls get nothing.
      */
-    private fun tapped(x: Int, y: Int): Boolean {
-        val bmp = bitmap ?: return false
-        return when (mode) {
+    private fun tapped(x: Int, y: Int) {
+        val bmp = bitmap ?: return
+        when (mode) {
             Mode.KEY -> {
                 // Only a digit actually read under the tap: guessing "the next missing digit" would
                 // map a key to another digit and type wrong numbers. Unknown: say how to draw it.
                 val hit = glyphs?.let { KeypadFinder.digitAt(it, bmp.width, bmp.height, x, y) }
                 if (hit == null) {
                     toast(if (glyphs == null) DETECTING else KEY_NOT_READ + (boxes.nextKey ?: ""))
-                    return true // handled: no box is placed
+                    return // no box is placed
                 }
                 boxes.setKey(hit.first, hit.second)
-                if (boxes.nextKey == null && boxes.submit == null) selectMode(Mode.SUBMIT)
-                true
+                boxDrawn(true)
             }
             Mode.FIELD, Mode.OPTION, Mode.SUBMIT -> {
                 val pixels = capturePixels ?: try {
                     IntArray(bmp.width * bmp.height).also { bmp.getPixels(it, 0, bmp.width, 0, 0, bmp.width, bmp.height) }
                         .also { capturePixels = it }
-                } catch (_: Throwable) { return false }
-                val rect = RegionSnap.around(pixels, bmp.width, bmp.height, x, y) ?: return false
-                boxes.add(mode, rect)
+                } catch (_: Throwable) { return }
+                val w = bmp.width
+                val h = bmp.height
+                val tappedMode = mode
+                // A tap while the previous one is still being found is ignored.
+                snaps.request({ RegionSnap.around(pixels, w, h, x, y) }) { rect ->
+                    if (isDestroyed || bitmap == null) return@request
+                    when {
+                        rect != null -> boxDrawn(boxes.add(tappedMode, rect))
+                        // The button's colour gave no region: a key-sized square on the tap.
+                        tappedMode == Mode.SUBMIT -> boxDrawn(boxes.add(tappedMode, boxes.boxAround(x, y, w, h)))
+                    }
+                    view.invalidate()
+                }
             }
-            Mode.QUESTION -> false
+            Mode.QUESTION -> {}
         }
     }
 
