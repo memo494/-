@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.os.SystemClock
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -27,32 +28,36 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
         private set
 
     /** The model's answer for the screenshot, or a short Arabic error message. Never throws. */
-    override fun answer(bitmap: Bitmap, prompt: ImagePrompt): Reply {
+    override fun answer(bitmap: Bitmap, prompt: ImagePrompt, deadline: AnswerDeadline): Reply {
+        // Before the JPEG is encoded: a request that cannot be sent in time costs nothing.
+        if (deadline.expired) return Reply.error(AnswerDeadline.TIMEOUT_TEXT)
         val prepared = try {
             ScreenImage.prepare(bitmap) ?: return Reply.error(ScreenImage.BLACK_SCREEN)
         } catch (e: Exception) {
             return Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
         }
         lastSent = prepared.kept
-        return send(ClaudeApi.requestBody(model, prompt.text, prepared.base64))
+        return send(ClaudeApi.requestBody(model, prompt.text, prepared.base64), deadline)
     }
 
     /** A question already read on the device: text only, no image. */
-    override fun answerText(prompt: String): Reply = send(ClaudeApi.requestBody(model, prompt))
+    override fun answerText(prompt: String, deadline: AnswerDeadline): Reply =
+        send(ClaudeApi.requestBody(model, prompt), deadline)
 
     /**
      * A question already read on the device, with its picture (see [Answerer.answerPicture]): the
      * picture and the prompt in one request, sent, retried and mapped to errors like the others.
      * [lastSent] is the picture as sent.
      */
-    override fun answerPicture(prompt: String, picture: Bitmap): Reply {
+    override fun answerPicture(prompt: String, picture: Bitmap, deadline: AnswerDeadline): Reply {
+        if (deadline.expired) return Reply.error(AnswerDeadline.TIMEOUT_TEXT)
         val prepared = try {
             ScreenImage.preparePicture(picture)
         } catch (e: Exception) {
             return Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
         }
         lastSent = prepared.kept
-        return send(ClaudeApi.requestBody(model, prompt, prepared.base64))
+        return send(ClaudeApi.requestBody(model, prompt, prepared.base64), deadline)
     }
 
     /**
@@ -99,21 +104,31 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
         }
     }
 
-    /** One request, retried once after a short pause on a dropped connection or a transient status. Never throws. */
-    private fun send(body: String): Reply {
+    /**
+     * One request, retried once after a short pause on a dropped connection or a transient status.
+     * Never throws. All of it, the pause included, happens within [deadline]: no call starts after it,
+     * the sockets' timeouts are cut to it, and there is no retry (nor pause) when what is left cannot
+     * hold the pause and a call worth waiting for, see [mayRetry]; the first attempt's error is then
+     * the reply. Running out of time is the error [AnswerDeadline.TIMEOUT_TEXT].
+     */
+    private fun send(body: String, deadline: AnswerDeadline): Reply {
         if (apiKey.isEmpty()) return Reply.error("مفتاح Claude غير صالح")
         for (attempt in 0..1) {
-            val last = attempt == 1
+            if (deadline.expired) return Reply.error(AnswerDeadline.TIMEOUT_TEXT)
             try {
-                val res = call("${ClaudeApi.BASE_URL}/messages", body)
+                val res = call("${ClaudeApi.BASE_URL}/messages", body, deadline)
                 if (res.code in 200..299) {
                     val (reply, served) = ClaudeApi.parseSuccess(res.body)
                     if (reply.isAnswer) lastModel = served ?: model
                     return reply
                 }
-                if (last || !ClaudeApi.isRetryable(res.code)) return ClaudeApi.replyForError(res.code, res.body)
+                if (!mayRetry(attempt, deadline) || !ClaudeApi.isRetryable(res.code)) {
+                    return ClaudeApi.replyForError(res.code, res.body)
+                }
             } catch (e: IOException) {
-                if (last) return Reply.error(NO_CONNECTION)
+                // Also a socket timeout cut to the deadline, or a call not started because it passed.
+                if (deadline.expired) return Reply.error(AnswerDeadline.TIMEOUT_TEXT)
+                if (!mayRetry(attempt, deadline)) return Reply.error(NO_CONNECTION)
             } catch (e: Exception) {
                 return Reply.empty("خطأ: ${e.javaClass.simpleName} ${e.message?.take(120) ?: ""}".trim())
             }
@@ -131,13 +146,18 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
     /**
      * GET when [body] is null, else POST. The body is read to the end on every path and the connection
      * is not disconnect()ed on success, so the platform can reuse it for the next call.
+     *
+     * With a [deadline] (an answer's) the timeouts are cut to what is left of it, and nothing is sent
+     * once it has passed: a SocketTimeoutException, like a call that ran out of time. Without one
+     * (warm-up, background learning) the plain timeouts apply.
      */
-    private fun call(url: String, body: String?): Response {
+    private fun call(url: String, body: String?, deadline: AnswerDeadline? = null): Response {
+        if (deadline != null && deadline.expired) throw SocketTimeoutException("answer deadline passed")
         inFlight.incrementAndGet()
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
-            conn.connectTimeout = 10_000
-            conn.readTimeout = 30_000
+            conn.connectTimeout = deadline?.capTimeoutMs(CONNECT_TIMEOUT_MS) ?: CONNECT_TIMEOUT_MS
+            conn.readTimeout = deadline?.capTimeoutMs(READ_TIMEOUT_MS) ?: READ_TIMEOUT_MS
             conn.setRequestProperty("x-api-key", apiKey)
             conn.setRequestProperty("anthropic-version", ClaudeApi.API_VERSION)
             if (body != null) {
@@ -165,7 +185,24 @@ class ClaudeClient(apiKey: String, model: String) : Answerer {
 
     companion object {
         private const val NO_CONNECTION = "لا يوجد اتصال"
-        private const val RETRY_DELAY_MS = 600L
+        private const val CONNECT_TIMEOUT_MS = 10_000
+        private const val READ_TIMEOUT_MS = 30_000
+        internal const val RETRY_DELAY_MS = 600L
+
+        /**
+         * A retry needs at least this much on top of [RETRY_DELAY_MS]: a call has to be able to connect,
+         * send and be answered (the owner's text requests take 1-2 s, images 2-3 s), and a retry that
+         * the deadline cuts off after a fraction of a second only keeps the bubble busy for nothing.
+         */
+        internal const val MIN_RETRY_CALL_MS = 1_000L
+
+        /**
+         * Whether the attempt number [attempt] (0 or 1) that just failed may be followed by another: only
+         * the first, and only if [deadline] still holds the pause and [MIN_RETRY_CALL_MS] for the call.
+         */
+        internal fun mayRetry(attempt: Int, deadline: AnswerDeadline): Boolean =
+            attempt == 0 && deadline.remainingMs() >= RETRY_DELAY_MS + MIN_RETRY_CALL_MS
+
         private const val WARM_UP_INTERVAL_MS = 60_000L
         private const val POOL_WARM_MS = 4 * 60_000L
         private const val NEVER = -1L
