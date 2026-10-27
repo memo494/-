@@ -1,0 +1,109 @@
+package com.clu.quickanswer.ocr
+
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+/**
+ * The dark field's own gold rim (a 1-2 px line along its inner edge on the owner's phone, 25 Oct
+ * 2026) is not typed input: it made every empty field "unknown", so nothing was typed.
+ */
+class GoldRimFieldTest {
+    private val w = 600
+    private val h = 200
+    private val field = PxRect(100, 50, 500, 150)
+    private val dark = 0xff3c3c3c.toInt()
+    private val gold = 0xffe0b040.toInt()
+
+    private fun screen(rim: Boolean, digit: Boolean): IntArray {
+        val px = IntArray(w * h) { 0xffe8d6b4.toInt() }
+        for (y in field.top until field.bottom) for (x in field.left until field.right) px[y * w + x] = dark
+        if (rim) {
+            for (x in field.left + 40 until field.left + 180) { px[(field.bottom - 14) * w + x] = gold; px[(field.bottom - 13) * w + x] = gold }
+            for (y in field.top + 2..field.top + 5) for (x in field.left + 12..field.left + 17) px[y * w + x] = gold
+        }
+        // A bold "1": 8 px wide, 60 px tall, in the middle.
+        if (digit) for (y in field.top + 20 until field.top + 80) for (x in 296 until 304) px[y * w + x] = gold
+        return px
+    }
+
+    @Test fun anEmptyFieldWithItsRimIsEmpty() {
+        assertEquals(NumericFieldInk.State.EMPTY,
+            NumericFieldInk.inspect(screen(rim = true, digit = false), w, h, field, NumericFieldReader.Ink.GOLD).state)
+    }
+
+    @Test fun aTypedDigitNextToTheRimIsStillSeen() {
+        assertEquals(NumericFieldInk.State.FILLED,
+            NumericFieldInk.inspect(screen(rim = true, digit = true), w, h, field, NumericFieldReader.Ink.GOLD).state)
+    }
+
+    @Test fun aWholeGoldOutlineIsTheFrame_notInput() {
+        val px = screen(rim = false, digit = false)
+        for (x in field.left + 3 until field.right - 3) { px[(field.top + 3) * w + x] = gold; px[(field.bottom - 4) * w + x] = gold }
+        for (y in field.top + 3 until field.bottom - 3) { px[y * w + field.left + 3] = gold; px[y * w + field.right - 4] = gold }
+        assertEquals(NumericFieldInk.State.EMPTY,
+            NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
+        for (y in field.top + 20 until field.top + 80) for (x in 296 until 304) px[y * w + x] = gold
+        assertEquals(NumericFieldInk.State.FILLED,
+            NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
+    }
+
+    @Test fun theRimIsDroppedButADigitIsKept() {
+        val px = screen(rim = true, digit = true)
+        val mask = BooleanArray(field.width * field.height) { i ->
+            NumericFieldReader.isGold(px[(field.top + i / field.width) * w + field.left + i % field.width])
+        }
+        NumericFieldInk.dropFlatStrokes(mask, field.width, field.height)
+        assertEquals(8 * 60, mask.count { it })
+    }
+
+    /**
+     * The owner's phone: the reference box sits low on the field and takes in its gold rim
+     * ("ink373x30"). The measured interior leaves the rim out and still holds a typed digit.
+     */
+    @Test fun theMeasuredInteriorLeavesTheRimOut() {
+        val px = IntArray(w * h) { 0xffe8d6b4.toInt() }
+        val real = PxRect(100, 40, 500, 150)
+        for (y in real.top until real.bottom) for (x in real.left until real.right) px[y * w + x] = dark
+        // A 3 px gold rim all round, 4 px inside the wood.
+        for (y in real.top + 4 until real.bottom - 4) for (x in real.left + 4 until real.right - 4) {
+            val edge = minOf(x - real.left - 4, real.right - 5 - x, y - real.top - 4, real.bottom - 5 - y)
+            if (edge < 3) px[y * w + x] = gold
+        }
+        val reference = PxRect(110, 70, 500, 160) // low and reaching into the rim
+        val inside = GameVisualLayout.fieldInterior(px, w, h, reference)!!
+        assertEquals(NumericFieldInk.State.EMPTY, NumericFieldInk.inspect(px, w, h, inside, NumericFieldReader.Ink.GOLD).state)
+        for (y in 70 until 120) for (x in 296 until 304) px[y * w + x] = gold
+        assertEquals(NumericFieldInk.State.FILLED, NumericFieldInk.inspect(px, w, h, inside, NumericFieldReader.Ink.GOLD).state)
+    }
+
+    @Test fun noDarkFieldNoInterior() {
+        assertEquals(null, GameVisualLayout.fieldInterior(IntArray(w * h) { 0xffe8d6b4.toInt() }, w, h, field))
+    }
+
+    /** A big typed digit in the middle is never taken for the rim: the field is not empty. */
+    @Test fun aTallTypedDigitInTheMiddleStaysInput() {
+        val px = screen(rim = false, digit = false)
+        for (y in field.top + 1 until field.bottom - 2) for (x in 296 until 306) px[y * w + x] = gold
+        assertEquals(NumericFieldInk.State.FILLED,
+            NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
+    }
+
+    /**
+     * Codex review of #47: a thick gold stroke the full height of the field at its edge (a typed "1"
+     * clipped by the field box) is not the rim. It must never leave the field looking empty.
+     */
+    @Test fun aThickTallStrokeAtTheEdgeIsNotTakenForTheRim() {
+        val px = screen(rim = false, digit = false)
+        for (y in field.top + 2 until field.bottom - 2) for (x in field.left until field.left + 8) px[y * w + x] = gold
+        assertEquals(NumericFieldInk.State.UNKNOWN,
+            NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
+    }
+
+    /** A thin side of the rim, cut off from the rest of the outline by the field box, is still the rim. */
+    @Test fun aThinSideOfTheRimAtTheEdgeIsDropped() {
+        val px = screen(rim = false, digit = false)
+        for (y in field.top + 1 until field.bottom - 1) for (x in field.left until field.left + 2) px[y * w + x] = gold
+        assertEquals(NumericFieldInk.State.EMPTY,
+            NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
+    }
+}

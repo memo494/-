@@ -15,14 +15,23 @@ class NumericFieldReader(private val recognizer: LineRecognizer) {
                 if (sample.state != NumericFieldInk.State.FILLED) return empty()
                 // Both entry readiness and readback must exclude the same verified field frame.
                 // Read the complete measured ink directly: a line cutter can remove a bold '1'.
-                return recognizer.recognize(sample.pixels, sample.width, sample.height,
-                    PxRect(0, 0, sample.width, sample.height))
+                return digitsOnly(recognizer.recognize(sample.pixels, sample.width, sample.height,
+                    PxRect(0, 0, sample.width, sample.height)))
             }
             val lines = TextLines.findDetailed(argb, width, height, field, bounded = true)
             if (lines.clipped || lines.lines.size != 1) return empty()
-            recognizer.recognize(argb, width, height, lines.lines.single())
+            digitsOnly(recognizer.recognize(argb, width, height, lines.lines.single()))
         } catch (_: Throwable) { empty() }
     }
+
+    /**
+     * A number field holds digits only; the recogniser sometimes puts a gap between widely spaced
+     * digits ("1 000" for 1000, measured on another CPU, 27 Oct 2026). The gap is dropped, nothing
+     * else: any other character stays and makes the reading not match.
+     */
+    private fun digitsOnly(line: RecognizedLine): RecognizedLine =
+        if (line.text.none(Char::isWhitespace)) line
+        else RecognizedLine(line.text.filterNot(Char::isWhitespace), line.probSum, line.charCount)
 
     companion object {
         fun isGold(c: Int): Boolean {

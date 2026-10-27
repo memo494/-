@@ -38,7 +38,16 @@ class ColorLayout {
     fun analyze(argb: IntArray, width: Int, height: Int): ScreenLayout? = inspect(argb, width, height).layout
 
     /** Like [analyze], but says why a screen was declined. */
-    fun inspect(argb: IntArray, width: Int, height: Int): Result {
+    fun inspect(argb: IntArray, width: Int, height: Int): Result = inspect(argb, width, height, false)
+
+    /**
+     * Like [inspect]; with [keepMergedQuestion] a screen whose question text cannot be cut into
+     * lines (something over the banner: an old answer panel, an animation, measured on the owner's
+     * phone 26 Oct 2026) is still returned, with no question lines, when everything else fits. For
+     * touching options read on their own ([com.clu.quickanswer.interaction.PrintedChoiceTouch]),
+     * never for reading the question.
+     */
+    fun inspect(argb: IntArray, width: Int, height: Int, keepMergedQuestion: Boolean): Result {
         require(width > 0 && height > 0 && argb.size >= width * height) { "bad image size" }
         val regions = findRegions(argb, width, height) ?: return Result(null, "no question banner")
         val unit = max(width, height).toDouble() / REFERENCE_LONG_SIDE
@@ -72,7 +81,9 @@ class ColorLayout {
 
         // Two or more text lines are one banner; one that is a big part of the banner is several lines
         // merged by something painted over them.
-        if (questionLines.any { it.height > MAX_LINE_FRACTION * banner.height }) return reject("question text band merged")
+        val merged = questionLines.any { it.height > MAX_LINE_FRACTION * banner.height }
+        if (merged && !(keepMergedQuestion && field == null)) return reject("question text band merged")
+        val keptQuestionLines = if (merged) emptyList() else questionLines
 
         val options = if (field != null) emptyList() else belowBanner
         val optionLines = options.map { textLines(argb, width, height, it, 0.04f, 0.96f, 0.12f, 0.88f, unit) }
@@ -82,7 +93,7 @@ class ColorLayout {
                 banner = banner,
                 buttons = options,
                 numericField = field,
-                questionLines = questionLines,
+                questionLines = keptQuestionLines,
                 optionLines = optionLines,
                 digitKeys = numericKeys,
                 numericSubmit = if (numericKeys.size == 10) NumericSubmit.detect(argb, width, height, numericKeys) else null,

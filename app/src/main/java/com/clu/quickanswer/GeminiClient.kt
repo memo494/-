@@ -51,7 +51,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
     /** A question already read on the device: text only, no image (fewer tokens, faster). */
     override fun answerText(prompt: String): Reply {
         return try {
-            race { m, mode -> textBody(m, prompt, mode) }.toReply()
+            race(TEXT_PRIMARY_WAIT_MS) { m, mode -> textBody(m, prompt, mode) }.toReply()
         } catch (e: IOException) {
             Reply.error(NO_CONNECTION)
         } catch (e: Exception) {
@@ -122,7 +122,18 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
      * of quota are skipped, and if the user's own model is one of them the first free fallback starts
      * straight away.
      */
-    private fun race(body: (String, ThinkingMode) -> String): Outcome {
+    private fun race(primaryWaitMs: Long = PRIMARY_WAIT_MS, body: (String, ThinkingMode) -> String): Outcome {
+        val started = SystemClock.elapsedRealtime()
+        // What each model did, for the diagnostic log: "model:code:ms" (code 0 = no reply, an exception).
+        val trace = java.util.Collections.synchronizedList(ArrayList<String>())
+        fun timed(m: String, call: () -> HttpResult): HttpResult {
+            val t0 = SystemClock.elapsedRealtime()
+            val r = try { call() } catch (e: Exception) { trace.add("$m:0:${SystemClock.elapsedRealtime() - t0}"); throw e }
+            trace.add("$m:${r.code}:${SystemClock.elapsedRealtime() - t0}")
+            return r
+        }
+        fun logTrace() = DiagLog.add("Gemini ${SystemClock.elapsedRealtime() - started}ms: " +
+            synchronized(trace) { trace.joinToString(" ") }.ifEmpty { "-" })
         val plan = GeminiModels.plan(model) { quota.isBlocked(it) }
         val done = ExecutorCompletionService<Pair<String, HttpResult>>(POOL)
         val fallbacks = plan.fallbacks.toMutableList()
@@ -135,7 +146,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
                 val m = fallbacks.removeAt(0)
                 // A 429 seen since the plan was made may have blocked this one.
                 if (quota.isBlocked(m)) continue
-                done.submit { m to ask(m) { mode -> body(m, mode) } }
+                done.submit { m to timed(m) { ask(m) { mode -> body(m, mode) } } }
                 outstanding++
                 return true
             }
@@ -145,7 +156,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
             fannedOut = true
             while (extrasInFlight() < MAX_EXTRA_IN_FLIGHT && launchNext()) { /* keep launching */ }
         }
-        done.submit { plan.first to ask(plan.first) { mode -> body(plan.first, mode) } }
+        done.submit { plan.first to timed(plan.first) { ask(plan.first) { mode -> body(plan.first, mode) } } }
         outstanding++
         val errors = mutableListOf<Pair<String, HttpResult>>()
         while (true) {
@@ -155,7 +166,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
                 continue
             }
             val future = if (!fannedOut) {
-                done.poll(PRIMARY_WAIT_MS, TimeUnit.MILLISECONDS)
+                done.poll(primaryWaitMs, TimeUnit.MILLISECONDS)
             } else {
                 done.take()
             }
@@ -167,6 +178,7 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
             val (m, res) = try {
                 future.get()
             } catch (e: ExecutionException) {
+                logTrace()
                 throw e.cause ?: e
             }
             if (m == plan.first) primaryInFlight = false
@@ -174,14 +186,16 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
                 val text = handle(res)
                 if (text != EMPTY) {
                     lastModel = m
+                    logTrace()
                     return Outcome(text, ok = true, final = false)
                 }
             }
             errors += m to res
-            if (isKeyOrRegionError(res)) return Outcome("$m: ${handle(res)}", ok = false, final = true)
+            if (isKeyOrRegionError(res)) { logTrace(); return Outcome("$m: ${handle(res)}", ok = false, final = true) }
             // After the first failure keep up to MAX_EXTRA_IN_FLIGHT fallbacks running.
             fanOut()
         }
+        logTrace()
         // Every model that was asked is out of free quota (404s only mean "no such model").
         val real = errors.filter { it.second.code != 404 }
         if (real.isNotEmpty() && real.all { it.second.code == 429 }) return Outcome(ALL_QUOTA, ok = false, final = true)
@@ -322,6 +336,13 @@ class GeminiClient(apiKey: String, model: String) : Answerer {
         // At most this many fallback models run next to (or instead of) the first one.
         private const val MAX_EXTRA_IN_FLIGHT = 2
         private const val PRIMARY_WAIT_MS = 2500L
+
+        /**
+         * A text request (question read on the device) normally answers in 1-2 s; on the owner's phone
+         * some took 15-22 s (log, 26 Oct 2026) and the game had moved on. Fallbacks start sooner for
+         * them; image requests keep [PRIMARY_WAIT_MS] (they take 2-3 s when healthy).
+         */
+        private const val TEXT_PRIMARY_WAIT_MS = 1500L
 
         private const val WARM_UP_INTERVAL_MS = 60_000L
 

@@ -27,6 +27,11 @@ object GameVisualLayout {
         /** Present only when the white skin's cyan erase key is visible. */
         val backspace: PxRect? = null,
         val field: PxRect? = null,
+        /**
+         * The dark pad's offset from the reference (reference units) when only the wide search found
+         * it, else null. While typing, such a pad is confirmed only near this offset (see [stillVisible]).
+         */
+        val wideOffset: Pair<Int, Int>? = null,
     )
 
     private data class RGB(val r: Double, val g: Double, val b: Double) {
@@ -35,7 +40,8 @@ object GameVisualLayout {
     private const val BASE_W = 1536f
     private const val BASE_H = 691f
 
-    fun detect(argb: IntArray, width: Int, height: Int): Detected? = detectFrame(argb, width, height, null)
+    fun detect(argb: IntArray, width: Int, height: Int): Detected? =
+        detectFrame(argb, width, height, null, wideSearch = true, around = null)
 
     /** The gray pad's dark 0000 hint is not entered text; this adapter knows its gold digit state. */
     fun inputHasText(argb: IntArray, width: Int, height: Int, detected: Detected, field: PxRect): Boolean {
@@ -55,6 +61,50 @@ object GameVisualLayout {
         }
         return count >= max(8, field.width * field.height / 500) && bottom - top >= max(4, field.height / 5)
     }
+
+    /**
+     * The inside of the dark skin's number field, where digits are drawn, measured on this capture,
+     * or null when no dark field is found around [field]. [field] comes from the reference geometry
+     * and, on a card drawn off the reference, reaches into the field's gold rim (25 Oct 2026, owner's
+     * phone: "ink373x30", rim arcs taken for typed digits, so nothing was ever typed). The dark wood
+     * is found near [field] (rows over 40% dark, columns over 25% dark), then [INTERIOR_INSET] is
+     * left out on every side: the rim and the pill's rounded ends. Digits are centred well inside.
+     */
+    fun fieldInterior(argb: IntArray, width: Int, height: Int, field: PxRect): PxRect? {
+        if (width <= 0 || height <= 0 || argb.size.toLong() < width.toLong() * height ||
+            field.width < 16 || field.height < 16) return null
+        val left = max(0, field.left - field.width / 6)
+        val right = min(width, field.right + field.width / 6)
+        val top = max(0, field.top - field.height / 2)
+        val bottom = min(height, field.bottom + field.height / 2)
+        fun dark(c: Int): Boolean {
+            val r = (c shr 16) and 255; val g = (c shr 8) and 255; val b = c and 255
+            return (r * 299 + g * 587 + b * 114) / 1000 < 120 && max(r, max(g, b)) - min(r, min(g, b)) < 60
+        }
+        var t = -1; var bt = -1
+        for (y in top until bottom) {
+            var n = 0
+            for (x in left until right) if (dark(argb[y * width + x])) n++
+            if (n > (right - left) * 0.4) { if (t < 0) t = y; bt = y + 1 }
+        }
+        var l = -1; var rt = -1
+        for (x in left until right) {
+            var n = 0
+            for (y in top until bottom) if (dark(argb[y * width + x])) n++
+            if (n > (bottom - top) * 0.25) { if (l < 0) l = x; rt = x + 1 }
+        }
+        if (t < 0 || l < 0) return null
+        val w = rt - l
+        val h = bt - t
+        // The field found must be about the size expected; anything else is not this field.
+        if (w < field.width / 2 || w > field.width * 2 || h < field.height / 2 || h > field.height * 2) return null
+        val inside = PxRect(l + (w * INTERIOR_INSET).toInt(), t + (h * INTERIOR_INSET).toInt(),
+            rt - (w * INTERIOR_INSET).toInt(), bt - (h * INTERIOR_INSET).toInt())
+        return inside.takeIf { it.width >= 16 && it.height >= 16 }
+    }
+
+    /** Share of the dark field left out on each side: its gold rim and rounded ends (about 12%). */
+    private const val INTERIOR_INSET = 0.15f
 
     /** A coloured parchment/shadow can fit sparse samples; an actual gold button has its own rim. */
     fun hasSubmitControl(argb: IntArray, width: Int, height: Int, detected: Detected): Boolean {
@@ -93,7 +143,12 @@ object GameVisualLayout {
         val knownPrevious = previousTap?.takeIf {
             it in expected.digits.values || it == expected.clear || it == expected.backspace
         }
-        val now = detectFrame(argb, width, height, knownPrevious) ?: return false
+        // A pad found where main finds it is confirmed exactly as main does (the measured window
+        // only). A pad only the wide search found is confirmed close to where it was found, with
+        // main's two-sided key test: a pressed key's glow next to its neighbours must not stop the
+        // entry halfway, and the confirmation must not jump to another place than the plan's.
+        val now = detectFrame(argb, width, height, knownPrevious, wideSearch = false, around = expected.wideOffset)
+            ?: return false
         fun same(a: PxRect?, b: PxRect?): Boolean = a == null || b != null &&
             abs(a.centerX - b.centerX) <= max(3f, a.width * 0.2f) &&
             abs(a.centerY - b.centerY) <= max(3f, a.height * 0.2f)
@@ -102,7 +157,76 @@ object GameVisualLayout {
             same(expected.backspace, now.backspace)
     }
 
-    private fun detectFrame(argb: IntArray, width: Int, height: Int, previousTap: PxRect?): Detected? {
+    /**
+     * How far (reference units) the game may draw its card from the reference position. Measured on
+     * the owner's phone (25 Oct 2026): the dark pad sat about 30 left and 25 up, beyond the former
+     * ±12, so a plainly visible pad was "unknown". Kept below one key pitch (70 dark, 100 white) so a
+     * shift can never line every key up with its neighbour; the backdrop and submit checks still apply.
+     */
+    private const val MAX_SHIFT = 48
+    /** The measured window searched first (the detector's behaviour before the wide search). */
+    private const val NEAR_SHIFT = 12
+    private const val NEAR_STEP = 6
+    private const val SHIFT_STEP = 4
+    /** Lightness step on every side of a key for the wide search (the phone's keys: 86 and up). */
+    private const val SEPARATE_KEY_EDGE = 40.0
+
+    /**
+     * Where the keys are: first the measured window (±12 in steps of 6, the offset nearest the
+     * reference, as tested on the known captures), and only when nothing matches there, the wide
+     * search. In the wide one many offsets match a broad key face, so the one at their centre is
+     * taken (the nearest one to the centre that matches), not the first, which sits near a key's
+     * edge and taps off-centre.
+     */
+    private inline fun centredOffset(
+        allKeys: (Int, Int) -> Boolean,
+        /** Null: no wide search. Stricter than [allKeys], because more of the screen is tried. */
+        noinline allKeysWide: ((Int, Int) -> Boolean)?,
+    ): Pair<Int, Int>? {
+        var near: Pair<Int, Int>? = null
+        for (dy in -NEAR_SHIFT..NEAR_SHIFT step NEAR_STEP) for (dx in -NEAR_SHIFT..NEAR_SHIFT step NEAR_STEP) {
+            if ((near == null || abs(dx) + abs(dy) < abs(near.first) + abs(near.second)) && allKeys(dx, dy)) near = dx to dy
+        }
+        if (near != null || allKeysWide == null) return near
+        val hits = ArrayList<Pair<Int, Int>>()
+        for (dy in -MAX_SHIFT..MAX_SHIFT step SHIFT_STEP) for (dx in -MAX_SHIFT..MAX_SHIFT step SHIFT_STEP) {
+            if (allKeysWide(dx, dy)) hits.add(dx to dy)
+        }
+        if (hits.isEmpty()) return null
+        val cx = hits.sumOf { it.first }.toDouble() / hits.size
+        val cy = hits.sumOf { it.second }.toDouble() / hits.size
+        return hits.minWith(compareBy<Pair<Int, Int>> { abs(it.first - cx) + abs(it.second - cy) }
+            .thenBy { abs(it.first) + abs(it.second) })
+    }
+
+    /** Half-width (reference units) of the search around a known offset while typing. */
+    private const val AROUND_SHIFT = 8
+    private const val AROUND_STEP = 2
+
+    /** The offset nearest [around] within [AROUND_SHIFT] where every key matches, or null. */
+    private inline fun nearestAround(around: Pair<Int, Int>, allKeys: (Int, Int) -> Boolean): Pair<Int, Int>? {
+        var best: Pair<Int, Int>? = null
+        var bestDistance = Int.MAX_VALUE
+        for (dy in -AROUND_SHIFT..AROUND_SHIFT step AROUND_STEP) for (dx in -AROUND_SHIFT..AROUND_SHIFT step AROUND_STEP) {
+            val distance = abs(dx) + abs(dy)
+            if (distance < bestDistance && allKeys(around.first + dx, around.second + dy)) {
+                best = (around.first + dx) to (around.second + dy)
+                bestDistance = distance
+            }
+        }
+        return best
+    }
+
+    /** True for an offset the measured window (main's search) can return. */
+    private fun onNearGrid(v: Int): Boolean = v in -NEAR_SHIFT..NEAR_SHIFT && v % NEAR_STEP == 0
+
+    private fun detectFrame(
+        argb: IntArray, width: Int, height: Int, previousTap: PxRect?,
+        /** Try the wide search when the measured window finds nothing (detection, not confirmation). */
+        wideSearch: Boolean,
+        /** Confirm a pad the wide search found: search only near this offset. */
+        around: Pair<Int, Int>?,
+    ): Detected? {
         if (width < 320 || height < 200 || width.toDouble() / height !in 1.7..2.65 ||
             argb.size < width.toLong() * height
         ) return null
@@ -181,10 +305,6 @@ object GameVisualLayout {
             )
             return surrounding.count { abs(it.light - center.light) >= 18.0 } >= 2
         }
-        // Several translations can fit broad key surfaces equally well. Do
-        // not bias taps towards the upper-left just because it is searched first.
-        fun closer(dx: Int, dy: Int, previous: Pair<Int, Int>?): Boolean =
-            previous == null || abs(dx) + abs(dy) < abs(previous.first) + abs(previous.second)
         val darkRows = listOf(
             listOf(922 to 302, 992 to 302, 1062 to 302),
             listOf(922 to 370, 992 to 370, 1062 to 370),
@@ -193,18 +313,23 @@ object GameVisualLayout {
         ).flatten()
 
         // Skin A: warm charcoal squares, 1-2-3 / 4-5-6 / 7-8-9 / C-0-delete.
-        var darkOffset: Pair<Int, Int>? = null
-        var darkBest = 0
-        for (dy in -12..12 step 6) for (dx in -12..12 step 6) {
-            val matches = darkRows.count { (x, y) ->
-                darkKey(x + dx, y + dy)
-            }
-            if (matches > darkBest || matches == darkBest && closer(dx, dy, darkOffset)) {
-                darkBest = matches
-                darkOffset = dx to dy
-            }
+        // A key on its own, edged on all four sides (measured 86..129 on the owner's phone): for the
+        // wide search, so the big dark answer buttons of a choice screen are never taken for a pad
+        // (25 Oct 2026: choices stopped being tapped after the search was widened).
+        fun separateKey(x: Int, y: Int): Boolean {
+            if (!darkKey(x, y)) return false
+            if (wasPressed(x, y)) return true
+            val center = patch(x, y, compactX, compactY).light
+            return listOf(
+                patch(x - 35, y, intArrayOf(0), intArrayOf(-5, 5)), patch(x + 35, y, intArrayOf(0), intArrayOf(-5, 5)),
+                patch(x, y - 34, intArrayOf(-5, 5), intArrayOf(0)), patch(x, y + 34, intArrayOf(-5, 5), intArrayOf(0)),
+            ).all { abs(it.light - center) >= SEPARATE_KEY_EDGE }
         }
-        if (darkBest == darkRows.size && darkOffset != null) {
+        val allDarkKeys: (Int, Int) -> Boolean = { dx, dy -> darkRows.all { (x, y) -> darkKey(x + dx, y + dy) } }
+        val allSeparateKeys: (Int, Int) -> Boolean = { dx, dy -> darkRows.all { (x, y) -> separateKey(x + dx, y + dy) } }
+        val darkOffset = if (around != null) nearestAround(around, allDarkKeys)
+            else centredOffset(allDarkKeys, if (wideSearch) allSeparateKeys else null)
+        if (darkOffset != null) {
             val (dx, dy) = darkOffset
             // A flat charcoal panel is not a keypad. Its keys must stand out
             // from the parchment immediately to the left of the three rows.
@@ -252,7 +377,10 @@ object GameVisualLayout {
                     rim(intArrayOf(807, 813, 819), intArrayOf(470, 486, 502)),
                 ).count { it } >= 2
                 val visibleSubmit = strongGold && distinctGoldFill || paleGold && goldRim
-                return Detected(Kind.NUMERIC_DARK, digits = digits,
+                // The wide search never returns an offset of the measured window: one there would
+                // have been found by the window first (every separate key is also a dark key).
+                val fromWide = around != null || !(onNearGrid(dx) && onNearGrid(dy))
+                return Detected(Kind.NUMERIC_DARK, digits = digits, wideOffset = if (fromWide) dx to dy else null,
                     submit = if (visibleSubmit) rect(673 + dx, 486 + dy, 60, 17) else null,
                     // End before the keypad: a highlighted 1/4/7 key is not a changed question.
                     questionArea = rect(650 + dx, 291 + dy, 235, 63),
@@ -267,18 +395,13 @@ object GameVisualLayout {
             listOf(550 to 470, 653 to 470, 758 to 470),
             listOf(550 to 569, 653 to 569, 758 to 569),
         ).flatten()
-        var whiteOffset: Pair<Int, Int>? = null
-        var whiteBest = 0
-        for (dy in -12..12 step 6) for (dx in -12..12 step 6) {
-            val matches = whiteRows.count { (x, y) ->
-                surface(x + dx, y + dy, lightX, lightY, ::whiteSurface)
-            }
-            if (matches > whiteBest || matches == whiteBest && closer(dx, dy, whiteOffset)) {
-                whiteBest = matches
-                whiteOffset = dx to dy
-            }
-        }
-        if (whiteBest == whiteRows.size && whiteOffset != null) {
+        // Only the measured window: no phone has shown the white pad off its place, and white
+        // answer buttons would make a wide search risky.
+        val whiteOffset = centredOffset(
+            { dx, dy -> whiteRows.all { (x, y) -> surface(x + dx, y + dy, lightX, lightY, ::whiteSurface) } },
+            null,
+        )
+        if (whiteOffset != null) {
             val (dx, dy) = whiteOffset
             // The saturated green confirmation control is essential for skin B.
             val submitPixels = arrayOf(

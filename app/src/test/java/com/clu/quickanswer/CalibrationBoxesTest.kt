@@ -12,6 +12,60 @@ import org.junit.Test
 class CalibrationBoxesTest {
     private fun r(i: Int) = PxRect(10 * i, 10 * i, 10 * i + 5, 10 * i + 5)
 
+    @Test fun keysAreDrawnZeroToNine_thenTheConfirmButton() {
+        val b = CalibrationBoxes()
+        assertEquals('0', b.nextKey)
+        repeat(10) { assertTrue(b.add(Mode.KEY, r(it))) }
+        assertNull(b.nextKey)
+        assertFalse(b.add(Mode.KEY, r(11)))
+        assertEquals(r(7), b.keys[7])
+        assertTrue(b.add(Mode.SUBMIT, r(12)))
+        assertTrue(b.add(Mode.SUBMIT, r(13)))
+        assertEquals(r(13), b.submit)
+        assertTrue(b.undo())
+        assertEquals(r(12), b.submit)
+        assertTrue(b.undo())
+        assertNull(b.submit)
+        assertTrue(b.undo())
+        assertEquals('9', b.nextKey)
+        b.clear()
+        assertTrue(b.isEmpty)
+        assertTrue(b.keys.isEmpty())
+    }
+
+    @Test fun detectedKeysReplaceAllAtOnce_andOneUndoBringsBackTheOld() {
+        val b = CalibrationBoxes()
+        b.add(Mode.KEY, r(1))
+        assertFalse(b.setKeys(List(9) { r(it) }))
+        assertTrue(b.setKeys(List(10) { r(it + 20) }))
+        assertEquals(r(27), b.keys[7])
+        assertTrue(b.undo())
+        assertEquals(listOf(r(1)), b.keys)
+    }
+
+    @Test fun aTappedKeyIsASquareOfTheOtherKeysSize_insideTheCapture() {
+        val b = CalibrationBoxes()
+        val first = b.boxAround(500, 400, 2000, 1000)
+        assertEquals(70, first.width)
+        assertEquals(500f, first.centerX, 1f)
+        b.add(Mode.KEY, PxRect(0, 0, 110, 110))
+        val next = b.boxAround(1990, 5, 2000, 1000)
+        assertEquals(110, next.width)
+        assertEquals(2000, next.right)
+        assertEquals(0, next.top)
+    }
+
+    @Test fun aKeyCanBeSetForAnyDigit_andUndoPutsBackTheOldOne() {
+        val b = CalibrationBoxes()
+        assertTrue(b.setKey(7, r(1)))
+        assertEquals('0', b.nextKey)
+        assertEquals(r(1), b.keyAt[7])
+        assertTrue(b.setKey(7, r(2)))
+        assertTrue(b.undo())
+        assertEquals(r(1), b.keyAt[7])
+        assertFalse(b.setKey(10, r(3)))
+    }
+
     @Test fun aNewQuestionOrFieldReplacesTheOldOne() {
         val b = CalibrationBoxes()
         assertTrue(b.add(Mode.QUESTION, r(1)))

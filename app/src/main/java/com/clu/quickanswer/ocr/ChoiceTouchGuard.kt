@@ -82,6 +82,23 @@ object ChoiceTouchGuard {
         return true
     }
 
+    /**
+     * For the diagnostic log: the first button (1-based) whose surface or writing [isReadyFromLayout]
+     * would refuse right now (a recoloured answer, a covered word), or 0 when each looks ready.
+     */
+    fun firstUnreadyFromLayout(
+        argb: IntArray, width: Int, height: Int, question: PxRect, buttons: List<PxRect>, words: List<PxRect>,
+    ): Int {
+        if (argb.size.toLong() < width.toLong() * height) return -1
+        for (i in buttons.indices) {
+            val word = words.getOrNull(i) ?: return i + 1
+            if (overlaps(question, buttons[i]) || inspect(argb, width, height, buttons[i], word, fromLayout = true) == null) {
+                return i + 1
+            }
+        }
+        return 0
+    }
+
     /** Include the pinned photo as well as the caption/options; keep the animated timer below it out. */
     fun contentArea(width: Int, height: Int, banner: PxRect?, buttons: List<PxRect>): PxRect {
         require(width > 0 && height > 0 && buttons.size == 4)

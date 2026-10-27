@@ -260,4 +260,19 @@ class ColorLayoutTest {
         assertFalse("4 px gap stays open", closed[6 * w + 28] || closed[6 * w + 29])
         assertFalse("outside the blobs stays empty", closed[0 * w + 20] || closed[12 * w + 20])
     }
+
+    /**
+     * Something dark over the question (an old answer panel) merges its lines: the screen is not
+     * read, but with keepMergedQuestion its four verified buttons are still returned.
+     */
+    @Test fun aCoveredQuestionStillGivesTheButtonsWhenAskedFor() {
+        val c = SyntheticScreens.quiz(600, 1300)
+        c.ink(600 * 25 / 100, 1300 * 41 / 100, 600 * 75 / 100, 1300 * 48 / 100) // varied dark, as a real panel is
+        val plain = ColorLayout().inspect(c.px, 600, 1300)
+        assertNull(plain.layout)
+        assertEquals("question text band merged", plain.rejection)
+        val kept = ColorLayout().inspect(c.px, 600, 1300, keepMergedQuestion = true).layout!!
+        assertEquals(4, kept.buttons.size)
+        assertTrue(kept.questionLines.isEmpty())
+    }
 }
