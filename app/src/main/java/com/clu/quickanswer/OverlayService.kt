@@ -502,13 +502,22 @@ class OverlayService : Service() {
                         solved.touches != null -> "خطة لمس: ${solved.touches.size} ضغطة"
                         else -> "لا لمس: ${solved.touchFailure ?: "بدون سبب"}"
                     })
-                // The answer only: the owner found the time and model next to it distracting.
-                windows.showPanel(if (touchRequested && solved.isAnswer && solved.touches == null)
-                    "${solved.text}\n${solved.touchFailure ?: "لم أجد طريقة إدخال موثوقة لهذا الشكل"}" else solved.text)
+                // An answer that will be tapped is tapped first and shown only if the taps do not happen
+                // (performAnswerTouches shows it then): showing it and hiding it again for the taps cost
+                // about 0.4 s per answer (TouchStart).
+                val touchNow = touchRequested && permitsTouch(trigger) && capturedEpoch == touchEpoch &&
+                    capturedWindow == VolumeKeyService.contextVersion() &&
+                    capturedW == capture.screenW && capturedH == capture.screenH && solved.touches != null
+                if (!touchNow) {
+                    // The answer only: the owner found the time and model next to it distracting.
+                    windows.showPanel(if (touchRequested && solved.isAnswer && solved.touches == null)
+                        "${solved.text}\n${solved.touchFailure ?: "لم أجد طريقة إدخال موثوقة لهذا الشكل"}" else solved.text)
+                }
                 if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
                 // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
                 val rect = solved.rect
-                if (rect != null && capturedW == capture.screenW && capturedH == capture.screenH && Prefs.highlightAnswer(this@OverlayService)) {
+                if (!touchNow && rect != null && capturedW == capture.screenW && capturedH == capture.screenH &&
+                    Prefs.highlightAnswer(this@OverlayService)) {
                     windows.showHighlight(rect)
                 }
                 // After the answer is on screen, never before it (decision 10).
@@ -520,9 +529,7 @@ class OverlayService : Service() {
                 ) {
                     startResultWatch(watch, watchBase)
                 }
-                if (touchRequested && permitsTouch(trigger) && capturedEpoch == touchEpoch &&
-                    capturedWindow == VolumeKeyService.contextVersion() &&
-                    capturedW == capture.screenW && capturedH == capture.screenH && solved.touches != null) {
+                if (touchNow) {
                     performAnswerTouches(solved, capturedW, capturedH, trigger, retryAttempt)
                 } else if (touchRequested && solved.touches != null) {
                     DiagLog.add("اللمس أُلغي قبل البدء: " + when {

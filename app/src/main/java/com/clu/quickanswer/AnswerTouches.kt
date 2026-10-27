@@ -296,8 +296,11 @@ private fun fingerprint(bitmap: Bitmap, area: PxRect, ignored: List<PxRect> = em
 
 internal fun OverlayService.performAnswerTouches(solved: Solved, w: Int, h: Int, trigger: AnswerTrigger,
                                                  retryAttempt: AutoAnswerRetry.Attempt?) {
-    fun notStarted(why: String) {
+    // The answer is not on screen yet (it is tapped first, see TouchStart): every way out that does not
+    // tap it shows it, with the reason when there is one.
+    fun notStarted(why: String, panel: String = solved.text) {
         DiagLog.add("اللمس لم يبدأ: $why")
+        windows.showPanel(panel)
         retryAttempt?.finish(retryable = true, SystemClock.uptimeMillis())
     }
     val boxes = solved.touches ?: return notStarted("لا خطة لمس")
@@ -305,8 +308,8 @@ internal fun OverlayService.performAnswerTouches(solved: Solved, w: Int, h: Int,
     val region = solved.guardRect ?: return notStarted("لا منطقة للسؤال")
     if (!TouchFrameGuard.usable(stamp)) return notStarted("بصمة السؤال غير صالحة")
     if (touchPending || !VolumeKeyService.isEnabled(this)) {
-        if (!VolumeKeyService.isEnabled(this)) windows.showPanel("فعّل خدمة إمكانية الوصول لتشغيل اللمس التلقائي")
-        return notStarted(if (touchPending) "لمس سابق لسا شغّال" else "خدمة إمكانية الوصول مطفية")
+        return if (touchPending) notStarted("لمس سابق لسا شغّال")
+        else notStarted("خدمة إمكانية الوصول مطفية", "${solved.text}\nفعّل خدمة إمكانية الوصول لتشغيل اللمس التلقائي")
     }
     touchPending = true
     val epoch = touchEpoch
@@ -407,30 +410,36 @@ internal fun OverlayService.performAnswerTouches(solved: Solved, w: Int, h: Int,
             // Includes queued capture frames, all gesture callbacks and numeric readback.
             // Even a missing platform callback cannot leave the bubble busy indefinitely.
             withTimeout(15_000L) {
-                delay(80L)
+                // Normally nothing of ours is on screen here (the answer is tapped before it is shown);
+                // the waits below are for a panel or box that is.
+                val start = TouchStart.plan(windows.panelAdded, windows.highlight != null)
+                if (start.settleMs > 0) delay(start.settleMs)
                 if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
                     w != capture.screenW || h != capture.screenH || windows.preview != null) {
                     DiagLog.add("اللمس لم يبدأ: تغيّرت الحالة (محاولة أحدث، الإعدادات، الدوران أو الصورة المرسلة)")
+                    if (!destroyed && epoch == touchEpoch) windows.showPanel(solved.text)
                     return@withTimeout
                 }
-                windows.hidePanel()
-                windows.hideHighlight()
-                val removedAt = System.nanoTime()
-                delay(100L)
-                // The checks below compare the question with the capture; a frame that still shows
-                // our answer panel over it fails them ("the question changed", "buttons not
-                // ready"). On the owner's phone the first frame without the panel came 236-272 ms
-                // after it was hidden (log, 26 Oct 2026), later than the checks' three tries.
-                var frameWaits = 0
-                while (frameWaits < CLEAN_TOUCH_POLLS) {
-                    try { capture.grabFrame() } catch (_: Throwable) { }
-                    val at = capture.lastFrameAtNs
-                    val trusted = at > 0 && abs(at - System.nanoTime()) < 60_000_000_000L
-                    if (!trusted || at > removedAt) break
-                    delay(CLEAN_POLL_MS)
-                    frameWaits++
+                if (start.hide) {
+                    windows.hidePanel()
+                    windows.hideHighlight()
+                    val removedAt = System.nanoTime()
+                    delay(TouchStart.AFTER_HIDE_MS)
+                    // The checks below compare the question with the capture; a frame that still shows
+                    // our answer panel over it fails them ("the question changed", "buttons not
+                    // ready"). On the owner's phone the first frame without the panel came 236-272 ms
+                    // after it was hidden (log, 26 Oct 2026), later than the checks' three tries.
+                    var frameWaits = 0
+                    while (frameWaits < CLEAN_TOUCH_POLLS) {
+                        try { capture.grabFrame() } catch (_: Throwable) { }
+                        val at = capture.lastFrameAtNs
+                        val trusted = at > 0 && abs(at - System.nanoTime()) < 60_000_000_000L
+                        if (!trusted || at > removedAt) break
+                        delay(CLEAN_POLL_MS)
+                        frameWaits++
+                    }
+                    if (frameWaits > 0) DiagLog.add("اللمس: انتظار إطار بدون اللوحة ${TouchStart.AFTER_HIDE_MS + frameWaits * CLEAN_POLL_MS}ms")
                 }
-                if (frameWaits > 0) DiagLog.add("اللمس: انتظار إطار بدون اللوحة ${100 + frameWaits * CLEAN_POLL_MS}ms")
                 val ready = suspendCancellableCoroutine<Boolean> { continuation ->
                     TouchPreflight { delay, action -> check(handler.postDelayed({ action() }, delay)) }
                         .awaitReady(
@@ -447,6 +456,7 @@ internal fun OverlayService.performAnswerTouches(solved: Solved, w: Int, h: Int,
                     DiagLog.add("اللمس: نفس الشاشة جُرّبت قبل، تُركت")
                     // This question already had an accepted run; it must not be replayed.
                     mayHaveDispatched = true
+                    windows.showPanel(solved.text)
                     return@withTimeout
                 }
                 setBusy(true)
@@ -472,19 +482,19 @@ internal fun OverlayService.performAnswerTouches(solved: Solved, w: Int, h: Int,
                     entryRejected -> "اللمس: الرقم المقروء بالخانة ما طابق، لم يُضغط التأكيد"
                     else -> "اللمس توقف: $cancelReason"
                 })
-                if (!finished) windows.showPanel(if (entryRejected) "تعذّر التحقق من الرقم؛ لم يتم التأكيد"
+                if (!finished) windows.showPanel("${solved.text}\n" + if (entryRejected) "تعذّر التحقق من الرقم؛ لم يتم التأكيد"
                     else cancelReason)
             }
         } catch (_: TimeoutCancellationException) {
             DiagLog.add("اللمس: انتهت المهلة")
             if (!destroyed && epoch == touchEpoch) try {
-                windows.showPanel("انتهت مهلة اللمس؛ جاهز للسؤال التالي")
+                windows.showPanel("${solved.text}\nانتهت مهلة اللمس؛ جاهز للسؤال التالي")
             } catch (_: Throwable) { }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Throwable) {
             if (!destroyed && epoch == touchEpoch) try {
-                windows.showPanel("تعذّر إكمال اللمس؛ جاهز للسؤال التالي")
+                windows.showPanel("${solved.text}\nتعذّر إكمال اللمس؛ جاهز للسؤال التالي")
             } catch (_: Throwable) { }
         } finally {
             try {
