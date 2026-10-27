@@ -1085,7 +1085,10 @@ class OverlayService : Service() {
                     if (destroyed) return@launch
                     if (sig != null) {
                         lastSentSig = sig
-                        autoRetry.record(sig, true, SystemClock.uptimeMillis())
+                        // A failed question like any other; a newer request, a cancel or a changed screen
+                        // means the retry would be for a screen that is gone, so none is booked.
+                        if (requestIsCurrent()) retryAttempt?.finish(retryable = true, SystemClock.uptimeMillis())
+                        else retryAttempt?.cancel()
                     }
                     StatsStore.record(AnswerSource.FAILED, SystemClock.elapsedRealtime() - started)
                     lastHitKey = null
