@@ -10,9 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.PixelFormat
 import android.graphics.Rect
-import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -20,14 +18,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
-import android.text.TextUtils
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
-import android.view.WindowManager
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.clu.quickanswer.ocr.ArabicOcr
@@ -77,7 +67,6 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import kotlin.math.abs
-import kotlin.math.min
 
 class OverlayService : Service() {
 
@@ -126,27 +115,15 @@ class OverlayService : Service() {
         // than this (FrameSignature.diff). Half of CHANGE_THRESHOLD: the buttons are what differs most
         // between two questions and are not compared, so the rest has to be held to a stricter limit.
         private const val WATCH_SAME_SCREEN_DIFF = CHANGE_THRESHOLD / 2
-        private const val LONG_PRESS_MS = 600L
         // A reply for learning a layout is a quiz option or a number, which is short; a sentence means
         // a document or an app, not a quiz screen worth a layout request.
         private const val MAX_LEARN_REPLY_CHARS = 40
-        private const val PANEL_TOP_MARGIN_DP = 6
-        private const val PREVIEW_AUTO_CLOSE_MS = 20_000L
         // An answer that auto mode hid is brought back only if it still has this long to live.
         private const val HIDDEN_ANSWER_MIN_LEFT_MS = 1_000L
-        // Android 12+ drops touches that pass through another app's overlay window whose opacity is
-        // above 0.8 (the "maximum obscuring opacity"), even with FLAG_NOT_TOUCHABLE. Keep the panel at
-        // or below it, or the game never sees taps that land under the panel. Do not raise this.
-        private const val PANEL_WINDOW_ALPHA = 0.8f
 
         // A second tap within this time after an answer from memory asks the model again and
         // overwrites the remembered answer (the way to correct a wrong one).
         private const val CORRECTION_WINDOW_MS = 20_000L
-        private const val HIGHLIGHT_PAD_DP = 6
-        private const val HIGHLIGHT_STROKE_DP = 4
-        private const val HIGHLIGHT_COLOR = "#22C55E"
-        // The box is moved to where it was asked to be only if the system put it this close to it.
-        private const val HIGHLIGHT_FIX_MAX_DP = 200
         private const val SHOWN_IMAGE_MAX_SIDE = 1024
     }
 
@@ -159,34 +136,25 @@ class OverlayService : Service() {
      */
     private val warmUps = WarmUpThrottle(1_000L)
 
-    private lateinit var wm: WindowManager
     private var projection: MediaProjection? = null
     private val capture = ScreenCapture(this)
 
-    private var bubble: TextView? = null
-    private var bubbleParams: WindowManager.LayoutParams? = null
-    private var panel: TextView? = null
-    private var panelParams: WindowManager.LayoutParams? = null
-    // Where the panel on screen was placed. Read from Prefs each time a panel is shown, so the
-    // setting applies without restarting the service; rotation and bubble drags reuse this value.
-    private var panelMode = PanelPlacement.Mode.TOP
-    // Measured size of the answer panel, used to place it (see PanelPlacement).
-    private var panelAdded = false
-    private var panelW = 0
-    private var panelH = 0
-    private val hidePanelRunnable = Runnable { hidePanel() }
-    // What the panel on screen says and when it hides itself (SystemClock.uptimeMillis), so auto
-    // mode can bring it back if it hid it for what turned out to be a blip.
-    private var panelText = ""
-    private var panelDeadline = 0L
     private val hiddenAnswer = HiddenAnswer()
     // The picture that goes with the answer last shown: what "آخر صورة" previews. Not client.lastSent,
     // which also moves on to auto-mode sends whose "no question" reply is never shown.
     private var shownImage: Bitmap? = null
 
-    // Touchable preview of the last image sent, opened from the notification.
-    private var preview: View? = null
-    private val closePreviewRunnable = Runnable { hidePreview() }
+    private val windows = OverlayWindows(
+        context = this,
+        handler = handler,
+        capture = capture,
+        hiddenAnswer = hiddenAnswer,
+        isBusy = { busy },
+        isAutoMode = { autoMode },
+        onBubbleTouchDown = { warmUp() },
+        onBubbleTap = { answerNow() },
+        onBubbleLongPress = { toggleAuto() },
+    )
 
     private var autoMode = false
     private var autoJob: Job? = null
@@ -220,11 +188,6 @@ class OverlayService : Service() {
     private var latinOcr: LatinOcr? = null
     @Volatile private var destroyed = false
 
-    // The green box around the right option (its own touch-through window), shown and hidden with the panel.
-    private var highlight: View? = null
-    // The button it marks (screen pixels) and the screen size that was measured on; null without a box.
-    private var highlightBox: HiddenAnswer.Box? = null
-
     // The last answer that came from memory, for the correction tap (see CORRECTION_WINDOW_MS).
     private var lastHitKey: String? = null
     private var lastHitAt = 0L
@@ -239,7 +202,7 @@ class OverlayService : Service() {
         }
         if (intent?.action == ACTION_LAST_IMAGE) {
             // Only meaningful while the bubble is running; a stale tap must not start a half-initialised service.
-            if (projection == null) stopSelf() else showLastImage()
+            if (projection == null) stopSelf() else windows.showLastImage(shownImage ?: client?.lastSent)
             return START_NOT_STICKY
         }
         if (projection != null) return START_NOT_STICKY
@@ -255,7 +218,6 @@ class OverlayService : Service() {
         // Android 14+: foreground service must be started before getMediaProjection().
         startAsForeground()
 
-        wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         GeminiRuntime.init(this)
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(RESTART_NOTIF_ID)
         currentClient()
@@ -291,7 +253,7 @@ class OverlayService : Service() {
         }, handler)
 
         capture.setupCapture(proj)
-        createBubble()
+        windows.createBubble()
         volumeTrigger = { answerNow(AnswerTrigger.VOLUME_DOWN) }
         return START_NOT_STICKY
     }
@@ -396,136 +358,14 @@ class OverlayService : Service() {
         // it (it follows the bubble in NEXT_TO_BUBBLE mode). The centred preview is sized for the
         // old screen, so just close it.
         // The box marks a button of the old layout (and must not push the re-placed panel around).
-        hideHighlight()
+        windows.hideHighlight()
         if (capture.resizeCapture()) {
             // The auto mode's previous signature describes the old orientation.
             prevTickSig = null
-            clampBubble()
+            windows.clampBubble()
         }
-        refreshPanel()
-        hidePreview()
-    }
-
-    /** After a rotation the screen has new bounds: keep the bubble fully inside them. */
-    private fun clampBubble() {
-        val v = bubble ?: return
-        val params = bubbleParams ?: return
-        val pos = PanelPlacement.clampInto(params.x, params.y, params.width, params.height, capture.screenW, capture.screenH)
-        if (pos.x == params.x && pos.y == params.y) return
-        params.x = pos.x
-        params.y = pos.y
-        try {
-            wm.updateViewLayout(v, params)
-        } catch (_: Exception) {
-        }
-    }
-
-    // ---------------------------------------------------------------- overlays
-
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-
-    private fun overlayType() = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-
-    /**
-     * With [on], the window's x/y count from the real top-left corner of the display. Without it the
-     * window is laid out inside the system bars (and beside a display cutout), so a visible status
-     * bar shifts it down by its height, which would put a bubble clamped to getRealMetrics partly
-     * off the bottom of the screen after a rotation.
-     */
-    private fun useScreenCoordinates(p: WindowManager.LayoutParams, on: Boolean) {
-        val flag = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-        p.flags = if (on) p.flags or flag else p.flags and flag.inv()
-        if (Build.VERSION.SDK_INT >= 30) {
-            // FLAG_LAYOUT_IN_SCREEN frees the window of the status bar only; a visible navigation bar
-            // (at the side in landscape) would still shift it by its width. No insets at all, then.
-            p.fitInsetsTypes = if (on) 0 else android.view.WindowInsets.Type.systemBars()
-        }
-        if (Build.VERSION.SDK_INT >= 28) {
-            p.layoutInDisplayCutoutMode = when {
-                !on -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
-                Build.VERSION.SDK_INT >= 30 -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-                else -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            }
-        }
-    }
-
-    private fun createBubble() {
-        val size = dp(56)
-        val tv = TextView(this).apply {
-            text = "؟"
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            textSize = 22f
-        }
-        bubble = tv
-        val params = WindowManager.LayoutParams(
-            size, size, overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = dp(8)
-            y = capture.screenH / 3
-        }
-        // x/y are real screen coordinates, so the clamp after a rotation (getRealMetrics) is exact.
-        useScreenCoordinates(params, true)
-        bubbleParams = params
-        updateBubbleStyle()
-
-        val slop = dp(8)
-        tv.setOnTouchListener(object : View.OnTouchListener {
-            var startX = 0
-            var startY = 0
-            var touchX = 0f
-            var touchY = 0f
-            var moved = false
-            var longFired = false
-            val longRunnable = Runnable {
-                longFired = true
-                toggleAuto()
-            }
-
-            override fun onTouch(v: View, e: MotionEvent): Boolean {
-                when (e.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        // The user is about to ask: have a warm connection ready by the time the capture is sent.
-                        warmUp()
-                        startX = params.x
-                        startY = params.y
-                        touchX = e.rawX
-                        touchY = e.rawY
-                        moved = false
-                        longFired = false
-                        handler.postDelayed(longRunnable, LONG_PRESS_MS)
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val dx = (e.rawX - touchX).toInt()
-                        val dy = (e.rawY - touchY).toInt()
-                        if (!moved && (abs(dx) > slop || abs(dy) > slop)) {
-                            moved = true
-                            handler.removeCallbacks(longRunnable)
-                        }
-                        if (moved) {
-                            params.x = startX + dx
-                            params.y = startY + dy
-                            try {
-                                wm.updateViewLayout(v, params)
-                            } catch (_: Exception) {
-                            }
-                            followBubble()
-                        }
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        handler.removeCallbacks(longRunnable)
-                        if (!moved && !longFired) answerNow()
-                    }
-                    MotionEvent.ACTION_CANCEL -> handler.removeCallbacks(longRunnable)
-                }
-                return true
-            }
-        })
-        wm.addView(tv, params)
+        windows.refreshPanel()
+        windows.hidePreview()
     }
 
     /** Lets the answer provider open its connection early. Never touches the network on the main thread. */
@@ -540,275 +380,11 @@ class OverlayService : Service() {
         }
     }
 
-    private fun updateBubbleStyle() {
-        val tv = bubble ?: return
-        val color = when {
-            busy -> Color.parseColor("#F59E0B")
-            autoMode -> Color.parseColor("#16A34A")
-            else -> Color.parseColor("#2563EB")
-        }
-        tv.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(color)
-            setStroke(dp(2), Color.WHITE)
-        }
-        tv.text = when {
-            busy -> "…"
-            autoMode -> "A"
-            else -> "؟"
-        }
-    }
-
-    /** Widest the panel may be in the current [panelMode] (see [PanelPlacement.maxWidth]). */
-    private fun panelMaxWidth(): Int = PanelPlacement.maxWidth(panelMode, capture.screenW, capture.screenH)
-
-    private fun createPanelView(): TextView = TextView(this).apply {
-        setTextColor(Color.WHITE)
-        textSize = 18f
-        setTypeface(typeface, android.graphics.Typeface.BOLD)
-        gravity = Gravity.CENTER
-        setPadding(dp(12), dp(8), dp(12), dp(8))
-        ellipsize = TextUtils.TruncateAt.END
-        background = GradientDrawable().apply {
-            cornerRadius = dp(12).toFloat()
-            // Opaque: the window itself is drawn at PANEL_WINDOW_ALPHA, which makes it ~80% dark.
-            setColor(Color.parseColor("#FF111111"))
-        }
-    }
-
-    /**
-     * Shows the answer at the top of the screen or next to the bubble, as set in [Prefs.panelMode].
-     * The panel window is not touchable, so every tap goes through to the app underneath (the
-     * answer options of the game); it hides itself after [hideAfterMs] (longer for a list, see
-     * [PanelPlacement.autoHideMs]). A list is aligned to the start, in reading order.
-     */
-    private fun showPanel(text: String, hideAfterMs: Long = PanelPlacement.autoHideMs(text)) {
-        hiddenAnswer.clear() // this answer replaces whatever auto mode had hidden
-        hideHighlight() // the box of the answer before marks nothing now
-        panelMode = Prefs.panelMode(this)
-        val p = panel ?: createPanelView().also { panel = it }
-        p.maxLines = PanelPlacement.maxLines(panelMode, text, landscape = capture.screenW > capture.screenH)
-        p.text = text
-        val list = ReplyShape.isList(text)
-        p.gravity = if (list) Gravity.START or Gravity.CENTER_VERTICAL else Gravity.CENTER
-        p.textDirection = if (list) View.TEXT_DIRECTION_ANY_RTL else View.TEXT_DIRECTION_FIRST_STRONG
-        measurePanel(p)
-        val params = panelParams ?: WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            alpha = PANEL_WINDOW_ALPHA
-        }.also { panelParams = it }
-        applyPanelSize(params)
-        // Next to the bubble the panel must share the bubble's coordinates. At the top it is left
-        // inside the system bars on purpose: overlay windows are drawn below the status bar, so a
-        // panel at the real top edge would have the clock and icons painted over its text.
-        useScreenCoordinates(params, panelMode == PanelPlacement.Mode.NEXT_TO_BUBBLE)
-        placePanel(params)
-        try {
-            if (panelAdded) {
-                wm.updateViewLayout(p, params)
-            } else {
-                wm.addView(p, params)
-                panelAdded = true
-            }
-        } catch (_: Exception) {
-        }
-        handler.removeCallbacks(hidePanelRunnable)
-        handler.postDelayed(hidePanelRunnable, hideAfterMs)
-        panelText = text
-        panelDeadline = SystemClock.uptimeMillis() + hideAfterMs
-    }
-
-    /** Measures the panel for the current text and screen size (width capped by [panelMaxWidth]). */
-    private fun measurePanel(p: TextView) {
-        p.maxWidth = panelMaxWidth()
-        p.measure(
-            View.MeasureSpec.makeMeasureSpec(capture.screenW, View.MeasureSpec.AT_MOST),
-            View.MeasureSpec.makeMeasureSpec(capture.screenH, View.MeasureSpec.AT_MOST)
-        )
-        panelW = p.measuredWidth
-        panelH = p.measuredHeight
-    }
-
-    /**
-     * Gives the window exactly the measured size. A WRAP_CONTENT window is first measured by the
-     * system at a narrower "preferred dialog width" (320dp), which would re-wrap long answers and
-     * make them taller than the size [PanelPlacement] was given.
-     */
-    private fun applyPanelSize(params: WindowManager.LayoutParams) {
-        params.width = panelW.coerceAtLeast(1)
-        params.height = panelH.coerceAtLeast(1)
-    }
-
-    /** Puts the panel where [panelMode] says (see [PanelPlacement]) using the last measured panel size. */
-    private fun placePanel(params: WindowManager.LayoutParams) {
-        val pos = when (panelMode) {
-            PanelPlacement.Mode.TOP ->
-                PanelPlacement.top(panelW, panelH, capture.screenW, capture.screenH, dp(PANEL_TOP_MARGIN_DP))
-            PanelPlacement.Mode.NEXT_TO_BUBBLE -> {
-                val bp = bubbleParams ?: return
-                PanelPlacement.place(bp.x, bp.y, bp.width, panelW, panelH, capture.screenW, capture.screenH, dp(8))
-            }
-        }
-        params.x = pos.x
-        params.y = pos.y
-    }
-
-    /** Keeps a panel that sits next to the bubble with it while the bubble is dragged. */
-    private fun followBubble() {
-        if (panelMode == PanelPlacement.Mode.NEXT_TO_BUBBLE) updatePanelPosition()
-    }
-
-    /** Re-places the visible panel (after the bubble moved or the screen size changed). */
-    private fun updatePanelPosition() {
-        val p = panel ?: return
-        val params = panelParams ?: return
-        if (!panelAdded) return
-        placePanel(params)
-        // Next to the bubble the panel's coordinates are screen coordinates, so it can be kept clear
-        // of the green box without measuring (a panel at the top is checked once the box is laid out).
-        val box = highlightBox
-        if (box != null && panelMode == PanelPlacement.Mode.NEXT_TO_BUBBLE) {
-            val now = PxRect(params.x, params.y, params.x + params.width, params.y + params.height)
-            clearOfBox(now, paddedBox(box.rect))?.let {
-                params.x = it.x
-                params.y = it.y
-            }
-        }
-        try {
-            wm.updateViewLayout(p, params)
-        } catch (_: Exception) {
-        }
-    }
-
-    /** Re-measures and re-places the visible panel after the screen size changed (either mode). */
-    private fun refreshPanel() {
-        val p = panel ?: return
-        if (!panelAdded) return
-        measurePanel(p)
-        panelParams?.let { applyPanelSize(it) }
-        updatePanelPosition()
-    }
-
-    private fun hidePanel() {
-        handler.removeCallbacks(hidePanelRunnable)
-        hideHighlight()
-        val p = panel ?: return
-        if (!panelAdded) return
-        panelAdded = false
-        try {
-            wm.removeView(p)
-        } catch (_: Exception) {
-        }
-    }
-
-    /**
-     * Shows the picture behind the answer last shown, in a separate touchable window in the centre
-     * of the screen (before any answer: whatever was sent last). Tap closes it; it also closes
-     * itself after [PREVIEW_AUTO_CLOSE_MS].
-     */
-    private fun showLastImage() {
-        val bmp = shownImage ?: client?.lastSent
-        if (bmp == null) {
-            Toast.makeText(this, "لا توجد صورة بعد", Toast.LENGTH_SHORT).show()
-            return
-        }
-        hidePreview()
-        val maxW = (capture.screenW * 0.8f).toInt()
-        val maxH = (capture.screenH * 0.6f).toInt()
-        val scale = min(maxW.toFloat() / bmp.width, maxH.toFloat() / bmp.height)
-        val w = (bmp.width * scale).toInt().coerceAtLeast(1)
-        val h = (bmp.height * scale).toInt().coerceAtLeast(1)
-
-        val image = ImageView(this).apply {
-            setImageBitmap(bmp)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-        }
-        val caption = TextView(this).apply {
-            text = "الصورة المرسلة — اضغط للإغلاق"
-            setTextColor(Color.WHITE)
-            textSize = 16f
-            gravity = Gravity.CENTER
-            setPadding(0, dp(8), 0, 0)
-        }
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(Color.parseColor("#E6111111"))
-            }
-            addView(image, LinearLayout.LayoutParams(w, h))
-            addView(
-                caption,
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-            )
-            setOnClickListener { hidePreview() }
-        }
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.CENTER
-        }
-        try {
-            wm.addView(box, params)
-        } catch (_: Exception) {
-            return
-        }
-        preview = box
-        handler.postDelayed(closePreviewRunnable, PREVIEW_AUTO_CLOSE_MS)
-    }
-
-    private fun hidePreview() {
-        handler.removeCallbacks(closePreviewRunnable)
-        val v = preview ?: return
-        preview = null
-        try {
-            wm.removeView(v)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun viewRect(v: View?): Rect? {
-        if (v == null || !v.isAttachedToWindow || v.width == 0) return null
-        val loc = IntArray(2)
-        v.getLocationOnScreen(loc)
-        return Rect(loc[0], loc[1], loc[0] + v.width, loc[1] + v.height)
-    }
-
-    // ---------------------------------------------------------------- capture
-
-    /** Screen rectangles of our own windows that are painted black in captures (bubble, panel, image preview). */
-    private fun overlayRects(): List<Rect> = listOfNotNull(viewRect(bubble), viewRect(panel), viewRect(preview))
-
-    /**
-     * What auto mode's change detection ignores: [overlayRects] plus the green box. The box is never
-     * painted into a capture (it sits on an answer button the next question needs); it is hidden with
-     * the panel before anything is sent instead.
-     */
-    private fun ignoreRects(): List<Rect> = overlayRects() + listOfNotNull(viewRect(highlight))
-
     // ---------------------------------------------------------------- actions
 
     private fun setBusy(b: Boolean) {
         busy = b
-        updateBubbleStyle()
+        windows.updateBubbleStyle()
     }
 
     private fun answerNow(trigger: AnswerTrigger = AnswerTrigger.BUBBLE) {
@@ -817,24 +393,24 @@ class OverlayService : Service() {
         warmUp()
         stopResultWatch()
         hiddenAnswer.clear()
-        if (panelAdded || preview != null) {
+        if (windows.panelAdded || windows.preview != null) {
             // Remove the old answer (and the sent-image preview) first so they don't hide part of the question.
-            hidePanel()
-            hidePreview()
+            windows.hidePanel()
+            windows.hidePreview()
             setBusy(true)
             awaitFrameWithoutOverlays(trigger, SystemClock.uptimeMillis(), System.nanoTime())
             return
         }
-        val bmp = capture.captureMasked(::overlayRects)
+        val bmp = capture.captureMasked(windows::overlayRects)
         if (bmp == null) {
-            showPanel("لم يتم الحصول على إجابة")
+            windows.showPanel("لم يتم الحصول على إجابة")
             return
         }
         // In auto mode count this as the last frame sent, or the next tick would see the question as
         // "new", hide this answer and ask again.
         touchAttempts.reset()
         autoRetry.reset()
-        sendFrame(bmp, if (autoMode) capture.signature(bmp, ignoreRects()) else null, fromAuto = false, trigger = trigger)
+        sendFrame(bmp, if (autoMode) capture.signature(bmp, windows.ignoreRects()) else null, fromAuto = false, trigger = trigger)
     }
 
     /**
@@ -968,7 +544,7 @@ class OverlayService : Service() {
                     StatsStore.record(AnswerSource.FAILED, SystemClock.elapsedRealtime() - started)
                     lastHitKey = null
                     lastHitAt = 0L
-                    showPanel(AnswerDeadline.TIMEOUT_TEXT)
+                    windows.showPanel(AnswerDeadline.TIMEOUT_TEXT)
                     return@launch
                 }
                 if (destroyed) {
@@ -1000,13 +576,13 @@ class OverlayService : Service() {
                         else -> "لا لمس: ${solved.touchFailure ?: "بدون سبب"}"
                     })
                 // The answer only: the owner found the time and model next to it distracting.
-                showPanel(if (touchRequested && solved.isAnswer && solved.touches == null)
+                windows.showPanel(if (touchRequested && solved.isAnswer && solved.touches == null)
                     "${solved.text}\n${solved.touchFailure ?: "لم أجد طريقة إدخال موثوقة لهذا الشكل"}" else solved.text)
                 if (solved.isAnswer && Prefs.vibrateOnAnswer(this@OverlayService)) Haptics.tick(this@OverlayService)
                 // The box marks a button in the captured frame; skip it if the screen rotated meanwhile.
                 val rect = solved.rect
                 if (rect != null && capturedW == capture.screenW && capturedH == capture.screenH && Prefs.highlightAnswer(this@OverlayService)) {
-                    showHighlight(rect)
+                    windows.showHighlight(rect)
                 }
                 // After the answer is on screen, never before it (decision 10).
                 solved.learn?.let { startLearning(it) }
@@ -1038,7 +614,7 @@ class OverlayService : Service() {
                     if (!touchPending && requestIsCurrent())
                         retryAttempt?.finish(retryable = true, SystemClock.uptimeMillis())
                 }
-                if (!destroyed) try { showPanel("تعذّرت المحاولة؛ يمكنك طلب الإجابة من جديد") } catch (_: Throwable) { }
+                if (!destroyed) try { windows.showPanel("تعذّرت المحاولة؛ يمكنك طلب الإجابة من جديد") } catch (_: Throwable) { }
             } finally {
                 // Touch execution owns busy until its own finally block. All other exits release it.
                 if (!touchPending) {
@@ -1199,7 +775,7 @@ class OverlayService : Service() {
             complete(false)
             return
         }
-        if (overlayRects().any { it.left < field.right && field.left < it.right &&
+        if (windows.overlayRects().any { it.left < field.right && field.left < it.right &&
                 it.top < field.bottom && field.top < it.bottom }) { complete(false); return }
         scope.launch {
             // Accessibility's UP may precede the game's next rendered frame. Read again, never retype.
@@ -1313,7 +889,7 @@ class OverlayService : Service() {
         val region = solved.guardRect ?: return notStarted("لا منطقة للسؤال")
         if (!TouchFrameGuard.usable(stamp)) return notStarted("بصمة السؤال غير صالحة")
         if (touchPending || !VolumeKeyService.isEnabled(this)) {
-            if (!VolumeKeyService.isEnabled(this)) showPanel("فعّل خدمة إمكانية الوصول لتشغيل اللمس التلقائي")
+            if (!VolumeKeyService.isEnabled(this)) windows.showPanel("فعّل خدمة إمكانية الوصول لتشغيل اللمس التلقائي")
             return notStarted(if (touchPending) "لمس سابق لسا شغّال" else "خدمة إمكانية الوصول مطفية")
         }
         touchPending = true
@@ -1327,12 +903,12 @@ class OverlayService : Service() {
         fun canContinue(): Boolean {
             if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
                 window != VolumeKeyService.contextVersion() ||
-                w != capture.screenW || h != capture.screenH || preview != null || projection == null
+                w != capture.screenW || h != capture.screenH || windows.preview != null || projection == null
             ) return blocked("تغيّر التطبيق أو وضع الشاشة؛ أُلغي اللمس")
             return try {
                 capture.grabFrame()
                 val frame = capture.lastFrame ?: return blocked("لم تصل لقطة شاشة جديدة؛ لم أضغط")
-                val ignored = solved.ignoredRects + overlayRects().map { PxRect(it.left, it.top, it.right, it.bottom) }
+                val ignored = solved.ignoredRects + windows.overlayRects().map { PxRect(it.left, it.top, it.right, it.bottom) }
                 if (frame.width != w || frame.height != h) return blocked("تغيّر مقاس اللقطة؛ لم أضغط")
                 val nowStamp = fingerprint(frame, region, ignored)
                 if (nowStamp?.let { TouchFrameGuard.matches(stamp, it) } != true) {
@@ -1344,7 +920,7 @@ class OverlayService : Service() {
                 if (picture != null && (solved.pictureStamp == null ||
                     fingerprint(frame, picture, ignored)?.let { TouchFrameGuard.matches(solved.pictureStamp, it) } != true
                 )) return blocked("تغيّرت الصورة أو حُجب جزء منها؛ لم أضغط")
-                val obstruction = viewRect(bubble)
+                val obstruction = windows.viewRect(windows.bubble)
                 if (obstruction != null && boxes.any { r ->
                     r.left < obstruction.right && r.right > obstruction.left &&
                         r.top < obstruction.bottom && r.bottom > obstruction.top
@@ -1417,12 +993,12 @@ class OverlayService : Service() {
                 withTimeout(15_000L) {
                     delay(80L)
                     if (destroyed || epoch != touchEpoch || !permitsTouch(trigger) ||
-                        w != capture.screenW || h != capture.screenH || preview != null) {
+                        w != capture.screenW || h != capture.screenH || windows.preview != null) {
                         DiagLog.add("اللمس لم يبدأ: تغيّرت الحالة (محاولة أحدث، الإعدادات، الدوران أو الصورة المرسلة)")
                         return@withTimeout
                     }
-                    hidePanel()
-                    hideHighlight()
+                    windows.hidePanel()
+                    windows.hideHighlight()
                     val removedAt = System.nanoTime()
                     delay(100L)
                     // The checks below compare the question with the capture; a frame that still shows
@@ -1448,7 +1024,7 @@ class OverlayService : Service() {
                     }
                     if (!ready) {
                         DiagLog.add("اللمس لم يبدأ: $cancelReason")
-                        showPanel("${solved.text}\n$cancelReason")
+                        windows.showPanel("${solved.text}\n$cancelReason")
                         return@withTimeout
                     }
                     if (!touchAttempts.tryBegin(stamp, w, h)) {
@@ -1480,19 +1056,19 @@ class OverlayService : Service() {
                         entryRejected -> "اللمس: الرقم المقروء بالخانة ما طابق، لم يُضغط التأكيد"
                         else -> "اللمس توقف: $cancelReason"
                     })
-                    if (!finished) showPanel(if (entryRejected) "تعذّر التحقق من الرقم؛ لم يتم التأكيد"
+                    if (!finished) windows.showPanel(if (entryRejected) "تعذّر التحقق من الرقم؛ لم يتم التأكيد"
                         else cancelReason)
                 }
             } catch (_: TimeoutCancellationException) {
                 DiagLog.add("اللمس: انتهت المهلة")
                 if (!destroyed && epoch == touchEpoch) try {
-                    showPanel("انتهت مهلة اللمس؛ جاهز للسؤال التالي")
+                    windows.showPanel("انتهت مهلة اللمس؛ جاهز للسؤال التالي")
                 } catch (_: Throwable) { }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
                 if (!destroyed && epoch == touchEpoch) try {
-                    showPanel("تعذّر إكمال اللمس؛ جاهز للسؤال التالي")
+                    windows.showPanel("تعذّر إكمال اللمس؛ جاهز للسؤال التالي")
                 } catch (_: Throwable) { }
             } finally {
                 try {
@@ -1986,112 +1562,6 @@ class OverlayService : Service() {
         }
     }
 
-    /** [r] grown by the room the green box leaves around a button. */
-    private fun paddedBox(r: PxRect): PxRect {
-        val pad = dp(HIGHLIGHT_PAD_DP)
-        return PxRect(r.left - pad, r.top - pad, r.right + pad, r.bottom + pad)
-    }
-
-    /** Draws the green box around [r] (screen pixels: captures are the real screen, 1:1). */
-    private fun showHighlight(r: PxRect) {
-        hideHighlight()
-        val box = paddedBox(r)
-        val v = View(this).apply {
-            background = GradientDrawable().apply {
-                setColor(Color.TRANSPARENT)
-                setStroke(dp(HIGHLIGHT_STROKE_DP), Color.parseColor(HIGHLIGHT_COLOR))
-                cornerRadius = dp(12).toFloat()
-            }
-        }
-        val params = WindowManager.LayoutParams(
-            box.width,
-            box.height,
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = box.left
-            y = box.top
-            // Android 12+ only lets taps through overlays at most 80% opaque.
-            alpha = PANEL_WINDOW_ALPHA
-        }
-        // Real display coordinates, the same as the capture's pixels.
-        useScreenCoordinates(params, true)
-        try {
-            wm.addView(v, params)
-            highlight = v
-            highlightBox = HiddenAnswer.Box(r, capture.screenW, capture.screenH)
-            // Once it is laid out: check where the system really put it, and keep the panel off it.
-            v.post { settleHighlight(v, params, box) }
-        } catch (_: Exception) {
-        }
-    }
-
-    /**
-     * After the green box is laid out: moves it to where it was asked to be if the system put it
-     * somewhere else (an inset it did not drop), then moves the answer panel off it. The panel and
-     * the box are each at the 0.8 opacity limit; where they overlap, Android 12+ adds their opacities
-     * up (0.96) and drops the player's tap, so they must not overlap.
-     */
-    private fun settleHighlight(v: View, params: WindowManager.LayoutParams, box: PxRect) {
-        if (highlight !== v || !v.isAttachedToWindow || v.width == 0) return
-        val loc = IntArray(2)
-        v.getLocationOnScreen(loc)
-        val dx = box.left - loc[0]
-        val dy = box.top - loc[1]
-        val limit = dp(HIGHLIGHT_FIX_MAX_DP)
-        if ((dx != 0 || dy != 0) && abs(dx) <= limit && abs(dy) <= limit) {
-            params.x += dx
-            params.y += dy
-            try {
-                wm.updateViewLayout(v, params)
-            } catch (_: Exception) {
-            }
-        }
-        val p = panel ?: return
-        val wParams = panelParams ?: return
-        if (!panelAdded) return
-        val r = viewRect(p) ?: return
-        val now = PxRect(r.left, r.top, r.right, r.bottom)
-        val to = clearOfBox(now, box) ?: return
-        wParams.x += to.x - now.left
-        wParams.y += to.y - now.top
-        try {
-            wm.updateViewLayout(p, wParams)
-        } catch (_: Exception) {
-        }
-    }
-
-    /**
-     * Where the panel, now at [now] (screen pixels), has to go to stop covering the green [box], or
-     * null when it already does not. With no room anywhere the box is dropped instead.
-     */
-    private fun clearOfBox(now: PxRect, box: PxRect): PanelPlacement.Pos? {
-        if (!PanelPlacement.overlaps(now, box)) return null
-        val to = PanelPlacement.moveOffBox(now, box, capture.screenW, capture.screenH, dp(8))
-        if (to == null) hideHighlight()
-        return to
-    }
-
-    private fun hideHighlight() {
-        highlightBox = null
-        val v = highlight ?: return
-        highlight = null
-        try {
-            wm.removeView(v)
-        } catch (_: Exception) {
-        }
-    }
-
-    /** Puts the green box of an answer that auto mode hid back, if the screen is still the one it was for. */
-    private fun restoreHighlight(box: HiddenAnswer.Box?) {
-        if (box == null || box.screenW != capture.screenW || box.screenH != capture.screenH) return
-        if (Prefs.highlightAnswer(this)) showHighlight(box.rect)
-    }
-
     private fun stopResultWatch() {
         watchJob?.cancel()
         watchJob = null
@@ -2151,9 +1621,9 @@ class OverlayService : Service() {
             if (!autoMode) capture.grabFrame()
             val frame = capture.lastFrame ?: continue
             if (frame.width != capture.screenW || frame.height != capture.screenH) return
-            val overlays = overlayRects()
+            val overlays = windows.overlayRects()
             val sig = try {
-                capture.signature(frame, overlays + listOfNotNull(viewRect(highlight)) + optionRects)
+                capture.signature(frame, overlays + listOfNotNull(windows.viewRect(windows.highlight)) + optionRects)
             } catch (t: Throwable) {
                 return
             }
@@ -2210,7 +1680,7 @@ class OverlayService : Service() {
         cancelTouches()
         autoMode = !autoMode
         if (autoMode) touchAttempts.reset()
-        updateBubbleStyle()
+        windows.updateBubbleStyle()
         Toast.makeText(this, if (autoMode) "الوضع التلقائي: مفعّل" else "الوضع التلقائي: متوقف", Toast.LENGTH_SHORT).show()
         autoJob?.cancel()
         autoJob = null
@@ -2253,9 +1723,9 @@ class OverlayService : Service() {
     private fun autoTick() {
         // While the sent-image preview covers the middle of the screen, the capture is mostly black:
         // not worth sending, and it would overwrite client.lastSent.
-        if (busy || touchPending || preview != null) return
+        if (busy || touchPending || windows.preview != null) return
         // Is the panel part of the frame being judged?
-        val panelShown = panelAdded
+        val panelShown = windows.panelAdded
         val gotNewFrame = capture.grabFrame()
         val previous = prevTickSig
         // The virtual display only emits a frame when the screen changes, so "no new frame" means
@@ -2265,7 +1735,7 @@ class OverlayService : Service() {
         val sig = if (gotNewFrame || previous == null) {
             val frame = capture.lastFrame ?: return
             // Taken from the unmasked frame: the cells our windows touch are ignored anyway.
-            capture.signature(frame, ignoreRects())
+            capture.signature(frame, windows.ignoreRects())
         } else {
             previous
         }
@@ -2274,20 +1744,20 @@ class OverlayService : Service() {
             panelShown, CHANGE_THRESHOLD, STABLE_THRESHOLD)
         prevTickSig = sig
         when (verdict) {
-            FrameSignature.Verdict.HIDE_PANEL -> if (panelAdded) {
+            FrameSignature.Verdict.HIDE_PANEL -> if (windows.panelAdded) {
                 warmUp()
-                hiddenAnswer.remember(panelText, panelDeadline, highlightBox)
-                hidePanel()
+                hiddenAnswer.remember(windows.panelText, windows.panelDeadline, windows.highlightBox)
+                windows.hidePanel()
             }
             FrameSignature.Verdict.SEND -> {
-                val toSend = capture.maskedCopy(::overlayRects) ?: return
+                val toSend = capture.maskedCopy(windows::overlayRects) ?: return
                 hiddenAnswer.clear()
                 sendFrame(toSend, sig, fromAuto = true)
             }
-            FrameSignature.Verdict.IDLE -> if (!panelAdded) {
+            FrameSignature.Verdict.IDLE -> if (!windows.panelAdded) {
                 hiddenAnswer.take(SystemClock.uptimeMillis(), HIDDEN_ANSWER_MIN_LEFT_MS)?.let {
-                    showPanel(it.text, it.leftMs)
-                    restoreHighlight(it.box)
+                    windows.showPanel(it.text, it.leftMs)
+                    windows.restoreHighlight(it.box)
                 }
             }
             // The screen is changing: a question may be sent within a tick or two.
@@ -2307,9 +1777,9 @@ class OverlayService : Service() {
         stopResultWatch()
         scope.cancel()
         handler.removeCallbacksAndMessages(null)
-        hidePanel()
-        hidePreview()
-        hideHighlight()
+        windows.hidePanel()
+        windows.hidePreview()
+        windows.hideHighlight()
         // A read in progress holds the lock until it is done (it cannot be interrupted), so taking it
         // here would freeze the main thread for as long as one read takes. Another thread waits for it
         // and closes the reader (native) once nothing uses it; a reader that finishes loading
@@ -2320,15 +1790,7 @@ class OverlayService : Service() {
             reader?.close()
             latinReader?.close()
         }.start()
-        bubble?.let {
-            if (it.isAttachedToWindow) {
-                try {
-                    wm.removeView(it)
-                } catch (_: Exception) {
-                }
-            }
-        }
-        bubble = null
+        windows.removeBubble()
         capture.release()
         shownImage = null
         projection?.stop()
