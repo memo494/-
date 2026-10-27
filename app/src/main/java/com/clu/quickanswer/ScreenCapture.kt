@@ -6,6 +6,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -43,6 +45,25 @@ internal class ScreenCapture(private val context: Context) {
     var lastFrameAtNs = 0L
         private set
 
+    // Kept buffers: a changed frame is copied into them instead of into new bitmaps ([ReusedBuffer]).
+    // [lastFrame] is one of them, so it is overwritten by the next [grabFrame]: read it within one
+    // main-thread step, copy what must outlive that (as every caller does).
+    /** The image's rows as they come, padding included (rowStride / pixelStride wide). */
+    private val rows = ReusedBuffer({ w, h -> Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) }, { it.recycle() })
+    /** The frame without the row padding, when there is padding. */
+    private val exact = ReusedBuffer({ w, h -> Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) }, { it.recycle() })
+    private val copyPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+
+    /** [signature]'s small copy of a frame, drawn into again each time. */
+    private val smallFrame = ReusedBuffer({ w, h -> Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) }, { it.recycle() })
+    private val smallPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+    private val smallRect = Rect(0, 0, SIG_SIZE, SIG_SIZE)
+
+    /** [framePixels]' array, filled once per frame. */
+    private val pixelArray = ReusedBuffer({ w, h -> IntArray(w * h) })
+    private var frameSeq = 0L
+    private var pixelsSeq = -1L
+
     // Where our own windows were painted black in a capture, by capture: the reader must know what is hidden.
     val captureMasks = java.util.WeakHashMap<Bitmap, List<Rect>>()
 
@@ -66,9 +87,18 @@ internal class ScreenCapture(private val context: Context) {
         vd.resize(screenW, screenH, density)
         vd.surface = reader.surface
         old?.close()
-        lastFrame?.recycle()
-        lastFrame = null
+        dropFrames()
         return true
+    }
+
+    /** Forgets the kept frame and frees the buffers (a new size, or the end). */
+    private fun dropFrames() {
+        lastFrame = null
+        rows.clear()
+        exact.clear()
+        smallFrame.clear()
+        pixelArray.clear()
+        pixelsSeq = -1L
     }
 
     fun setupCapture(proj: MediaProjection) {
@@ -94,10 +124,25 @@ internal class ScreenCapture(private val context: Context) {
      */
     fun grabFrame(): Boolean {
         val fresh = readFrame() ?: return false
-        lastFrame?.recycle()
         lastFrame = fresh
         lastFrameAtNs = readFrameAtNs
+        frameSeq++
         return true
+    }
+
+    /**
+     * The pixels of [lastFrame] (row by row, its width), or null when there is none. Read once per
+     * frame and kept, so the checks before each tap share one copy instead of allocating a full-screen
+     * array each. Overwritten by the next frame; read-only for the caller.
+     */
+    fun framePixels(): IntArray? {
+        val frame = lastFrame ?: return null
+        val px = pixelArray.get(frame.width, frame.height)
+        if (pixelsSeq != frameSeq) {
+            frame.getPixels(px, 0, frame.width, 0, 0, frame.width, frame.height)
+            pixelsSeq = frameSeq
+        }
+        return px
     }
 
     /** Timestamp of the image [readFrame] read last (set by it). */
@@ -131,13 +176,12 @@ internal class ScreenCapture(private val context: Context) {
             val plane = image.planes[0]
             val pixelStride = plane.pixelStride
             val rowPadding = plane.rowStride - pixelStride * image.width
-            val wide = Bitmap.createBitmap(
-                image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888
-            )
+            val wide = rows.get(image.width + rowPadding / pixelStride, image.height)
             wide.copyPixelsFromBuffer(plane.buffer)
             readFrameAtNs = image.timestamp
             bmp = if (wide.width != image.width) {
-                Bitmap.createBitmap(wide, 0, 0, image.width, image.height).also { wide.recycle() }
+                // Copy (SRC, not blended) the visible columns into the kept exact-size frame.
+                exact.get(image.width, image.height).also { Canvas(it).drawBitmap(wide, 0f, 0f, copyPaint) }
             } else wide
         } finally {
             image.close()
@@ -152,10 +196,11 @@ internal class ScreenCapture(private val context: Context) {
     fun signature(bmp: Bitmap, overlays: List<Rect>): IntArray {
         val w = bmp.width
         val h = bmp.height
-        val small = Bitmap.createScaledBitmap(bmp, SIG_SIZE, SIG_SIZE, true)
+        // The same filtered downscale createScaledBitmap makes, into a kept 32 x 32 bitmap.
+        val small = smallFrame.get(SIG_SIZE, SIG_SIZE)
+        Canvas(small).drawBitmap(bmp, null, smallRect, smallPaint)
         val px = IntArray(SIG_SIZE * SIG_SIZE)
         small.getPixels(px, 0, SIG_SIZE, 0, 0, SIG_SIZE, SIG_SIZE)
-        if (small !== bmp) small.recycle()
         val sig = IntArray(px.size) {
             val c = px[it]
             (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000
@@ -170,7 +215,6 @@ internal class ScreenCapture(private val context: Context) {
         virtualDisplay = null
         imageReader?.close()
         imageReader = null
-        lastFrame?.recycle()
-        lastFrame = null
+        dropFrames()
     }
 }
