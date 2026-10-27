@@ -21,8 +21,12 @@ object FrameSignature {
      * shrink how long a transient screen (an answer-reveal animation, a loading card) may last
      * before it is treated as a settled one. Everything measured in ticks (the simulations in the
      * tests) derives its wall-clock time from this one constant.
+     *
+     * 400 ms (was 500): a new question is sent 0.4-0.8 s after it appears instead of 0.5-1 s, now that
+     * a tick no longer allocates a full-screen frame (ScreenCapture keeps its buffers). Kept above the
+     * typical answer-reveal / card animation step, so a screen still has to hold still for 0.4 s.
      */
-    const val TICK_MS = 500L
+    const val TICK_MS = 400L
 
     /**
      * Marks every cell of the [size]x[size] grid [sig] that the rectangle (in pixels of an image
