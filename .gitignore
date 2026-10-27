@@ -10,3 +10,6 @@ captures/
 *.p12
 *.jks
 *.keystore
+
+# Claude Code agent worktrees (local only)
+.claude/worktrees/
