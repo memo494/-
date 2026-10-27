@@ -427,15 +427,24 @@ class OverlayService : Service() {
             try {
                 // The work is its own coroutine, so that the wait for it can be bounded. It is not
                 // cancelled when the wait ends: its thread could not be interrupted anyway, and it
-                // recycles [bmp] itself when it returns.
+                // recycles [bmp] itself (or hands it to LastCapture) when it returns.
                 val work = scope.async(Dispatchers.IO) {
+                    // Handed to LastCapture at the end (no copy), or recycled here.
+                    var kept = false
                     try {
-                        pipeline.solve(bmp, masks, bypass, deadline).let {
-                            if (touchRequested && it.isAnswer) prepareTouches(it, bmp, masks) else it
+                        // One copy of the capture's pixels for the reading and the taps.
+                        val pixels = PixelsOnce {
+                            IntArray(bmp.width * bmp.height).also { bmp.getPixels(it, 0, bmp.width, 0, 0, bmp.width, bmp.height) }
+                        }
+                        pipeline.solve(bmp, masks, bypass, deadline, pixels).let {
+                            if (touchRequested && it.isAnswer) prepareTouches(it, bmp, masks, pixels) else it
                         }.also {
                             // For "معايرة يدوية": not a screen auto mode found to be something else (settings, shade).
                             // Not a late result either: it would replace the capture of a newer question.
-                            if (!abandoned.get() && !(fromAuto && ScreenImage.isNoQuestion(it.text))) LastCapture.set(bmp, masks)
+                            if (!abandoned.get() && !(fromAuto && ScreenImage.isNoQuestion(it.text))) {
+                                LastCapture.keep(bmp, masks)
+                                kept = true
+                            }
                         }
                     } catch (e: Throwable) {
                         Solved(
@@ -443,7 +452,7 @@ class OverlayService : Service() {
                             isAnswer = false, source = AnswerSource.FAILED,
                         )
                     } finally {
-                        bmp.recycle()
+                        if (!kept) bmp.recycle()
                     }
                 }
                 // The clients stop at the deadline themselves and say so; this wait ends a little after

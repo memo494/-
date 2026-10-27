@@ -115,10 +115,10 @@ internal class AnswerPipeline(
      * Both requests share [deadline]: when it runs out they answer with the timeout error, which ends
      * the question (see [Reply.Kind.ERROR]).
      */
-    fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?, deadline: AnswerDeadline): Solved {
+    fun solve(bmp: Bitmap, masks: List<PxRect>, bypassKey: String?, deadline: AnswerDeadline, pixels: PixelsOnce): Solved {
         val c = currentClient()
         val memory = AnswerStore.memory
-        val read = if (Prefs.smartReading(context)) readQuestion(bmp, masks) else DeviceRead(null)
+        val read = if (Prefs.smartReading(context)) readQuestion(bmp, masks, pixels) else DeviceRead(null)
         val q = read.question
         val picture = if (q != null) read.picture else null
         fun resolved(
@@ -329,7 +329,7 @@ internal class AnswerPipeline(
      * failures (missing library, out of memory) are Errors, not Exceptions: they must lead to the
      * screenshot path, never crash the service, hence Throwable.
      */
-    private fun readQuestion(bmp: Bitmap, masks: List<PxRect>): DeviceRead {
+    private fun readQuestion(bmp: Bitmap, masks: List<PxRect>, shared: PixelsOnce): DeviceRead {
         // Hardware bitmaps cannot be read pixel by pixel.
         var copy: Bitmap? = null
         try {
@@ -339,8 +339,8 @@ internal class AnswerPipeline(
             if (src == null) return DeviceRead(null)
             val w = src.width
             val h = src.height
-            val pixels = IntArray(w * h)
-            src.getPixels(pixels, 0, w, 0, 0, w, h)
+            // The capture's own pixels are shared with the taps (PixelsOnce); a hardware copy has its own.
+            val pixels = if (src === bmp) shared.get() else IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
             val inspected = colorLayout.inspect(pixels, w, h)
             val layout = inspected.layout
             if (layout == null) {

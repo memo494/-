@@ -42,14 +42,14 @@ import kotlin.math.abs
 private const val CLEAN_TOUCH_POLLS = 15
 
 /** Bind every answer source to the same interaction engine. All pixel/OCR work here is on IO. */
-internal fun OverlayService.prepareTouches(solved: Solved, bmp: Bitmap, masks: List<PxRect>): Solved {
+internal fun OverlayService.prepareTouches(solved: Solved, bmp: Bitmap, masks: List<PxRect>, shared: PixelsOnce): Solved {
     // Refusals without a message of their own: the panel stays as it was, the step goes to the log.
     fun quiet(code: String): Solved { DiagLog.add("رفض اللمس: $code"); return solved }
     return try {
         val w = bmp.width
         val h = bmp.height
-        val pixels = IntArray(w * h)
-        bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+        // The same copy the reading made of this capture, if it made one.
+        val pixels = shared.get()
         val request = solved.request
         val q = request?.question
         val picture = solved.pictureRect
