@@ -66,7 +66,7 @@ class TapSequenceTest {
         assertTrue(h.start(boxes, submitLast = true))
         h.clock.runUntil()
         assertEquals(boxes, h.presses.map { it.box })
-        assertEquals(listOf(0L, 85L, 170L, 255L, 420L), h.presses.map { it.at })
+        assertEquals(listOf(0L, 85L, 170L, 255L, 340L), h.presses.map { it.at }) // confirm: SUBMIT_GAP_MS (40) after the UP
         assertTrue(h.presses.all { it.duration == 45L })
         assertEquals(listOf(true), h.results)
     }
@@ -77,7 +77,7 @@ class TapSequenceTest {
         assertTrue(h.start(boxes, submitLast = true))
         h.clock.runUntil()
         assertEquals(boxes, h.presses.map { it.box })
-        assertEquals(760L, h.presses.last().at)
+        assertEquals(680L, h.presses.last().at)
         assertTrue(h.presses.zipWithNext().all { (a, b) -> b.at >= a.at + a.duration + 40L })
         assertEquals(listOf(true), h.results)
     }

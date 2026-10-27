@@ -1282,9 +1282,9 @@ class OverlayService : Service() {
                 it.top < field.bottom && field.top < it.bottom }) { complete(false); return }
         scope.launch {
             // Accessibility's UP may precede the game's next rendered frame. Read again, never retype.
-            repeat(3) { attempt ->
+            repeat(NumericEntryCheck.READBACK_ATTEMPTS) { attempt ->
                 if (destroyed || epoch != touchEpoch) { complete(false); return@launch }
-                if (attempt > 0) delay(120)
+                if (attempt > 0) delay(NumericEntryCheck.READBACK_INTERVAL_MS)
                 grabFrame()
                 val frame = lastFrame
                 val current = frame?.let { fingerprint(it, field, solved.ignoredRects) }
