@@ -190,11 +190,35 @@ class CalibratedKeypadTest {
         assertEquals(FieldStamp.State.FILLED, FieldStamp.state(stamp, faint.px, w, h, field))
     }
 
-    @Test fun aStampOfTheOldGridIsStillRead() {
-        val old = "eb".repeat(16 * 4) // the empty field's lightness (235) in every old cell
-        assertTrue(FieldStamp.isValid(old))
-        assertEquals(FieldStamp.State.EMPTY, FieldStamp.state(old, screen().px, w, h, field))
-        assertEquals(FieldStamp.State.FILLED, FieldStamp.state(old, screen(typed = true).px, w, h, field))
+    /**
+     * Stamps saved before the edges were covered (either grid) cannot vouch for a digit next to the
+     * field's side: still a valid stamp, but never EMPTY (Codex review of #47).
+     */
+    @Test fun aStampThatLeftTheEdgesOutIsNeverEmpty() {
+        for (old in listOf("eb".repeat(16 * 4), "eb".repeat(FieldStamp.COLS * FieldStamp.ROWS))) {
+            assertTrue(FieldStamp.isValid(old))
+            assertEquals(FieldStamp.State.UNKNOWN, FieldStamp.state(old, screen().px, w, h, field))
+            assertEquals(FieldStamp.State.UNKNOWN, FieldStamp.state(old, screen(typed = true).px, w, h, field))
+        }
+    }
+
+    /** Codex review of #47: a digit aligned to the field's left side is not missed. */
+    @Test fun aDigitNextToTheFieldsEdgeIsSeen() {
+        val pw = 800
+        val ph = 300
+        val box = PxRect(100, 50, 700, 200) // 600 x 150
+        fun px(digit: Boolean) = IntArray(pw * ph) { i ->
+            val x = i % pw - box.left
+            val y = i / pw - box.top
+            when {
+                digit && x in 30..35 && y in 40..109 -> 0xff202020.toInt()
+                x in 0 until box.width && y in 0 until box.height -> 0xffebebeb.toInt()
+                else -> 0xff3060a0.toInt()
+            }
+        }
+        val stamp = FieldStamp.of(px(false), pw, ph, box)
+        assertEquals(FieldStamp.State.EMPTY, FieldStamp.state(stamp, px(false), pw, ph, box))
+        assertEquals(FieldStamp.State.FILLED, FieldStamp.state(stamp, px(true), pw, ph, box))
     }
 
     /** The confirm button may light up once a digit is typed: only the keys are compared then. */

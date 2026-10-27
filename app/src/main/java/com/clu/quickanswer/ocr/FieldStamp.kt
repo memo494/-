@@ -12,6 +12,11 @@ import kotlin.math.abs
  * changes the cells it covers far beyond the tolerance; an animated or covered field, or a wrong
  * size, is UNKNOWN or FILLED, and both stop the typing.
  *
+ * The stamp covers the field up to a thin edge ([EDGE_INSET]): a game may align its digits to the
+ * field's left or right side, and a digit there must be seen (Codex review of #47). Stamps saved
+ * before that left 12% out on each side, so they cannot vouch for the edges and read as UNKNOWN:
+ * the field has to be calibrated again (one tap) before Clu types into it.
+ *
  * Pure Kotlin, no android.*.
  */
 object FieldStamp {
@@ -32,13 +37,18 @@ object FieldStamp {
      */
     const val CELL_TOLERANCE = 8
 
-    /** The grid and tolerance of stamps saved before 26 Oct 2026; still read, never written. */
+    /** Grid of stamps saved before 26 Oct 2026; recognised only to report them UNKNOWN. */
     private const val OLD_COLS = 16
     private const val OLD_ROWS = 4
-    private const val OLD_TOLERANCE = 14
 
-    /** Share of the field's width/height left out on each side: its frame, bevel or shadow. */
-    private const val INSET = 0.12f
+    /** Marks a stamp that covers the field up to [EDGE_INSET]. */
+    private const val VERSION = "2:"
+
+    /**
+     * Share of the field's width/height left out on each side: only the line of its frame (a
+     * tapped field is grown from its own surface colour, so the frame is mostly outside already).
+     */
+    private const val EDGE_INSET = 0.03f
 
     /** Smallest field side, in pixels, that a stamp is made for. */
     private const val MIN_SIDE = 24
@@ -46,28 +56,35 @@ object FieldStamp {
     /** The stamp of [field] on this capture (hex, two digits per cell), or null when it cannot have one. */
     fun of(argb: IntArray, width: Int, height: Int, field: PxRect): String? {
         val cells = cells(argb, width, height, field, COLS, ROWS) ?: return null
-        return buildString(cells.size * 2) { for (v in cells) append(HEX[v shr 4]).append(HEX[v and 15]) }
+        return buildString(VERSION.length + cells.size * 2) {
+            append(VERSION)
+            for (v in cells) append(HEX[v shr 4]).append(HEX[v and 15])
+        }
     }
 
     /** Whether [field] still looks as it did empty ([stamp], from [of]). */
     fun state(stamp: String?, argb: IntArray, width: Int, height: Int, field: PxRect): State {
+        if (stamp == null || !stamp.startsWith(VERSION)) return State.UNKNOWN
         val stored = decode(stamp) ?: return State.UNKNOWN
-        val old = stored.size == OLD_COLS * OLD_ROWS
-        val now = cells(argb, width, height, field, if (old) OLD_COLS else COLS, if (old) OLD_ROWS else ROWS)
-            ?: return State.UNKNOWN
-        val tolerance = if (old) OLD_TOLERANCE else CELL_TOLERANCE
-        return if (stored.indices.all { abs(stored[it] - now[it]) <= tolerance }) State.EMPTY else State.FILLED
+        val now = cells(argb, width, height, field, COLS, ROWS) ?: return State.UNKNOWN
+        return if (stored.indices.all { abs(stored[it] - now[it]) <= CELL_TOLERANCE }) State.EMPTY else State.FILLED
     }
 
+    /**
+     * Whether [stamp] is a stamp at all (a template carrying one is a calibrated keypad). An old one
+     * is still valid here, so its template stays usable for the keys; [state] says UNKNOWN for it.
+     */
     fun isValid(stamp: String?): Boolean = decode(stamp) != null
 
     private fun decode(stamp: String?): IntArray? {
         if (stamp == null) return null
-        val n = stamp.length / 2
-        if (stamp.length % 2 != 0 || n != COLS * ROWS && n != OLD_COLS * OLD_ROWS) return null
+        val versioned = stamp.startsWith(VERSION)
+        val hex = if (versioned) stamp.substring(VERSION.length) else stamp
+        val n = hex.length / 2
+        if (hex.length % 2 != 0 || n != COLS * ROWS && (versioned || n != OLD_COLS * OLD_ROWS)) return null
         return IntArray(n) { i ->
-            val hi = stamp[i * 2].digitToIntOrNull(16) ?: return null
-            val lo = stamp[i * 2 + 1].digitToIntOrNull(16) ?: return null
+            val hi = hex[i * 2].digitToIntOrNull(16) ?: return null
+            val lo = hex[i * 2 + 1].digitToIntOrNull(16) ?: return null
             hi * 16 + lo
         }
     }
@@ -76,8 +93,8 @@ object FieldStamp {
         if (width <= 0 || height <= 0 || argb.size.toLong() < width.toLong() * height) return null
         if (field.left < 0 || field.top < 0 || field.right > width || field.bottom > height) return null
         if (field.width < MIN_SIDE || field.height < MIN_SIDE) return null
-        val dx = (field.width * INSET).toInt()
-        val dy = (field.height * INSET).toInt()
+        val dx = (field.width * EDGE_INSET).toInt()
+        val dy = (field.height * EDGE_INSET).toInt()
         val left = field.left + dx
         val top = field.top + dy
         val w = field.width - 2 * dx

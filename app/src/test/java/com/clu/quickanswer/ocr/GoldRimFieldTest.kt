@@ -87,4 +87,23 @@ class GoldRimFieldTest {
         assertEquals(NumericFieldInk.State.FILLED,
             NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
     }
+
+    /**
+     * Codex review of #47: a thick gold stroke the full height of the field at its edge (a typed "1"
+     * clipped by the field box) is not the rim. It must never leave the field looking empty.
+     */
+    @Test fun aThickTallStrokeAtTheEdgeIsNotTakenForTheRim() {
+        val px = screen(rim = false, digit = false)
+        for (y in field.top + 2 until field.bottom - 2) for (x in field.left until field.left + 8) px[y * w + x] = gold
+        assertEquals(NumericFieldInk.State.UNKNOWN,
+            NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
+    }
+
+    /** A thin side of the rim, cut off from the rest of the outline by the field box, is still the rim. */
+    @Test fun aThinSideOfTheRimAtTheEdgeIsDropped() {
+        val px = screen(rim = false, digit = false)
+        for (y in field.top + 1 until field.bottom - 1) for (x in field.left until field.left + 2) px[y * w + x] = gold
+        assertEquals(NumericFieldInk.State.EMPTY,
+            NumericFieldInk.inspect(px, w, h, field, NumericFieldReader.Ink.GOLD).state)
+    }
 }
