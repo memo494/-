@@ -344,8 +344,8 @@ internal fun OverlayService.performAnswerTouches(solved: Solved, w: Int, h: Int,
             val numeric = solved.numericLayout
             val calibrated = solved.calibratedKeys
             if (calibrated != null) {
-                val pixels = IntArray(w * h)
-                frame.getPixels(pixels, 0, w, 0, 0, w, h)
+                // One copy of this frame's pixels for every check before this tap (and the next ones on it).
+                val pixels = capture.framePixels() ?: return blocked("لم تصل لقطة شاشة جديدة؛ لم أضغط")
                 if (!CalibratedKeypad.stillVisible(calibrated, pixels, w, h, boxes.getOrNull(nextTap - 1),
                         checkSubmit = nextTap == 0))
                     return blocked("لوحة الأرقام أو زر التأكيد لم يعد ظاهرًا؛ أوقفت الإدخال")
@@ -353,8 +353,8 @@ internal fun OverlayService.performAnswerTouches(solved: Solved, w: Int, h: Int,
                     return blocked("الخانة لم تعد فارغة؛ لم أمسح أو أضف أرقامًا")
             }
             if (numeric != null || solved.choiceButtons.isNotEmpty()) {
-                val pixels = IntArray(w * h)
-                frame.getPixels(pixels, 0, w, 0, 0, w, h)
+                // One copy of this frame's pixels for every check before this tap (and the next ones on it).
+                val pixels = capture.framePixels() ?: return blocked("لم تصل لقطة شاشة جديدة؛ لم أضغط")
                 if (numeric != null) {
                     val padThere = GameVisualLayout.stillVisible(pixels, w, h, numeric, boxes.getOrNull(nextTap - 1))
                     val submitThere = numeric.submit == null || GameVisualLayout.hasSubmitControl(pixels, w, h, numeric)
